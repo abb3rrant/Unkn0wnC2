@@ -1,0 +1,11 @@
+{
+  "server_domain": "secwolf.net",
+  "dns_server": "",
+  "query_type": "TXT",
+  "encoding": "hex",
+  "timeout": 10,
+  "max_command_length": 800,
+  "retry_attempts": 3,
+  "sleep_min": 5,
+  "sleep_max": 15
+}
