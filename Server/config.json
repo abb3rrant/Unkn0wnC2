@@ -7,5 +7,6 @@
   "ns2": "ns2.secwolf.net",
   "forward_dns": true,
   "upstream_dns": "8.8.8.8:53",
+  "encryption_key": "MySecretC2Key123!@#DefaultChange",
   "debug": false
 }

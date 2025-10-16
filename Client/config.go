@@ -12,6 +12,7 @@ type Config struct {
 	DNSServer        string `json:"dns_server"`
 	QueryType        string `json:"query_type"`
 	Encoding         string `json:"encoding"`
+	EncryptionKey    string `json:"encryption_key"`
 	Timeout          int    `json:"timeout"`
 	MaxCommandLength int    `json:"max_command_length"`
 	RetryAttempts    int    `json:"retry_attempts"`
@@ -25,7 +26,8 @@ func LoadConfig() (*Config, error) {
 		ServerDomain:     "secwolf.net",
 		DNSServer:        "",
 		QueryType:        "TXT",
-		Encoding:         "hex",
+		Encoding:         "aes-gcm-base36",
+		EncryptionKey:    "MySecretC2Key123!@#DefaultChange",
 		Timeout:          10,
 		MaxCommandLength: 800, // Increased for larger results
 		RetryAttempts:    3,

