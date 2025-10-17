@@ -5,7 +5,6 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"fmt"
 	"math/big"
 	"strings"
@@ -121,23 +120,3 @@ func decodeAndDecrypt(encoded string, key []byte) (string, error) {
 
 // Legacy functions for backward compatibility during transition
 // These will be removed once we fully migrate
-
-// legacyDecodeBeaconData tries new method first, falls back to hex
-func legacyDecodeBeaconData(encoded string, key []byte) (string, error) {
-	// Remove dots from DNS labels
-	encoded = strings.ReplaceAll(encoded, ".", "")
-
-	// Try new base36 + AES-GCM method first
-	if decoded, err := decodeAndDecrypt(encoded, key); err == nil {
-		return decoded, nil
-	}
-
-	// Fall back to base64 for compatibility
-	paddedEncoded := encoded + strings.Repeat("=", (4-len(encoded)%4)%4)
-	if decoded, err := base64.URLEncoding.DecodeString(paddedEncoded); err == nil {
-		return string(decoded), nil
-	}
-
-	// Return as-is if all decoding fails
-	return encoded, fmt.Errorf("failed to decode with any method")
-}

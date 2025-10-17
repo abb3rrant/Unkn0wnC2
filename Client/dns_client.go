@@ -72,7 +72,6 @@ func (c *DNSClient) sendDNSQuery(command string) (string, error) {
 
 	// Use standard library DNS resolution only (simplified)
 	for attempt := 0; attempt < c.config.RetryAttempts; attempt++ {
-		var err error
 		switch c.config.QueryType {
 		case "TXT":
 			txtRecords, lookupErr := net.LookupTXT(queryName)

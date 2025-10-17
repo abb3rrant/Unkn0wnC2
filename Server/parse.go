@@ -21,34 +21,6 @@ func readUint16(buf []byte, off int) (uint16, int, error) {
 }
 
 /*
-Reads 4 bytes at current offset, interprets as big-endian 32-bit signed integers.
-Advances offset by 4. Some DNS fields are 32 bits on the wire.
-Inputs bytes within buffer and current offset.
-Outputs unint32 value, new offset, and/or error
-*/
-func readUint32(buf []byte, off int) (uint32, int, error) {
-	if off+4 > len(buf) {
-		return 0, off, errors.New("short read: uint32 requires 4 bytes")
-	}
-	v := uint32(buf[off])<<24 | uint32(buf[off+1])<<16 | uint32(buf[off+2])<<8 | uint32(buf[off+3])
-	return v, off + 4, nil
-}
-
-/*
-Returns a slice view of (n) number of bytes starting at the current offset and advances the offset by n.
-Allows for pulling out variable-length segments without interpreting them yet.
-Inputs bytes within buffer, offset, and n
-Outputs a slice of the bytes, next offset, and/or error
-Returns a view of the underlying buffer, not a copy
-*/
-func readBytes(buf []byte, off, n int) ([]byte, int, error) {
-	if off+n > len(buf) {
-		return nil, off, errors.New("short read: not enough bytes")
-	}
-	return buf[off : off+n], off + n, nil
-}
-
-/*
 Parses the fixed 12-byte DNS header at the start of a DNS message by reading six uint16 fields in order.
 Inputs entire DNS message bytes as buf.
 Outputs DNSHeader, next offset, and/or error
