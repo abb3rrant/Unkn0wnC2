@@ -1,0 +1,53 @@
+{
+  "project": {
+    "name": "Unkn0wnC2",
+    "version": "0.1.0",
+    "description": "DNS-based Command & Control Framework"
+  },
+  "server": {
+    "bind_addr": "172.26.13.62",
+    "bind_port": 53,
+    "server_address": "98.90.218.70",
+    "domain": "secwolf.net",
+    "ns1": "ns1.secwolf.net",
+    "ns2": "ns2.secwolf.net",
+    "forward_dns": true,
+    "upstream_dns": "8.8.8.8:53",
+    "debug": false
+  },
+  "client": {
+    "server_domain": "secwolf.net",
+    "dns_server": "",
+    "query_type": "TXT",
+    "encoding": "aes-gcm-base36",
+    "timeout": 10,
+    "max_command_length": 800,
+    "retry_attempts": 3,
+    "sleep_min": 5,
+    "sleep_max": 15
+  },
+  "security": {
+    "encryption_key": "MySecretC2Key123!@#DefaultChange"
+  },
+  "build": {
+    "output_dir": "build",
+    "targets": {
+      "server": {
+        "linux": {
+          "enabled": true,
+          "output": "dns-server-linux"
+        }
+      },
+      "client": {
+        "windows": {
+          "enabled": true,
+          "output": "dns-client-windows.exe"
+        },
+        "linux": {
+          "enabled": true,
+          "output": "dns-client-linux"
+        }
+      }
+    }
+  }
+}
