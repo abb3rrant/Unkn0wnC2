@@ -98,3 +98,29 @@ result <task_id> # Display completed task output
 - Enable DNS forwarding (`forward_dns: true`) for traffic blending
 - Use realistic domain names and NS records for operational security
 - Implement proper domain delegation with registrar glue records
+
+## Development Roadmap & Requirements
+
+### Security & Key Management
+- **Build-time Key Generation**: Encryption keys should be generated at build time rather than using defaults
+- **DNS Infrastructure**: Server acts as authoritative DNS for domain, forwarding legitimate queries to 8.8.8.8
+
+### Planned Features
+- **File Upload/Download**: Implement file transfer capabilities through DNS protocol
+- **Lightweight Stager**: Super lightweight client that calls server with `STG|DEPLOY|UNKN0WN` encoded domain to retrieve compressed full client via TXT response
+- **Beacon Health Checks**: Implement beacon and task health monitoring
+- **Cross-Platform Clients**: Support Windows and Linux client builds
+
+### Production Requirements
+- **Automated Builds**: Implement automated build pipelines for production-ready tooling
+- **Minimal Client Logging**: Clients should have no logging for operational security
+- **Strategic Server Logging**: Server should log only essential events:
+  - New beacon registered
+  - Task sent/completed/failed
+  - Beacon declared dead
+  - Debug flag available for verbose logging (all DNS requests and handling)
+
+### Current Maintenance Focus
+- Maintain existing DNS C2 functionality
+- Preserve authoritative DNS server operation with legitimate traffic forwarding
+- Keep beacon management and task distribution stable

@@ -77,16 +77,6 @@ var zoneCNAME map[string]string
 var zoneNS map[string]string
 
 // getOutboundIP gets the preferred outbound IP of this machine
-func getOutboundIP() string {
-	conn, err := net.Dial("udp", "8.8.8.8:80")
-	if err != nil {
-		return ""
-	}
-	defer conn.Close()
-
-	localAddr := conn.LocalAddr().(*net.UDPAddr)
-	return localAddr.IP.String()
-}
 
 // initializeZones sets up our authoritative zones based on configuration
 func initializeZones(cfg Config) {
@@ -100,20 +90,7 @@ func initializeZones(cfg Config) {
 	zoneNS[cfg.Domain] = cfg.NS1
 
 	// Determine server IP for A records
-	// Priority: 1) server_address from config, 2) bind_addr if not 0.0.0.0, 3) auto-detect
 	serverIP := cfg.SvrAddr
-	if serverIP == "" {
-		if cfg.BindAddr != "0.0.0.0" && cfg.BindAddr != "" {
-			serverIP = cfg.BindAddr
-		} else {
-			// Try to auto-detect the external IP
-			serverIP = getOutboundIP()
-			if serverIP == "" {
-				serverIP = "127.0.0.1" // Fallback
-			}
-		}
-	}
-
 	zoneA[cfg.NS1] = serverIP
 	zoneA[cfg.NS2] = serverIP // Both can point to same IP for simplicity
 
