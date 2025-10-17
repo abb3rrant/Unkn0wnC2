@@ -1,3 +1,6 @@
+// Package main implements cryptographic functions for the Unkn0wnC2 DNS C2 client.
+// This provides AES-GCM encryption/decryption and Base36 encoding for secure
+// DNS-compatible C2 communications.
 package main
 
 import (

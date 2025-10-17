@@ -1,3 +1,6 @@
+// Package main implements configuration management for the Unkn0wnC2 DNS C2 server.
+// This file handles loading configuration from JSON files, environment variables,
+// and embedded build-time configuration.
 package main
 
 import (
@@ -30,6 +33,8 @@ type Config struct {
 }
 
 // DefaultConfig returns sensible defaults for local development.
+// DefaultConfig returns a Config struct with default values for all settings,
+// providing a baseline configuration for the DNS C2 server.
 func DefaultConfig() Config {
 	return Config{
 		BindAddr:      "0.0.0.0",
@@ -48,6 +53,8 @@ func DefaultConfig() Config {
 // LoadConfig attempts to load configuration from a JSON file.
 // If DNS_CONFIG env var is set, it will use that path; otherwise "config.json" in cwd.
 // Missing or partial files fall back to defaults or embedded config if available.
+// LoadConfig loads configuration from embedded data (build-time) or config.json file,
+// with environment variable overrides and validation of required settings.
 func LoadConfig() (Config, error) {
 	var cfg Config
 
@@ -116,8 +123,8 @@ func LoadConfig() (Config, error) {
 
 // tryLoadEmbeddedConfig attempts to load embedded configuration
 // Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
+// tryLoadEmbeddedConfig attempts to load configuration from embedded build-time data,
+// returning the config and a boolean indicating if embedded data was found.
 // tryLoadEmbeddedConfig attempts to load embedded configuration
 // Returns the config and true if embedded config is available, otherwise returns empty config and false
 // tryLoadEmbeddedConfig attempts to load embedded configuration

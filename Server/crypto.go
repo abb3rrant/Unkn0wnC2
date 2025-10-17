@@ -1,3 +1,6 @@
+// Package main implements cryptographic functions for the Unkn0wnC2 DNS C2 framework.
+// This provides AES-GCM encryption/decryption and Base36 encoding for secure
+// DNS-compatible C2 communications.
 package main
 
 import (
@@ -11,12 +14,16 @@ import (
 )
 
 // generateAESKey generates a 32-byte AES key from a passphrase
+// generateAESKey derives a 256-bit AES key from a passphrase using SHA256 hashing
+// for consistent key generation across server and client components.
 func generateAESKey(passphrase string) []byte {
 	hash := sha256.Sum256([]byte(passphrase))
 	return hash[:]
 }
 
 // encryptAESGCM encrypts data using AES-GCM
+// encryptAESGCM encrypts data using AES-GCM with a random nonce,
+// providing both confidentiality and authenticity for C2 communications.
 func encryptAESGCM(data []byte, key []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -40,6 +47,8 @@ func encryptAESGCM(data []byte, key []byte) ([]byte, error) {
 }
 
 // decryptAESGCM decrypts data using AES-GCM
+// decryptAESGCM decrypts AES-GCM encrypted data, extracting the nonce
+// and verifying authenticity before returning the plaintext.
 func decryptAESGCM(ciphertext []byte, key []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -66,6 +75,8 @@ func decryptAESGCM(ciphertext []byte, key []byte) ([]byte, error) {
 }
 
 // base36Encode encodes data to base36 string
+// base36Encode converts binary data to Base36 encoding for DNS-compatible transmission,
+// using characters 0-9 and a-z to represent data in DNS subdomains.
 func base36Encode(data []byte) string {
 	// Convert bytes to big integer
 	num := new(big.Int)
@@ -76,6 +87,8 @@ func base36Encode(data []byte) string {
 }
 
 // base36Decode decodes base36 string to bytes
+// base36Decode converts a Base36 encoded string back to binary data,
+// reversing the DNS-compatible encoding used for C2 communications.
 func base36Decode(encoded string) ([]byte, error) {
 	// Parse base36 string to big integer
 	num := new(big.Int)
@@ -89,6 +102,8 @@ func base36Decode(encoded string) ([]byte, error) {
 }
 
 // encryptAndEncode encrypts data with AES-GCM and encodes with base36
+// encryptAndEncode combines AES-GCM encryption with Base36 encoding
+// to prepare data for transmission through DNS queries.
 func encryptAndEncode(data string, key []byte) (string, error) {
 	// Encrypt with AES-GCM
 	encrypted, err := encryptAESGCM([]byte(data), key)
@@ -102,6 +117,8 @@ func encryptAndEncode(data string, key []byte) (string, error) {
 }
 
 // decodeAndDecrypt decodes base36 and decrypts with AES-GCM
+// decodeAndDecrypt combines Base36 decoding with AES-GCM decryption
+// to extract plaintext data from DNS-transmitted C2 communications.
 func decodeAndDecrypt(encoded string, key []byte) (string, error) {
 	// Decode from base36
 	encrypted, err := base36Decode(encoded)

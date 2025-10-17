@@ -1,3 +1,6 @@
+// Package main defines data structures and types for the Unkn0wnC2 client.
+// This file contains configuration structures and other type definitions
+// used throughout the client codebase.
 package main
 
 // Config holds the client configuration - embedded at build time

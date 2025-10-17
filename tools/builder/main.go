@@ -1,3 +1,6 @@
+// Package main implements the build tool for the Unkn0wnC2 DNS C2 framework.
+// This tool consolidates configuration management and creates production-ready
+// binaries with embedded configuration for all supported platforms.
 package main
 
 import (
