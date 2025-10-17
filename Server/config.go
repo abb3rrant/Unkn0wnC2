@@ -34,7 +34,7 @@ func DefaultConfig() Config {
 	return Config{
 		BindAddr:      "0.0.0.0",
 		BindPort:      53,
-		SvrAddr:	   "98.90.218.70"
+		SvrAddr:       "98.90.218.70",
 		Domain:        "secwolf.net",
 		NS1:           "ns1.secwolf.net",
 		NS2:           "ns2.secwolf.net",
