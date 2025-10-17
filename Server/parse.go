@@ -12,6 +12,8 @@ Most fields are 16 bits and DNS uses big-endian on wire.
 Inputs the bytes within the buffer, and the current place or offset.
 Outputs the uint16 value, the new offset, and/or error.
 */
+// readUint16 reads a 16-bit unsigned integer from a byte buffer at the specified offset,
+// returning the value, new offset, and any error encountered.
 func readUint16(buf []byte, off int) (uint16, int, error) {
 	if off+2 > len(buf) {
 		return 0, off, errors.New("short read: uint16 requires 2 bytes")
@@ -26,6 +28,8 @@ Inputs entire DNS message bytes as buf.
 Outputs DNSHeader, next offset, and/or error
 Flags field will still be packed.
 */
+// ParseHeader extracts DNS header information from a packet buffer,
+// returning the parsed header, bytes consumed, and any parsing error.
 func ParseHeader(buf []byte) (DNSHeader, int, error) {
 	off := 0
 	var h DNSHeader
@@ -54,6 +58,8 @@ func ParseHeader(buf []byte) (DNSHeader, int, error) {
 
 // parseName parses a domain name at 'off' and returns the dotted name and the
 // next offset in the original stream (handling compression pointers).
+// parseName decodes a domain name from DNS wire format with compression support,
+// returning the name, final offset, and any parsing error.
 func parseName(buf []byte, off int) (string, int, error) {
 	const hopLimit = 16 // guard against pointer loops
 
@@ -129,6 +135,8 @@ func parseName(buf []byte, off int) (string, int, error) {
 	return name, next, nil
 }
 
+// parseQuestion extracts a DNS question from the packet buffer,
+// including the domain name, query type, and query class.
 func parseQuestion(buf []byte, off int) (DNSQuestion, int, error) {
 	var q DNSQuestion
 
@@ -160,6 +168,8 @@ func parseQuestion(buf []byte, off int) (DNSQuestion, int, error) {
 
 // parseMessage parses the full DNS message: header + questions (for now).
 // Returns the parsed message and the final offset position.
+// parseMessage parses a complete DNS message from a byte buffer,
+// extracting the header and all question sections.
 func parseMessage(buf []byte) (DNSMessage, int, error) {
 	var m DNSMessage
 	off := 0

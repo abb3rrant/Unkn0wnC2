@@ -1,3 +1,6 @@
+// Package main implements DNS client functionality for the Unkn0wnC2 beacon.
+// This handles DNS query construction, response parsing, and the core DNS
+// communication protocol for C2 operations.
 package main
 
 import (
@@ -14,6 +17,8 @@ type DNSClient struct {
 }
 
 // newDNSClient creates a new DNS C2 client with embedded config
+// newDNSClient creates a DNS client with configured timeout and resolver settings
+// for communicating with the C2 DNS server.
 func newDNSClient() *DNSClient {
 	config := getConfig()
 	aesKey := generateAESKey(config.EncryptionKey)

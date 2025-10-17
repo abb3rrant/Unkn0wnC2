@@ -1,3 +1,6 @@
+// Package main implements the interactive management console for the Unkn0wnC2 server.
+// This provides a command-line interface for managing beacons, tasks, and viewing
+// results while maintaining clean separation between console input and log output.
 package main
 
 import (
@@ -8,6 +11,25 @@ import (
 	"strings"
 	"sync"
 	"time"
+)
+
+const (
+	// Console display formatting
+	beaconListSeparatorLength = 95
+	taskListSeparatorLength   = 85
+	resultSeparatorLength     = 50
+
+	// Column widths for beacon list
+	beaconHostnameWidth = 20
+	beaconUsernameWidth = 15
+	taskCommandWidth    = 40
+
+	// Time format constants
+	timeFormatShort = "15:04:05"
+	timeFormatLong  = "2006-01-02 15:04:05"
+
+	// ANSI escape sequences
+	ansiClearScreen = "\033[2J\033[H"
 )
 
 // Console state management
@@ -38,7 +60,7 @@ func (cl *ConsoleLogger) Printf(format string, v ...interface{}) {
 	// Print a separator line and the log message
 	fmt.Printf("\n--- Log #%d ---\n", logCounter)
 	cl.Logger.Printf(format, v...)
-	fmt.Println("------")
+	fmt.Println("--- End Log ---")
 	fmt.Print("c2> ")
 }
 
@@ -46,6 +68,8 @@ func (cl *ConsoleLogger) Printf(format string, v ...interface{}) {
 var consoleLogger *ConsoleLogger
 
 // initConsoleLogger initializes the console-aware logger
+// initConsoleLogger initializes the console logging system with mutex protection
+// to prevent log output from interfering with user input.
 func initConsoleLogger() {
 	consoleLogger = &ConsoleLogger{
 		Logger: log.New(os.Stdout, "", log.LstdFlags),
@@ -53,6 +77,8 @@ func initConsoleLogger() {
 }
 
 // logf is a convenience function for console-aware logging
+// logf provides thread-safe formatted logging that preserves the user's input line
+// by clearing, logging, and then restoring the current input state.
 func logf(format string, v ...interface{}) {
 	if consoleLogger != nil {
 		consoleLogger.Printf(format, v...)
@@ -63,6 +89,8 @@ func logf(format string, v ...interface{}) {
 
 // startC2Console starts an interactive console for C2 management
 // startC2Console starts an interactive console for C2 management
+// startC2Console launches the interactive C2 management console with command processing
+// for beacon management, task distribution, and result retrieval.
 func startC2Console() {
 	// Initialize console logging
 	initConsoleLogger()
@@ -128,7 +156,7 @@ func startC2Console() {
 
 		case "clear":
 			// Clear screen (simple version)
-			fmt.Print("\033[2J\033[H")
+			fmt.Print(ansiClearScreen)
 			// Reset log counter since screen is cleared
 			consoleMutex.Lock()
 			logCounter = 0
@@ -152,6 +180,8 @@ func startC2Console() {
 	}
 }
 
+// printC2Help displays the available console commands and their usage information
+// for managing the C2 framework operations.
 func printC2Help() {
 	fmt.Print(`
 Available Commands:
@@ -176,6 +206,8 @@ Note: Log messages appear between markers while you type.
 `)
 }
 
+// listBeacons displays all registered beacons with their status information
+// including hostname, username, operating system, and last check-in time.
 func listBeacons() {
 	beacons := c2Manager.GetBeacons()
 
@@ -187,21 +219,23 @@ func listBeacons() {
 	fmt.Printf("\nRegistered Beacons (%d):\n", len(beacons))
 	fmt.Printf("%-10s %-20s %-15s %-10s %-12s %-8s %s\n",
 		"ID", "Hostname", "User", "OS", "Arch", "Queue", "Last Seen")
-	fmt.Println(strings.Repeat("-", 95))
+	fmt.Println(strings.Repeat("-", beaconListSeparatorLength))
 
 	for _, beacon := range beacons {
 		fmt.Printf("%-10s %-20s %-15s %-10s %-12s %-8d %s\n",
 			beacon.ID,
-			truncateString(beacon.Hostname, 20),
-			truncateString(beacon.Username, 15),
+			truncateString(beacon.Hostname, beaconHostnameWidth),
+			truncateString(beacon.Username, beaconUsernameWidth),
 			beacon.OS,
 			beacon.Arch,
 			len(beacon.TaskQueue),
-			beacon.LastSeen.Format("15:04:05"))
+			beacon.LastSeen.Format(timeFormatShort))
 	}
 	fmt.Println()
 }
 
+// listTasks displays all queued and completed tasks with their current status
+// and execution details for monitoring C2 operations.
 func listTasks() {
 	tasks := c2Manager.GetTasks()
 
@@ -213,19 +247,21 @@ func listTasks() {
 	fmt.Printf("\nTasks (%d):\n", len(tasks))
 	fmt.Printf("%-8s %-10s %-10s %-40s %s\n",
 		"Task ID", "Beacon", "Status", "Command", "Created")
-	fmt.Println(strings.Repeat("-", 85))
+	fmt.Println(strings.Repeat("-", taskListSeparatorLength))
 
 	for _, task := range tasks {
 		fmt.Printf("%-8s %-10s %-10s %-40s %s\n",
 			task.ID,
 			task.BeaconID,
 			task.Status,
-			truncateString(task.Command, 40),
-			task.CreatedAt.Format("15:04:05"))
+			truncateString(task.Command, taskCommandWidth),
+			task.CreatedAt.Format(timeFormatShort))
 	}
 	fmt.Println()
 }
 
+// showTaskResult displays the complete output from a completed task
+// including formatted result data and execution metadata.
 func showTaskResult(taskID string) {
 	tasks := c2Manager.GetTasks()
 	task, exists := tasks[taskID]
@@ -239,23 +275,25 @@ func showTaskResult(taskID string) {
 	fmt.Printf("  Beacon ID: %s\n", task.BeaconID)
 	fmt.Printf("  Command:   %s\n", task.Command)
 	fmt.Printf("  Status:    %s\n", task.Status)
-	fmt.Printf("  Created:   %s\n", task.CreatedAt.Format("2006-01-02 15:04:05"))
+	fmt.Printf("  Created:   %s\n", task.CreatedAt.Format(timeFormatLong))
 
 	if task.SentAt != nil {
-		fmt.Printf("  Sent:      %s\n", task.SentAt.Format("2006-01-02 15:04:05"))
+		fmt.Printf("  Sent:      %s\n", task.SentAt.Format(timeFormatLong))
 	}
 
 	if task.Result != "" {
 		fmt.Printf("  Result (%d chars):\n", len(task.Result))
-		fmt.Println(strings.Repeat("-", 50))
+		fmt.Println(strings.Repeat("-", resultSeparatorLength))
 		fmt.Println(task.Result)
-		fmt.Println(strings.Repeat("-", 50))
+		fmt.Println(strings.Repeat("-", resultSeparatorLength))
 	} else {
 		fmt.Println("  Result: (no result yet)")
 	}
 	fmt.Println()
 }
 
+// truncateString shortens a string to the specified maximum length,
+// adding "..." to indicate truncation if the original was longer.
 func truncateString(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s

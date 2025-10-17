@@ -3,17 +3,23 @@ package main
 import "strings"
 
 // appendUint16 appends a big-endian uint16 to b and returns the grown slice.
+// appendUint16 appends a 16-bit unsigned integer to a byte slice in network byte order,
+// used for constructing DNS packet headers and resource records.
 func appendUint16(b []byte, v uint16) []byte {
 	return append(b, byte(v>>8), byte(v))
 }
 
 // appendUint32 appends a big-endian uint32 to b and returns the grown slice.
+// appendUint32 appends a 32-bit unsigned integer to a byte slice in network byte order,
+// used for DNS TTL values and other 32-bit fields in DNS records.
 func appendUint32(b []byte, v uint32) []byte {
 	return append(b, byte(v>>24), byte(v>>16), byte(v>>8), byte(v))
 }
 
 // appendName appends a DNS name in label form (no compression) to b.
 // For example, "www.example.com" becomes: 3 www 7 example 3 com 0
+// appendName encodes a domain name in DNS wire format and appends it to a byte slice,
+// using length-prefixed labels as specified in RFC 1035.
 func appendName(b []byte, name string) []byte {
 	if name == "" {
 		// Root label
@@ -41,6 +47,8 @@ func appendName(b []byte, name string) []byte {
 
 // appendNameCompressed encodes a DNS name using label compression per RFC 1035.
 // nameOffsets maps domain suffixes to their offset in the message for reuse.
+// appendNameCompressed encodes a domain name with DNS compression support,
+// using compression pointers to reduce packet size when names are repeated.
 func appendNameCompressed(b []byte, name string, nameOffsets map[string]int) []byte {
 	// Root name
 	if name == "" || name == "." {
@@ -80,6 +88,8 @@ func appendNameCompressed(b []byte, name string, nameOffsets map[string]int) []b
 
 // serializeMessage converts a DNSMessage into wire bytes.
 // Implements basic name compression during serialization.
+// serializeMessage converts a DNSMessage struct to wire format bytes
+// for transmission over UDP, following RFC 1035 packet structure.
 func serializeMessage(m DNSMessage) []byte {
 	var buf []byte
 	nameOffsets := make(map[string]int)
@@ -138,6 +148,8 @@ func serializeMessage(m DNSMessage) []byte {
 
 // makeResponseFlags creates the Flags field for a response based on the query flags.
 // We set QR=1 (response), copy OPCODE from query, copy RD, set AA if desired, RA=0, Z=0, and set RCODE.
+// makeResponseFlags constructs DNS response flags based on query flags,
+// authority status, and response code for proper DNS packet formatting.
 func makeResponseFlags(queryFlags uint16, authoritative bool, rcode uint8) uint16 {
 	var f uint16
 	// QR (bit 15)
@@ -160,6 +172,8 @@ func makeResponseFlags(queryFlags uint16, authoritative bool, rcode uint8) uint1
 
 // buildResponse takes a parsed query and a list of answers and returns a DNSMessage
 // set as a response with appropriate header counts and flags.
+// buildResponse constructs a DNS response message from a query and answer records,
+// setting appropriate flags and copying the question section.
 func buildResponse(query DNSMessage, answers []DNSResourceRecord, rcode uint8) DNSMessage {
 	var m DNSMessage
 	m.Header.ID = query.Header.ID

