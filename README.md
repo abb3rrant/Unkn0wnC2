@@ -2,16 +2,17 @@
 
 A DNS-based Command & Control framework that operates as a legitimate authoritative DNS server with advanced evasion and reliability features.
 
-### Architecture
+## Architecture
 
-This C2 framework is designed to blend seamlessly with legitimate DNS traffic by acting as an authoritative DNS server for your domain. The server provides:
+This C2 framework is designed to blend with legitimate DNS traffic by acting as an authoritative DNS server for your domain. The server provides:
 
 - **Authoritative DNS Server** - Fully functional DNS server for your configured domain (e.g., `secwolf.net`)
 - **C2 Communications** - Encodes commands/responses within legitimate-looking DNS queries
 - **DNS Forwarding** - Proxies legitimate DNS queries to upstream servers (8.8.8.8) for stealth
 - **Cache-Busting Protocol** - Timestamp injection prevents DNS resolver caching of C2 traffic
 - **Chunked Result Handling** - Reliable exfiltration of large command outputs through multi-packet protocols
-- **Interactive Console** - Real-time beacon management and task distribution interface
+- **Interactive Console** - Beacon management and task distribution interface
+- **Encryption and Encoding** - Communications are encrypted with AES-GCM encrytion and encoded with Base36 (non-standard encoding).
 
 ### To-Do
 
@@ -28,46 +29,17 @@ This C2 framework is designed to blend seamlessly with legitimate DNS traffic by
 - [ ] Create Stager Client to retrieve full client from Server
 - [ ] QuantumCat client for exfil
 - [ ] Upload functionality through TXT answers
+- [ ] Implement Database for tracking Beacons/Tasks
 
-### Setup
+# Setup
 
 #### 1. Domain Configuration
 Set up your domain with glue records pointing to your server:
 - Configure NS records: `ns1.yourdomain.net` and `ns2.yourdomain.net` pointing to your server IP
 - Ensure your registrar has proper glue records configured
 
-#### 2. Build the binaries
-```bash
-# Server
-cd Server
-go build -o dns-server .
-
-# Client  
-cd ../Client
-go build -o dns-client .
-```
-
-#### 3. Configure the server
-Edit `Server/config.json`:
-```json
-{
-  "bind_addr": "0.0.0.0",
-  "bind_port": 53,
-  "domain": "secwolf.net",
-  "ns1": "ns1.secwolf.net", 
-  "ns2": "ns2.secwolf.net",
-  "forward_dns": true,
-  "upstream_dns": "8.8.8.8:53",
-  "encryption_key": "MySecretC2Key123!@#DefaultChange",
-  "debug": false
-}
-```
-- `forward_dns`: Enable DNS forwarding for legitimate queries (recommended for stealth)
-- `upstream_dns`: DNS server to forward legitimate queries to
-- `debug`: Enable detailed logging for troubleshooting
-
-#### 4. Configure the client
-Edit `Client/config.json`:
+#### 2. Configure the client
+Edit `Client/build_config.json` as this config is used at buildtime:
 ```json
 {
   "server_domain": "secwolf.net",
@@ -88,6 +60,38 @@ Edit `Client/config.json`:
 - `max_command_length`: Increased to 800 to handle chunked result metadata
 - `sleep_min/max`: Beacon interval randomization for operational security
 
+
+#### 3. Build the binaries
+```bash
+# Server
+cd Server
+go build -o dns-server .
+
+# Client  
+cd ../Client
+go build -o dns-client .
+```
+
+#### 4. Configure the server
+Edit `Server/config.json`, this config must be in the same directory as the compiled server for use:
+```json
+{
+  "bind_addr": "0.0.0.0",
+  "bind_port": 53,
+  "domain": "secwolf.net",
+  "ns1": "ns1.secwolf.net", 
+  "ns2": "ns2.secwolf.net",
+  "forward_dns": true,
+  "upstream_dns": "8.8.8.8:53",
+  "encryption_key": "MySecretC2Key123!@#DefaultChange",
+  "debug": false
+}
+```
+- `forward_dns`: Enable DNS forwarding for legitimate queries (recommended for stealth)
+- `upstream_dns`: DNS server to forward legitimate queries to
+- `debug`: Enable detailed logging for troubleshooting
+
+
 #### 5. Deploy and run
 ```bash
 # On your server (requires root for port 53)
@@ -100,7 +104,19 @@ sudo ./dns-server
 #### 6. C2 Operations
 The server includes an interactive console for managing beacons and issuing commands. Use `help` for available commands.
 
-### Protocol Details
+**Interactive Console Commands**
+
+```
+help                    - Show available commands
+beacons                 - List all active beacons
+beacon <id>            - Show detailed beacon information  
+task <beacon_id> <cmd> - Queue command for specific beacon
+tasks                  - Show all tasks and their status
+clear                  - Clear the console screen
+exit/quit              - Shutdown the server
+```
+
+# Protocol Details
 
 #### C2 Communication Flow
 1. **Client Beacon**: Makes periodic DNS TXT queries with hex-encoded beacon data
@@ -118,13 +134,19 @@ The server includes an interactive console for managing beacons and issuing comm
 - Timestamp prevents DNS resolver caching between communications
 - Appears as normal subdomain lookups to network monitoring
 
+##### Message Format (Pipe-Delimited, Encrypted Before Encoding)
+- **Check-in**: `CHK|beaconID|hostname|username|os`
+- **Task Distribution**: `TASK|taskID|command`
+- **Server Response(No Task)**: `ACK`
+- **Result Exfiltration**: `RESULT|beaconID|taskID|output` (small) or `RESULT_META|beaconID|taskID|size|chunks` + `DATA|beaconID|taskID|index|chunk`
+- **Future staging Message**: `STG|DEPLOY|UNKN0WN`
+
 #### Encoding Protocol
 - **AES-GCM Encryption**: Encryption with authentication for C2 traffic
 - **Base36 Encoding**: DNS-safe encoding that handles encrypted binary data reliably
-- **Message format**: `TYPE|BeaconID|Data...` pipe-delimited structure (encrypted before encoding)
 - **Chunk handling**: Automatic splitting/reassembly for data over DNS limits
 
-### DNS Communication Mechanics
+## DNS Communication Mechanics
 
 #### DNS Resolution Chain
 ```
@@ -139,25 +161,25 @@ Client → Local DNS Resolver → Root DNS Servers → TLD Servers → Your Auth
 6. **C2 Processing**: Your server receives query, decodes C2 traffic, processes beacon/task
 7. **Response Chain**: Your server responds back through the same chain to client
 
-#### Checkin Process Flow
+### Checkin Process Flow
 
 **Step 1 - Initial Beacon Registration**
 ```
 DNS Query: TXT 1k3m9n8p2q7r4s6t...<timestamp>.secwolf.net
-Decrypted: HELLO|beacon-id|hostname|username|os-info
+Decrypted: CHK|beacon-id|hostname|username|os-info
 Response:  TXT record with encrypted+base36-encoded "ACK" (first registration)
 ```
 
 **Step 2 - Regular Beacon Checkins**
 ```
 DNS Query: TXT 2a5b8c1d4e7f0g3h...<timestamp>.secwolf.net  
-Decrypted: CHECKIN|beacon-id|hostname|username|os-info
+Decrypted: CHK|beacon-id|hostname|username|os-info
 Response:  TXT record with encrypted+base36-encoded:
            - "ACK" (no tasks pending)
            - "TASK|task-id|command" (task available)
 ```
 
-#### Task Distribution Process
+### Task Distribution Process
 
 **Server-Side Task Queue**
 1. Operator uses console: `task beacon-123 whoami`
@@ -171,7 +193,7 @@ Response:  TXT record with encrypted+base36-encoded:
 4. Task status updated to: `sent` with timestamp
 5. Beacon receives DNS response, extracts and executes command
 
-#### Result Exfiltration Process
+### Result Exfiltration Process
 
 **Small Results (< 50 bytes raw)**
 ```
@@ -208,11 +230,11 @@ Response:    TXT encrypted "ACK" for each chunk
 3. When all chunks received, server reconstructs complete result
 4. Task status updated to `completed` with full output
 
-#### Cache-Busting Mechanism
+### Cache-Busting Mechanism
 
-**Problem**: DNS resolvers cache responses, preventing real-time C2 communication
+**Problem**: DNS resolvers cache responses, preventing C2 communication
 
-**Enhanced Solution**: Timestamp-based subdomain variation
+**Solution**: Timestamp-based subdomain variation
 ```
 Original:  <encrypted-base36-data>.secwolf.net
 Enhanced:  <encrypted-base36-data>.<unix-timestamp>.secwolf.net
@@ -225,9 +247,9 @@ Enhanced:  <encrypted-base36-data>.<unix-timestamp>.secwolf.net
 3. 7n0p3q6r9s2t5u8v1w4x7y0z3a6b9c2d.1729123466.secwolf.net
 ```
 
-Each query appears as different subdomain to DNS infrastructure, preventing caching while maintaining C2 communications.
+Each query appears as different subdomain to DNS infrastructure, preventing caching from affecting C2 communications.
 
-#### Legitimate Traffic Handling
+### Operational Features
 
 **DNS Forwarding for Stealth**
 1. Non-C2 query received: `www.secwolf.net` or `mail.secwolf.net`
@@ -239,33 +261,3 @@ Each query appears as different subdomain to DNS infrastructure, preventing cach
 - Domain appears to host legitimate services (web, mail, etc.)  
 - C2 traffic disguised as subdomain lookups for hosted applications
 - Network monitoring sees normal DNS patterns with mixed legitimate/C2 queries
-
-### Operational Features
-
-#### Stealth Capabilities
-- **DNS Forwarding**: Proxies legitimate queries to maintain domain functionality
-- **Legitimate Responses**: Returns realistic IP addresses for non-C2 queries
-- **Traffic Blending**: C2 communications appear as normal subdomain lookups
-- **Cache Evasion**: Timestamp injection prevents DNS caching artifacts
-
-### Interactive Console Commands
-
-```
-help                    - Show available commands
-beacons                 - List all active beacons
-beacon <id>            - Show detailed beacon information  
-task <beacon_id> <cmd> - Queue command for specific beacon
-tasks                  - Show all tasks and their status
-clear                  - Clear the console screen
-exit/quit              - Shutdown the server
-```
-
-### How it Works
-
-1. **DNS Resolution Path**: Client → DNS Resolver → Root Servers → Your Authoritative NS
-2. **Traffic Analysis**: Server distinguishes C2 traffic from legitimate DNS queries
-3. **C2 Processing**: Decodes beacons, manages tasks, handles chunked result reassembly
-4. **Legitimate Forwarding**: Non-C2 queries forwarded to upstream DNS for realistic responses
-5. **Stealth Operation**: Maintains appearance of normal domain with mixed legitimate/C2 traffic
-
-This architecture enables C2 operations through standard DNS infrastructure while maintaining operational security through legitimate traffic blending and cache evasion techniques.

