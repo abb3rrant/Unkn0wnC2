@@ -15,24 +15,29 @@ This C2 framework is designed to blend with legitimate DNS traffic by acting as 
 - **Cache-Busting Protocol** - Timestamp injection prevents DNS resolver caching of C2 traffic
 - **Chunked Result Handling** - Reliable exfiltration of large command outputs through multi-packet protocols
 - **Interactive Console** - Beacon management and task distribution interface
-- **Encryption and Encoding** - Communications are encrypted with AES-GCM encrytion and encoded with Base36 (non-standard encoding).
+- **Encryption and Encoding** - Communications are encrypted with AES-GCM encryption and encoded with Base36 (DNS-safe encoding)
+- **Automatic Session Cleanup** - Stager sessions (30min) and expected results (1hr) auto-expire to prevent memory leaks
+
+### Features
+
+- [x] AES-GCM Encryption with Base36 DNS-safe encoding
+- [x] Stager-based deployment (lightweight initial payload)
+- [x] Automatic session cleanup (prevents memory leaks)
+- [x] Two-phase chunked result exfiltration
+- [x] Cache-busting timestamp protocol
+- [x] Interactive C2 management console
+- [x] DNS forwarding for traffic blending
 
 ### To-Do
 
-- [x] AES-GCM Encryption
-- [x] Base36 Encoding (replaces HEX)
-- [x] Create Stager Client to retrieve full client from Server
-- [ ] Beacon/Task Cleanup
-- [ ] Ensure graceful exits
-- [ ] Handle other DNS request types for C2 and make CNAME primary
-- [ ] Beacon Killswitch
-- [ ] Improve Console
-- [ ] Improve Modularity
-- [ ] Refactor Server
-- [ ] Refactor Client
-- [ ] QuantumCat client for exfil
-- [ ] Upload functionality through TXT answers
-- [ ] Implement Database for tracking Beacons/Tasks
+- [ ] Beacon health monitoring and auto-cleanup
+- [ ] Graceful beacon shutdown mechanism
+- [ ] Handle other DNS request types (CNAME, etc.)
+- [ ] Beacon killswitch functionality
+- [ ] Enhanced console features (filtering, search)
+- [ ] Improved code modularity
+- [ ] File upload/download via DNS
+- [ ] Database backend for beacon/task persistence
 
 # Setup
 
@@ -158,30 +163,42 @@ The server includes an interactive console for managing beacons and issuing comm
 **Interactive Console Commands**
 
 ```
-help                    - Show available commands
-beacons                 - List all active beacons
-beacon <id>            - Show detailed beacon information  
-task <beacon_id> <cmd> - Queue command for specific beacon
-tasks                  - Show all tasks and their status
-clear                  - Clear the console screen
-exit/quit              - Shutdown the server
+help, ?                 - Show available commands
+status, st              - Show C2 server status summary
+beacons, list           - List all active beacons with details
+task <id> <cmd>         - Queue command for specific beacon
+tasks                   - Show all tasks and their status
+result <task_id>        - Display completed task output
+logs                    - Show log message count since start/clear
+clear                   - Clear the console screen and reset log counter
+exit, quit              - Shutdown the server
+```
+
+**Example Usage:**
+```bash
+c2> beacons                    # List all active beacons
+c2> task a1b2 whoami          # Run command on beacon a1b2
+c2> tasks                      # Check task status
+c2> result T1001              # View task result
 ```
 
 # Protocol Details
 
 #### C2 Communication Flow
-1. **Client Beacon**: Makes periodic DNS TXT queries with hex-encoded beacon data
+1. **Client Beacon**: Makes periodic DNS TXT queries with AES-GCM encrypted + Base36 encoded beacon data
 2. **Cache-Busting**: Each query includes timestamp to prevent DNS resolver caching
-3. **Task Distribution**: Server responds with encoded tasks or ACK messages
+3. **Task Distribution**: Server responds with encrypted tasks or ACK messages
 4. **Result Exfiltration**: Large outputs use two-phase chunking protocol:
    - Phase 1: `RESULT_META` with size and chunk count
    - Phase 2: `DATA` chunks sent sequentially with automatic reassembly
+5. **Session Management**: Automatic cleanup of expired sessions (stager: 30min, results: 1hr)
 
 #### DNS Query Structure
 ```
-<hex-encoded-payload>.<timestamp-cache-buster>.<domain>
+<base36-encoded-encrypted-payload>.<timestamp-cache-buster>.<domain>
 ```
-- Payload is split into 62-character chunks (DNS label limit compliance)
+- Payload is AES-GCM encrypted then Base36 encoded for DNS safety
+- Split into 62-character chunks (DNS label limit compliance)
 - Timestamp prevents DNS resolver caching between communications
 - Appears as normal subdomain lookups to network monitoring
 
@@ -194,9 +211,10 @@ exit/quit              - Shutdown the server
 - **Stager Response**: `META|total_chunks` → `CHUNK|base64_data` (Base36 only, no encryption)
 
 #### Encoding Protocol
-- **AES-GCM Encryption**: Encryption with authentication for C2 traffic
-- **Base36 Encoding**: DNS-safe encoding that handles encrypted binary data reliably
-- **Chunk handling**: Automatic splitting/reassembly for data over DNS limits
+- **AES-GCM Encryption**: Authenticated encryption for C2 traffic (clients only, stagers use plain Base36)
+- **Base36 Encoding**: DNS-safe encoding using 0-9 and a-z characters for subdomain transmission
+- **Chunk Handling**: Automatic splitting/reassembly for data over DNS limits (62 chars per label)
+- **Session Cleanup**: Automatic expiration of stager sessions (30min) and expected results (1hr)
 
 ## DNS Communication Mechanics
 
@@ -217,18 +235,20 @@ Client → Local DNS Resolver → Root DNS Servers → TLD Servers → Your Auth
 
 **Step 1 - Initial Beacon Registration**
 ```
-DNS Query: TXT 1k3m9n8p2q7r4s6t...<timestamp>.secwolf.net
+DNS Query: TXT <base36-encoded-aes-encrypted-data>.<timestamp>.secwolf.net
 Decrypted: CHK|beacon-id|hostname|username|os-info
-Response:  TXT record with encrypted+base36-encoded "ACK" (first registration)
+Response:  TXT record with AES-GCM encrypted + Base36 encoded "ACK" (first registration)
+Server:    Creates beacon entry, starts tracking
 ```
 
 **Step 2 - Regular Beacon Checkins**
 ```
-DNS Query: TXT 2a5b8c1d4e7f0g3h...<timestamp>.secwolf.net  
+DNS Query: TXT <base36-encoded-aes-encrypted-data>.<timestamp>.secwolf.net  
 Decrypted: CHK|beacon-id|hostname|username|os-info
-Response:  TXT record with encrypted+base36-encoded:
+Response:  TXT record with AES-GCM encrypted + Base36 encoded:
            - "ACK" (no tasks pending)
            - "TASK|task-id|command" (task available)
+Server:    Updates beacon last-seen timestamp
 ```
 
 ### Task Distribution Process
@@ -249,31 +269,34 @@ Response:  TXT record with encrypted+base36-encoded:
 
 **Small Results (< 50 bytes raw)**
 ```
-DNS Query: TXT 9m2n5p8q1r4s7t0u...<timestamp>.secwolf.net
+DNS Query: TXT <base36-encoded-aes-encrypted-data>.<timestamp>.secwolf.net
 Decrypted: RESULT|beacon-id|task-id|output-data  
-Response:  TXT encrypted "ACK"
+Response:  TXT AES-GCM encrypted + Base36 encoded "ACK"
+Server:    Task marked as completed, result stored
 ```
 
 **Large Results (> 50 bytes raw) - Two-Phase Protocol**
 
 **Phase 1 - Metadata**
 ```
-DNS Query: TXT 3a6b9c2d5e8f1g4h...<timestamp>.secwolf.net
+DNS Query: TXT <base36-encoded-aes-encrypted-data>.<timestamp>.secwolf.net
 Decrypted: RESULT_META|beacon-id|task-id|total-size|chunk-count
-Response:  TXT encrypted "ACK" 
+Response:  TXT AES-GCM encrypted + Base36 encoded "ACK" 
+Server:    Creates ExpectedResult entry, prepares to receive chunks
 ```
 
 **Phase 2 - Data Chunks**
 ```
-DNS Query 1: TXT 7j0k3l6m9n2p5q8r...<timestamp>.secwolf.net
+DNS Query 1: TXT <base36-encoded-aes-encrypted-data>.<timestamp>.secwolf.net
 Decrypted 1: DATA|beacon-id|task-id|1|chunk-1-data
 
-DNS Query 2: TXT 1s4t7u0v3w6x9y2z...<timestamp>.secwolf.net  
+DNS Query 2: TXT <base36-encoded-aes-encrypted-data>.<timestamp>.secwolf.net  
 Decrypted 2: DATA|beacon-id|task-id|2|chunk-2-data
 
 [... continues for all chunks ...]
 
-Response:    TXT encrypted "ACK" for each chunk
+Response:    TXT AES-GCM encrypted + Base36 encoded "ACK" for each chunk
+Server:      Stores chunks in order, assembles when complete
 ```
 
 **Server-Side Reassembly**
@@ -292,24 +315,31 @@ Original:  <encrypted-base36-data>.secwolf.net
 Enhanced:  <encrypted-base36-data>.<unix-timestamp>.secwolf.net
 ```
 
-**Example DNS Queries**:
+**Example DNS Queries** (Base36 encoded, AES-GCM encrypted):
 ```
-1. 2a5b8c1d4e7f0g3h6i9j2k5l8m1n4p7q.1729123456.secwolf.net  
-2. 9x2y5z8a1b4c7d0e3f6g9h2i5j8k1l4m.1729123461.secwolf.net
-3. 7n0p3q6r9s2t5u8v1w4x7y0z3a6b9c2d.1729123466.secwolf.net
+1. aiihbk2levr6d2jmb5dve5vfqqyg2oah3neijqkiswoj89pw.1729123456.secwolf.net  
+2. tof6jalbhq38als9add7knpmyt4irhcypu4142s9rgu.1729123461.secwolf.net
+3. 9x2y5z8a1b4c7d0e3f6g9h2i5j8k1l4m7n0p3q6r9s.1729123466.secwolf.net
 ```
 
-Each query appears as different subdomain to DNS infrastructure, preventing caching from affecting C2 communications.
+Each query appears as a unique subdomain to DNS infrastructure, preventing caching from affecting C2 communications. The Base36 encoding uses only DNS-safe characters (0-9, a-z).
 
 ### Operational Features
 
 **DNS Forwarding for Stealth**
 1. Non-C2 query received: `www.secwolf.net` or `mail.secwolf.net`
-2. Server identifies as legitimate DNS (not hex-encoded C2 traffic)
-3. Server forwards query to upstream DNS (ex. 8.8.8.8)
+2. Server identifies as legitimate DNS (not Base36-encoded C2 traffic)
+3. Server forwards query to upstream DNS (default: 8.8.8.8)
 4. Server returns legitimate response or generates realistic IP
 
 **Traffic Blending Result**
 - Domain appears to host legitimate services (web, mail, etc.)  
 - C2 traffic disguised as subdomain lookups for hosted applications
 - Network monitoring sees normal DNS patterns with mixed legitimate/C2 queries
+- Automatic session cleanup prevents memory exhaustion from abandoned connections
+
+**Security Features**
+- No client/stager logging in production builds (stealth mode)
+- Debug mode available via compile-time flag or server `-d` flag
+- Default encryption key includes "DefaultChange" warning text
+- Automatic session expiration (stagers: 30min, results: 1hr)

