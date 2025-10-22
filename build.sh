@@ -47,6 +47,19 @@ else
 fi
 
 echo ""
+
+# Build stagers if Stager directory exists
+if [ -d "Stager" ]; then
+    echo "=== Building Stagers ==="
+    cd Stager
+    if [ -f "build.sh" ]; then
+        # Pass debug flag if provided
+        bash build.sh "$@"
+    fi
+    cd ..
+    echo ""
+fi
+
 echo "=== Build Complete ==="
 
 # Show build contents

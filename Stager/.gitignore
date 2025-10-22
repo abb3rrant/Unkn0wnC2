@@ -1,0 +1,27 @@
+# Compiled stager binaries
+stager-linux-x64
+stager-windows-x64.exe
+
+# Downloaded client binaries (generated during testing)
+client
+client.exe
+
+# Object files
+*.o
+*.obj
+
+# Debug symbols
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build artifacts
+build/

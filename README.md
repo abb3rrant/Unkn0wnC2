@@ -2,6 +2,9 @@
 
 A DNS-based Command & Control framework that operates as a legitimate authoritative DNS server with advanced evasion and reliability features.
 
+![Unkn0wnC2](assets/unkn0wnc2.png)
+
+
 ## Architecture
 
 This C2 framework is designed to blend with legitimate DNS traffic by acting as an authoritative DNS server for your domain. The server provides:
@@ -18,15 +21,15 @@ This C2 framework is designed to blend with legitimate DNS traffic by acting as 
 
 - [x] AES-GCM Encryption
 - [x] Base36 Encoding (replaces HEX)
-- [ ] Gzip compression
+- [x] Create Stager Client to retrieve full client from Server
 - [ ] Beacon/Task Cleanup
 - [ ] Ensure graceful exits
 - [ ] Handle other DNS request types for C2 and make CNAME primary
+- [ ] Beacon Killswitch
 - [ ] Improve Console
 - [ ] Improve Modularity
 - [ ] Refactor Server
 - [ ] Refactor Client
-- [ ] Create Stager Client to retrieve full client from Server
 - [ ] QuantumCat client for exfil
 - [ ] Upload functionality through TXT answers
 - [ ] Implement Database for tracking Beacons/Tasks
@@ -56,7 +59,8 @@ Run build scripts for your OS
 - Linux
 ```bash
 chmod +x build.sh
-./build.sh`
+./build.sh           # Production build (silent stagers)
+./build.sh --debug   # Debug build (verbose stagers for testing)
 ```
 
 **Build output**
@@ -68,20 +72,24 @@ build/
 ├── dns-server-linux          # Linux server binary
 ├── dns-client-windows.exe    # Windows client binary  
 ├── dns-client-linux          # Linux client binary
-└── deployment_info.json      # Build and deployment information
+├── deployment_info.json      # Build and deployment information
+└── stager/                   # Stager binaries
+    ├── stager-linux-x64
+    └── stager-windows-x64.exe
 ```
 
-#### 4. Disable systemd-resolved on Server host
-```bash
-sudo systemctl stop systemd-resolved
-```
+## Deployment Options
 
-#### 5. Start server
+### Option 1: Direct Client Deployment
+
+Traditional deployment of the full client binary.
+
+#### Start server
 ```bash
 sudo ./dns-server-linux
 ```
 
-#### 6. Launch client
+#### Launch client
 - Linux
 ```bash
 #sudo if possible!
@@ -92,7 +100,59 @@ sudo ./dns-server-linux
 .\dns-client-windows.exe
 ```
 
-#### 7. C2 Operations
+### Option 2: Stager-Based Deployment
+
+Deploy a lightweight stager that downloads the full client via DNS.
+
+#### Advantages
+- **Smaller footprint**: Stager is ~30KB vs full client ~2MB
+- **Evasion**: Client binary never touches disk until execution
+- **Flexibility**: Server can deliver different clients based on target OS/arch
+- **Reduced detection**: Smaller initial payload, full client retrieved via DNS
+
+#### Deployment Flow
+1. Deploy small stager to target system
+2. Stager contacts C2 server via DNS TXT queries
+3. Server identifies target OS/architecture  
+4. Server sends compressed client binary in DNS TXT responses
+5. Stager assembles, decompresses, and executes full client
+6. Client begins normal C2 operations
+
+#### Using the Stager
+
+**Server Preparation:**
+```bash
+# Ensure server has client binaries available
+sudo ./dns-server-linux
+# Server will automatically serve correct client based on stager OS/arch
+```
+
+**Target Deployment:**
+```bash
+# Transfer stager to target (much smaller than full client)
+# Linux example:
+./stager-linux-x64
+
+# Windows example:
+stager-windows-x64.exe
+```
+
+**Stager Protocol:**
+```
+1. Stager → Server:  base36(STG|<IP>|<OS>|<ARCH>)
+2. Server → Stager:  base36(META|<total_chunks>)
+3. Stager → Server:  base36(ACK|0)
+4. Server → Stager:  base36(CHUNK|<base64_client_chunk_0>)
+5. Stager → Server:  base36(ACK|1)
+   ... continues until all chunks received ...
+6. Stager: Decode base36 → Assemble base64 → Decode → Decompress → Write → Execute
+```
+
+**Note:** Stager uses Base36 encoding (not encryption) for DNS-safe message transmission.
+
+See [Stager/README.md](Stager/README.md) for detailed stager documentation.
+
+## C2 Operations
 The server includes an interactive console for managing beacons and issuing commands. Use `help` for available commands.
 
 **Interactive Console Commands**
@@ -126,11 +186,12 @@ exit/quit              - Shutdown the server
 - Appears as normal subdomain lookups to network monitoring
 
 ##### Message Format (Pipe-Delimited, Encrypted Before Encoding)
-- **Check-in**: `CHK|beaconID|hostname|username|os`
-- **Task Distribution**: `TASK|taskID|command`
-- **Server Response(No Task)**: `ACK`
-- **Result Exfiltration**: `RESULT|beaconID|taskID|output` (small) or `RESULT_META|beaconID|taskID|size|chunks` + `DATA|beaconID|taskID|index|chunk`
-- **Future staging Message**: `STG|DEPLOY|UNKN0WN`
+- **Check-in**: `CHK|beaconID|hostname|username|os` (AES-GCM + Base36)
+- **Task Distribution**: `TASK|taskID|command` (AES-GCM + Base36)
+- **Server Response(No Task)**: `ACK` (AES-GCM + Base36)
+- **Result Exfiltration**: `RESULT|beaconID|taskID|output` (small) or `RESULT_META|beaconID|taskID|size|chunks` + `DATA|beaconID|taskID|index|chunk` (AES-GCM + Base36)
+- **Stager Request**: `STG|IP|OS|ARCH` (Base36 only, no encryption)
+- **Stager Response**: `META|total_chunks` → `CHUNK|base64_data` (Base36 only, no encryption)
 
 #### Encoding Protocol
 - **AES-GCM Encryption**: Encryption with authentication for C2 traffic
@@ -245,7 +306,7 @@ Each query appears as different subdomain to DNS infrastructure, preventing cach
 **DNS Forwarding for Stealth**
 1. Non-C2 query received: `www.secwolf.net` or `mail.secwolf.net`
 2. Server identifies as legitimate DNS (not hex-encoded C2 traffic)
-3. Server forwards query to upstream DNS (8.8.8.8)
+3. Server forwards query to upstream DNS (ex. 8.8.8.8)
 4. Server returns legitimate response or generates realistic IP
 
 **Traffic Blending Result**

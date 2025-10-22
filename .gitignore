@@ -1,0 +1,57 @@
+# Build output directory
+build/
+!build/.gitkeep
+
+# Build tools
+build-tool
+build-tool.exe
+
+# Compiled binaries
+*.exe
+*.out
+*.app
+*.so
+*.dylib
+*.dll
+
+# Go build artifacts
+*.test
+*.prof
+
+# Object files
+*.o
+*.obj
+*.a
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+core
+core.*
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# OS specific
+Thumbs.db
+desktop.ini
+
+# Auto-generated config files (preserve templates)
+Client/config.go
+Server/config.go
