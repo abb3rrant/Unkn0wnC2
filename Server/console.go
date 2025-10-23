@@ -57,10 +57,7 @@ func (cl *ConsoleLogger) Printf(format string, v ...interface{}) {
 
 	logCounter++
 
-	// Print a separator line and the log message
-	fmt.Printf("\n--- Log #%d ---\n", logCounter)
 	cl.Logger.Printf(format, v...)
-	fmt.Println("--- End Log ---")
 	fmt.Print("c2> ")
 }
 

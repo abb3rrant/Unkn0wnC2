@@ -17,7 +17,7 @@
   },
   "client": {
     "server_domain": "secwolf.net",
-    "dns_server": "8.8.8.8",
+    "dns_server": "",
     "query_type": "TXT",
     "encoding": "aes-gcm-base36",
     "timeout": 10,

