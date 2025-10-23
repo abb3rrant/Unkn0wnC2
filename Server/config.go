@@ -155,6 +155,8 @@ func LoadConfig() (Config, error) {
 // Returns the config and true if embedded config is available, otherwise returns empty config and false
 // tryLoadEmbeddedConfig attempts to load embedded configuration
 // Returns the config and true if embedded config is available, otherwise returns empty config and false
+// tryLoadEmbeddedConfig attempts to load embedded configuration
+// Returns the config and true if embedded config is available, otherwise returns empty config and false
 func tryLoadEmbeddedConfig() (Config, bool) {
 	// Embedded configuration from build time
 	embeddedConfig := Config{

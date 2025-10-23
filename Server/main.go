@@ -1,9 +1,11 @@
-// Package main implements the Unkn0wnC2 DNS-based Command & Control server.
-// This server operates as an authoritative DNS server for a configured domain
-// while simultaneously handling encrypted C2 communications through DNS queries.
-//
-// The server forwards legitimate DNS queries to upstream servers while processing
-// C2 beacon traffic using AES-GCM encryption and Base36 encoding for stealth.
+/*
+	Package main implements the Unkn0wnC2 DNS-based Command & Control server.
+
+This server operates as an authoritative DNS server for a configured domain
+while simultaneously handling encrypted C2 communications through DNS queries.
+The server forwards legitimate DNS queries to upstream servers while processing
+C2 beacon traffic using AES-GCM encryption and Base36 encoding for stealth.
+*/
 package main
 
 import (
@@ -17,18 +19,18 @@ import (
 
 // Global variables
 var (
-	// c2Manager handles all C2 operations including beacon management and tasking
-	c2Manager *C2Manager
-	// debugMode enables verbose logging for troubleshooting
-	debugMode bool
+	c2Manager *C2Manager // c2Manager handles all C2 operations including beacon management and tasking
+	debugMode bool       // debugMode enables verbose logging for troubleshooting
 )
 
-// forwardDNSQuery forwards a DNS query to an upstream DNS server and returns the response.
-// This is used to forward legitimate DNS queries when the server is acting as an
-// authoritative server but receives queries for domains it doesn't handle.
+/*
+	forwardDNSQuery forwards a DNS query to an upstream DNS server and returns the response.
+	This is used to forward legitimate DNS queries when the server is acting as an
+
+authoritative server but receives queries for domains it doesn't handle.
+*/
 func forwardDNSQuery(packet []byte, upstreamAddr string) ([]byte, error) {
-	// Connect to upstream DNS server
-	conn, err := net.Dial("udp", upstreamAddr)
+	conn, err := net.Dial("udp", upstreamAddr) // Connect to upstream DNS server
 	if err != nil {
 		if debugMode {
 			logf("[Forward] Failed to connect to upstream %s: %v", upstreamAddr, err)
