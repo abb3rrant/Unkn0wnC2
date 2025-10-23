@@ -85,7 +85,7 @@
 #define BURST_PAUSE_MS 2000      // Pause between bursts (2 seconds)
 
 #define MAX_CHUNKS 10000  // Maximum chunks to support
-#define CHUNK_SIZE 403  // Chunk size matching server (150 bytes - UDP-safe with overhead)
+#define CHUNK_SIZE 403  // Chunk size matching server (tested maximum for DNS infrastructure)
 
 // DNS header structure
 typedef struct {
