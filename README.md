@@ -1,4 +1,4 @@
-# Unkn0wnC2
+# 🕵️ Unkn0wnC2
 
 DNS-based Command & Control framework operating as an authoritative DNS server with encrypted C2 communications.
 
@@ -6,9 +6,24 @@ DNS-based Command & Control framework operating as an authoritative DNS server w
 
 ---
 
-## Quick Deployment
+## ⚠️ Legal Disclaimer
 
-### 1. Domain Setup
+**FOR AUTHORIZED SECURITY TESTING ONLY**
+
+This software is provided for educational and authorized security testing purposes only. Users must:
+
+- ✅ Obtain explicit written authorization before deployment
+- ✅ Comply with all applicable local, state, and federal laws
+- ✅ Use only in controlled environments with proper authorization
+- ✅ Understand that unauthorized access to computer systems is illegal
+
+**The authors and contributors are not responsible for misuse or illegal activity. Use at your own risk.**
+
+---
+
+## 🚀 Quick Deployment
+
+### 1. 🌐 Domain Setup
 Configure NS records at registrar:
 ```
 ns1.yourdomain.net  →  YOUR_SERVER_IP
@@ -16,7 +31,7 @@ ns2.yourdomain.net  →  YOUR_SERVER_IP
 ```
 Add glue records at registrar, verify: `dig @8.8.8.8 NS yourdomain.net`
 
-### 2. Build
+### 2. 🔨 Build
 ```bash
 # Generate unique encryption key
 openssl rand -base64 32
@@ -29,7 +44,7 @@ chmod +x build.sh
 ./build.sh
 ```
 
-### 3. Deploy Server
+### 3. 🖥️ Deploy Server
 ```bash
 # Copy and configure
 sudo cp build/dns-server-linux /opt/unkn0wnc2/
@@ -41,7 +56,7 @@ vim config.json  # Set encryption_key, domain, bind_addr
 sudo ./dns-server-linux
 ```
 
-### 4. Deploy Client
+### 4. 📡 Deploy Client
 **Option A - Direct:** `./dns-client-linux`  
 **Option B - Stager:** `./stager-linux-x64` (downloads client via DNS)
 
@@ -49,7 +64,7 @@ sudo ./dns-server-linux
 
 ---
 
-## Protocol Architecture
+## 🏗️ Protocol Architecture
 
 ### Communication Flow
 ```
@@ -58,7 +73,26 @@ Client → System DNS → Internet DNS Chain → Your Authoritative NS (C2 Serve
                                     Process C2 / Forward Legitimate DNS
 ```
 
-### Message Format (Encrypted + Base36 Encoded)
+### 🔐 Encoding Pipeline
+
+**Client Traffic:**
+```
+Plaintext → AES-GCM Encrypt → Base36 Encode → DNS Labels (62 chars) → TXT Query
+```
+
+**Stager Traffic:**
+```
+Plaintext → Base36 Encode → DNS Labels → TXT Query
+```
+
+### 🏷️ DNS Label Structure
+- **Max length:** 62 characters per label (RFC compliance)
+- **Characters:** 0-9, a-z (Base36 alphabet)
+- **Cache busting:** Unix timestamp subdomain prevents resolver caching
+- **Example:** `a1b2c3...xyz.1729123456.secwolf.net`
+
+
+### 📨 Message Format (Encrypted + Base36 Encoded)
 ```
 <base36(aes-gcm(<message>))>.<timestamp>.<domain>
 ```
@@ -87,27 +121,41 @@ STG|IP|OS|ARCH         → META|totalChunks
 ACK|chunkIndex|IP|HOST → CHUNK|base64Data (×N)
 ```
 
-### Encoding Pipeline
+### ⚡ Two-Phase Result Exfiltration
+**Why?** Large outputs exceed legitimate DNS packet limits
 
-**Client Traffic:**
+**Phase 1 - Metadata:**
 ```
-Plaintext → AES-GCM Encrypt → Base36 Encode → DNS Labels (62 chars) → TXT Query
-```
-
-**Stager Traffic:**
-```
-Plaintext → Base36 Encode → DNS Labels → TXT Query
+RESULT_META|beaconID|taskID|totalSize|chunkCount
 ```
 
-### DNS Label Structure
-- **Max length:** 62 characters per label (RFC compliance)
-- **Characters:** 0-9, a-z (Base36 alphabet)
-- **Cache busting:** Unix timestamp subdomain prevents resolver caching
-- **Example:** `a1b2c3...xyz.1729123456.secwolf.net`
+**Phase 2 - Data Chunks:**
+```
+DATA|beaconID|taskID|1|chunk1
+DATA|beaconID|taskID|2|chunk2
+... (server reassembles automatically)
+```
+
+### 🎭 Traffic Blending
+```
+Non-C2 query:     www.secwolf.net
+Detection:        Not Base36-encoded
+Action:           Forward to 8.8.8.8
+Result:           Legitimate DNS response
+                  ↓
+                  Server appears as normal authoritative NS
+```
+
+### ⏱️ Session Management
+| Session Type | Timeout | Cleanup |
+|-------------|---------|---------|
+| Stager downloads | 3 hours inactivity | Auto-delete on expire |
+| Expected results | 1 hour | Auto-delete on expire |
+| Cleanup ticker | 5 minutes | Background goroutine |
 
 ---
 
-## Statistics & Configuration
+## 📊 Statistics & Configuration
 
 ### Server Specs
 | Component | Value |
@@ -153,7 +201,7 @@ build/
 
 ---
 
-## C2 Console Commands
+## 🎮 C2 Console Commands
 
 ```
 beacons              List all active beacons
@@ -185,50 +233,7 @@ admin
 
 ---
 
-## Protocol Details
-
-### Cache-Busting Mechanism
-Every query includes Unix timestamp subdomain:
-```
-<data>.1729123456.secwolf.net
-<data>.1729123461.secwolf.net  ← Different subdomain = no cache
-```
-
-### Two-Phase Result Exfiltration
-**Why?** Large outputs exceed DNS packet limits
-
-**Phase 1 - Metadata:**
-```
-RESULT_META|beaconID|taskID|totalSize|chunkCount
-```
-
-**Phase 2 - Data Chunks:**
-```
-DATA|beaconID|taskID|1|chunk1
-DATA|beaconID|taskID|2|chunk2
-... (server reassembles automatically)
-```
-
-### Traffic Blending
-```
-Non-C2 query:     www.secwolf.net
-Detection:        Not Base36-encoded
-Action:           Forward to 8.8.8.8
-Result:           Legitimate DNS response
-                  ↓
-                  Server appears as normal authoritative NS
-```
-
-### Session Management
-| Session Type | Timeout | Cleanup |
-|-------------|---------|---------|
-| Stager downloads | 3 hours inactivity | Auto-delete on expire |
-| Expected results | 1 hour | Auto-delete on expire |
-| Cleanup ticker | 5 minutes | Background goroutine |
-
----
-
-## Security Features
+## 🔒 Security Features
 
 ### OPSEC
 - ✅ Clients/stagers have zero logging in production
@@ -252,7 +257,7 @@ Result:           Legitimate DNS response
 
 ---
 
-## Troubleshooting
+## 🔧 Troubleshooting
 
 **Server won't start (permission denied):**
 ```bash
@@ -287,7 +292,7 @@ dig @8.8.8.8 NS yourdomain.net
 
 ---
 
-## Production Checklist
+## ✅ Production Checklist
 
 - [ ] Change encryption key from default
 - [ ] Disable debug mode (`debug: false`)
@@ -300,7 +305,7 @@ dig @8.8.8.8 NS yourdomain.net
 
 ---
 
-## Build Configuration
+## ⚙️ Build Configuration
 
 **`build_config.json` structure:**
 ```json
@@ -335,4 +340,14 @@ dig @8.8.8.8 NS yourdomain.net
 
 **Version:** 0.1.0  
 **License:** Use for authorized security testing only  
-**Warning:** Ensure proper authorization before deployment
+
+---
+
+## ⚠️ Final Notice
+
+This tool is intended for **authorized security assessments and educational purposes only**. Unauthorized use against systems you do not own or have explicit permission to test is illegal and unethical.
+
+**The developers assume no liability for misuse of this software.**
+
+By using this software, you acknowledge that you have obtained proper authorization and will comply with all applicable laws and regulations.
+
