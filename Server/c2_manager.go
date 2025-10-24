@@ -86,16 +86,14 @@ type StagerSession struct {
 	ClientIP        string
 	OS              string
 	Arch            string
-	Chunks          []string // Base64-encoded chunks
+	Chunks          []string  // Base64-encoded chunks
 	TotalChunks     int
 	CreatedAt       time.Time
-	LastActivity    time.Time   // Updated on each chunk request to prevent premature expiration
-	StartedAt       time.Time   // When first chunk was requested
-	LastChunk       *int        // Last chunk index sent (pointer to differentiate nil from 0)
-	LastChunkTime   time.Time   // When last chunk was sent
-	ChunkTimes      []time.Time // Timestamps of when each chunk was sent
-	ProgressRunning bool        // Track if progress updater is running
-	ProgressDone    chan bool   // Signal to stop progress updater
+	LastActivity    time.Time // Updated on each chunk request to prevent premature expiration
+	StartedAt       time.Time // When first chunk was requested
+	LastChunk       *int      // Last chunk index sent (pointer to differentiate nil from 0)
+	ProgressRunning bool      // Track if progress updater is running
+	ProgressDone    chan bool // Signal to stop progress updater
 }
 
 // C2Manager handles beacon management and tasking
@@ -137,63 +135,31 @@ func NewC2Manager(debug bool, encryptionKey string, jitterConfig StagerJitter) *
 	return c2
 }
 
-// calculateStagerETA calculates ETA based on burst pattern analysis
-// Returns a human-readable duration string (e.g., "2m 30s", "45s")
+// calculateStagerETA calculates ETA using overall transfer rate (including pauses)
+// Returns a human-readable duration string (e.g., "2m 30s", "45s", "2d 5h")
 func calculateStagerETA(session *StagerSession, currentChunk int) string {
-	chunksRemaining := session.TotalChunks - currentChunk
-
-	if chunksRemaining <= 0 {
+	if currentChunk >= session.TotalChunks {
 		return "complete"
 	}
 
-	// Need at least a few chunks to establish pattern
-	if len(session.ChunkTimes) < 3 {
+	// Need at least one chunk to calculate
+	if currentChunk < 1 || session.StartedAt.IsZero() {
 		return "calculating..."
 	}
 
-	now := time.Now()
+	chunksRemaining := session.TotalChunks - currentChunk
 
-	// Analyze recent chunk timing to detect burst vs pause
-	recentChunks := 5
-	if len(session.ChunkTimes) < recentChunks {
-		recentChunks = len(session.ChunkTimes)
-	}
+	// ALWAYS use overall average rate including ALL elapsed time (pauses + transfers)
+	// This is the only way to get accurate ETA for operations with jitter pauses
+	elapsed := time.Since(session.StartedAt).Seconds()
+	overallRate := elapsed / float64(currentChunk) // seconds per chunk (includes everything)
+	
+	// Estimate remaining time: seconds_per_chunk * chunks_remaining
+	estimatedSecondsRemaining := overallRate * float64(chunksRemaining)
 
-	// Look at the last few chunks to see if we're in a burst or pause
-	var recentDelays []float64
-	for i := len(session.ChunkTimes) - recentChunks; i < len(session.ChunkTimes)-1; i++ {
-		delay := session.ChunkTimes[i+1].Sub(session.ChunkTimes[i]).Seconds()
-		recentDelays = append(recentDelays, delay)
-	}
+	duration := time.Duration(estimatedSecondsRemaining) * time.Second
 
-	// Calculate average delay in recent chunks
-	var avgRecentDelay float64
-	for _, d := range recentDelays {
-		avgRecentDelay += d
-	}
-	avgRecentDelay /= float64(len(recentDelays))
-
-	// Determine if we're currently in a burst (fast chunks) or pause (slow/waiting)
-	timeSinceLastChunk := now.Sub(session.LastChunkTime).Seconds()
-	inBurst := avgRecentDelay < 5.0 // Less than 5 seconds between chunks = burst mode
-
-	// Calculate overall transfer rate including pauses
-	totalElapsed := now.Sub(session.StartedAt).Seconds()
-	overallRate := totalElapsed / float64(currentChunk) // seconds per chunk including all delays
-
-	// Estimate time remaining
-	var estimatedSeconds float64
-	if inBurst && timeSinceLastChunk < 10 {
-		// Currently in burst - use overall rate (includes past pauses)
-		estimatedSeconds = overallRate * float64(chunksRemaining)
-	} else {
-		// In pause or waiting - add current wait time + remaining chunks at overall rate
-		estimatedSeconds = timeSinceLastChunk + (overallRate * float64(chunksRemaining))
-	}
-
-	duration := time.Duration(estimatedSeconds) * time.Second
-
-	// Format as human-readable string
+	// Format as human-readable string with support for days
 	if duration < time.Minute {
 		return fmt.Sprintf("%ds", int(duration.Seconds()))
 	} else if duration < time.Hour {
@@ -203,10 +169,21 @@ func calculateStagerETA(session *StagerSession, currentChunk int) string {
 			return fmt.Sprintf("%dm %ds", minutes, seconds)
 		}
 		return fmt.Sprintf("%dm", minutes)
-	} else {
+	} else if duration < 24*time.Hour {
 		hours := int(duration.Hours())
 		minutes := int(duration.Minutes()) % 60
-		return fmt.Sprintf("%dh %dm", hours, minutes)
+		if minutes > 0 {
+			return fmt.Sprintf("%dh %dm", hours, minutes)
+		}
+		return fmt.Sprintf("%dh", hours)
+	} else {
+		// Days and hours for long transfers
+		days := int(duration.Hours()) / 24
+		hours := int(duration.Hours()) % 24
+		if hours > 0 {
+			return fmt.Sprintf("%dd %dh", days, hours)
+		}
+		return fmt.Sprintf("%dd", days)
 	}
 }
 
@@ -1101,7 +1078,6 @@ func (c2 *C2Manager) handleStagerAck(parts []string, clientIP string, isDuplicat
 	// Initialize start time on first chunk
 	if chunkIndex == 0 && session.StartedAt.IsZero() {
 		session.StartedAt = now
-		session.ChunkTimes = make([]time.Time, 0, session.TotalChunks)
 	}
 
 	// Validate chunk index
@@ -1119,10 +1095,8 @@ func (c2 *C2Manager) handleStagerAck(parts []string, clientIP string, isDuplicat
 	if !isDuplicate {
 		// Only update progress bar if this is a NEW chunk (different from last one)
 		if session.LastChunk == nil || *session.LastChunk != chunkIndex {
-			// Update last chunk sent and record timing
+			// Update last chunk sent
 			session.LastChunk = &chunkIndex
-			session.LastChunkTime = now
-			session.ChunkTimes = append(session.ChunkTimes, now)
 
 			// Display progress bar instead of individual log lines
 			c2.logStagerProgress(session, chunkIndex, stagerIP)

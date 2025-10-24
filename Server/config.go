@@ -236,6 +236,20 @@ func LoadConfig() (Config, error) {
 // Returns the config and true if embedded config is available, otherwise returns empty config and false
 // tryLoadEmbeddedConfig attempts to load embedded configuration
 // Returns the config and true if embedded config is available, otherwise returns empty config and false
+// tryLoadEmbeddedConfig attempts to load embedded configuration
+// Returns the config and true if embedded config is available, otherwise returns empty config and false
+// tryLoadEmbeddedConfig attempts to load embedded configuration
+// Returns the config and true if embedded config is available, otherwise returns empty config and false
+// tryLoadEmbeddedConfig attempts to load embedded configuration
+// Returns the config and true if embedded config is available, otherwise returns empty config and false
+// tryLoadEmbeddedConfig attempts to load embedded configuration
+// Returns the config and true if embedded config is available, otherwise returns empty config and false
+// tryLoadEmbeddedConfig attempts to load embedded configuration
+// Returns the config and true if embedded config is available, otherwise returns empty config and false
+// tryLoadEmbeddedConfig attempts to load embedded configuration
+// Returns the config and true if embedded config is available, otherwise returns empty config and false
+// tryLoadEmbeddedConfig attempts to load embedded configuration
+// Returns the config and true if embedded config is available, otherwise returns empty config and false
 func tryLoadEmbeddedConfig() (Config, bool) {
 	// Embedded configuration from build time
 	embeddedConfig := Config{
@@ -250,10 +264,10 @@ func tryLoadEmbeddedConfig() (Config, bool) {
 		EncryptionKey: "MySecretC2Key123!@#DefaultChange",
 		Debug:         false,
 		StagerJitter: StagerJitter{
-			JitterMinMs:       1,
-			JitterMaxMs:       2,
-			ChunksPerBurst:    20,
-			BurstPauseMs:      1,
+			JitterMinMs:       1000,
+			JitterMaxMs:       2000,
+			ChunksPerBurst:    5,
+			BurstPauseMs:      12000,
 			RetryDelaySeconds: 3,
 			MaxRetries:        5,
 		},

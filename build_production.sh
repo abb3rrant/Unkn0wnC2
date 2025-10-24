@@ -159,12 +159,12 @@ if command -v jq &> /dev/null && [ -f "build_config.json" ]; then
     STAGER_MAX=$(jq -r '.stager.jitter_max_ms' build_config.json)
     STAGER_CHUNKS=$(jq -r '.stager.chunks_per_burst' build_config.json)
     STAGER_BURST=$(jq -r '.stager.burst_pause_ms' build_config.json)
-    echo "  Jitter: ${STAGER_MIN}-${STAGER_MAX}ms ($(echo "scale=1; $STAGER_MIN/1000" | bc)-$(echo "scale=1; $STAGER_MAX/1000" | bc)s)"
+    echo "  Jitter: ${STAGER_MIN}-${STAGER_MAX}ms ($(( STAGER_MIN / 1000 ))s-$(( STAGER_MAX / 1000 ))s)"
     echo "  Burst: ${STAGER_CHUNKS} chunks per burst"
-    echo "  Pause: ${STAGER_BURST}ms ($(echo "scale=1; $STAGER_BURST/1000" | bc)s) between bursts"
+    echo "  Pause: ${STAGER_BURST}ms ($(( STAGER_BURST / 1000 ))s) between bursts"
     TOTAL_MIN=$((STAGER_MIN + STAGER_BURST))
     TOTAL_MAX=$((STAGER_MAX + STAGER_BURST))
-    echo "  Total delay between bursts: $(echo "scale=1; $TOTAL_MIN/1000" | bc)-$(echo "scale=1; $TOTAL_MAX/1000" | bc)s"
+    echo "  Total delay between bursts: $(( TOTAL_MIN / 1000 ))s-$(( TOTAL_MAX / 1000 ))s"
     echo ""
 fi
 

