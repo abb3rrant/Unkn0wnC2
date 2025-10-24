@@ -26,6 +26,14 @@
     "sleep_min": 600,
     "sleep_max": 1200
   },
+  "stager": {
+    "jitter_min_ms": 100,
+    "jitter_max_ms": 150,
+    "chunks_per_burst": 10,
+    "burst_pause_ms": 100,
+    "retry_delay_seconds": 3,
+    "max_retries": 5
+  },
   "security": {
     "encryption_key": "MySecretC2Key123!@#DefaultChange"
   },

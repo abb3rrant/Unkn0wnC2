@@ -8,5 +8,13 @@
   "forward_dns": true,
   "upstream_dns": "8.8.8.8:53",
   "encryption_key": "MySecretC2Key123!@#DefaultChange",
-  "debug": false
+  "debug": false,
+  "stager": {
+    "jitter_min_ms": 60000,
+    "jitter_max_ms": 120000,
+    "chunks_per_burst": 5,
+    "burst_pause_ms": 120000,
+    "retry_delay_seconds": 3,
+    "max_retries": 5
+  }
 }

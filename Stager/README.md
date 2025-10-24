@@ -81,12 +81,43 @@ Built stagers are placed in `build/stager/`:
 
 ## Configuration
 
-The stager is configured at compile time:
+The stager is configured at compile time via `build_config.json`:
 
+### Build-Time Configuration
 - **DNS_SERVER**: DNS server to query (default: 8.8.8.8)
 - **C2_DOMAIN**: C2 domain name (default: secwolf.net)
 
-Configuration is automatically pulled from `build_config.json` during build.
+### Jitter and Timing Configuration
+The stager uses randomized timing to avoid detection patterns:
+
+- **jitter_min_ms**: Minimum delay between chunk requests (default: 100ms)
+- **jitter_max_ms**: Maximum delay between chunk requests (default: 500ms)
+- **chunks_per_burst**: Number of chunks before longer pause (default: 10)
+- **burst_pause_ms**: Pause duration between bursts (default: 2000ms)
+- **retry_delay_seconds**: Delay between retry attempts (default: 3s)
+- **max_retries**: Maximum retry attempts for failed DNS queries (default: 5)
+
+### Example Configuration
+```json
+{
+  "stager": {
+    "jitter_min_ms": 100,
+    "jitter_max_ms": 500,
+    "chunks_per_burst": 10,
+    "burst_pause_ms": 2000,
+    "retry_delay_seconds": 3,
+    "max_retries": 5
+  }
+}
+```
+
+**Jitter Strategy:**
+- Between each chunk: random delay of 100-500ms (prevents fixed timing patterns)
+- Every 10 chunks: 2-second pause (burst control to avoid flooding DNS)
+- Failed queries: 3-second delay before retry (allows DNS propagation)
+- This irregular timing defeats network traffic analysis tools
+
+All configuration values are embedded at compile time from `build_config.json`.
 
 ## Technical Details
 

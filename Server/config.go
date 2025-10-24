@@ -20,16 +20,27 @@ import (
 // - EncryptionKey: AES key for C2 traffic encryption
 // - Debug: enable detailed logging for troubleshooting
 type Config struct {
-	BindAddr      string `json:"bind_addr"`
-	BindPort      int    `json:"bind_port"`
-	SvrAddr       string `json:"server_address"`
-	Domain        string `json:"domain"`
-	NS1           string `json:"ns1"`
-	NS2           string `json:"ns2"`
-	ForwardDNS    bool   `json:"forward_dns"`
-	UpstreamDNS   string `json:"upstream_dns"`
-	EncryptionKey string `json:"encryption_key"`
-	Debug         bool   `json:"debug"`
+	BindAddr      string       `json:"bind_addr"`
+	BindPort      int          `json:"bind_port"`
+	SvrAddr       string       `json:"server_address"`
+	Domain        string       `json:"domain"`
+	NS1           string       `json:"ns1"`
+	NS2           string       `json:"ns2"`
+	ForwardDNS    bool         `json:"forward_dns"`
+	UpstreamDNS   string       `json:"upstream_dns"`
+	EncryptionKey string       `json:"encryption_key"`
+	Debug         bool         `json:"debug"`
+	StagerJitter  StagerJitter `json:"stager"`
+}
+
+// StagerJitter holds timing configuration for stager chunk delivery
+type StagerJitter struct {
+	JitterMinMs       int `json:"jitter_min_ms"`       // Minimum delay between chunks (ms)
+	JitterMaxMs       int `json:"jitter_max_ms"`       // Maximum delay between chunks (ms)
+	ChunksPerBurst    int `json:"chunks_per_burst"`    // Chunks before burst pause
+	BurstPauseMs      int `json:"burst_pause_ms"`      // Pause between bursts (ms)
+	RetryDelaySeconds int `json:"retry_delay_seconds"` // Delay between retries
+	MaxRetries        int `json:"max_retries"`         // Maximum retry attempts
 }
 
 // DefaultConfig returns sensible defaults for local development.
@@ -47,6 +58,14 @@ func DefaultConfig() Config {
 		UpstreamDNS:   "8.8.8.8:53",
 		EncryptionKey: "MySecretC2Key123!@#DefaultChange",
 		Debug:         false,
+		StagerJitter: StagerJitter{
+			JitterMinMs:       100,
+			JitterMaxMs:       500,
+			ChunksPerBurst:    10,
+			BurstPauseMs:      2000,
+			RetryDelaySeconds: 3,
+			MaxRetries:        5,
+		},
 	}
 }
 
@@ -118,11 +137,49 @@ func LoadConfig() (Config, error) {
 		cfg.EncryptionKey = fileCfg.EncryptionKey
 	}
 
+	// Merge stager jitter configuration
+	if fileCfg.StagerJitter.JitterMinMs != 0 {
+		cfg.StagerJitter.JitterMinMs = fileCfg.StagerJitter.JitterMinMs
+	}
+	if fileCfg.StagerJitter.JitterMaxMs != 0 {
+		cfg.StagerJitter.JitterMaxMs = fileCfg.StagerJitter.JitterMaxMs
+	}
+	if fileCfg.StagerJitter.ChunksPerBurst != 0 {
+		cfg.StagerJitter.ChunksPerBurst = fileCfg.StagerJitter.ChunksPerBurst
+	}
+	if fileCfg.StagerJitter.BurstPauseMs != 0 {
+		cfg.StagerJitter.BurstPauseMs = fileCfg.StagerJitter.BurstPauseMs
+	}
+	if fileCfg.StagerJitter.RetryDelaySeconds != 0 {
+		cfg.StagerJitter.RetryDelaySeconds = fileCfg.StagerJitter.RetryDelaySeconds
+	}
+	if fileCfg.StagerJitter.MaxRetries != 0 {
+		cfg.StagerJitter.MaxRetries = fileCfg.StagerJitter.MaxRetries
+	}
+
 	return cfg, nil
 }
 
 // tryLoadEmbeddedConfig attempts to load configuration from embedded build-time data,
 // returning the config and a boolean indicating if embedded data was found.
+// tryLoadEmbeddedConfig attempts to load embedded configuration
+// Returns the config and true if embedded config is available, otherwise returns empty config and false
+// tryLoadEmbeddedConfig attempts to load embedded configuration
+// Returns the config and true if embedded config is available, otherwise returns empty config and false
+// tryLoadEmbeddedConfig attempts to load embedded configuration
+// Returns the config and true if embedded config is available, otherwise returns empty config and false
+// tryLoadEmbeddedConfig attempts to load embedded configuration
+// Returns the config and true if embedded config is available, otherwise returns empty config and false
+// tryLoadEmbeddedConfig attempts to load embedded configuration
+// Returns the config and true if embedded config is available, otherwise returns empty config and false
+// tryLoadEmbeddedConfig attempts to load embedded configuration
+// Returns the config and true if embedded config is available, otherwise returns empty config and false
+// tryLoadEmbeddedConfig attempts to load embedded configuration
+// Returns the config and true if embedded config is available, otherwise returns empty config and false
+// tryLoadEmbeddedConfig attempts to load embedded configuration
+// Returns the config and true if embedded config is available, otherwise returns empty config and false
+// tryLoadEmbeddedConfig attempts to load embedded configuration
+// Returns the config and true if embedded config is available, otherwise returns empty config and false
 // tryLoadEmbeddedConfig attempts to load embedded configuration
 // Returns the config and true if embedded config is available, otherwise returns empty config and false
 // tryLoadEmbeddedConfig attempts to load embedded configuration
@@ -172,6 +229,14 @@ func tryLoadEmbeddedConfig() (Config, bool) {
 		UpstreamDNS:   "8.8.8.8:53",
 		EncryptionKey: "MySecretC2Key123!@#DefaultChange",
 		Debug:         false,
+		StagerJitter: StagerJitter{
+			JitterMinMs:       100,
+			JitterMaxMs:       150,
+			ChunksPerBurst:    10,
+			BurstPauseMs:      100,
+			RetryDelaySeconds: 3,
+			MaxRetries:        5,
+		},
 	}
 	return embeddedConfig, true
 }
