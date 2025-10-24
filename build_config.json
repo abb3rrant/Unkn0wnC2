@@ -21,10 +21,10 @@
     "query_type": "TXT",
     "encoding": "aes-gcm-base36",
     "timeout": 10,
-    "max_command_length": 800,
+    "max_command_length": 400,
     "retry_attempts": 3,
-    "sleep_min": 5,
-    "sleep_max": 15
+    "sleep_min": 600,
+    "sleep_max": 1200
   },
   "security": {
     "encryption_key": "MySecretC2Key123!@#DefaultChange"
