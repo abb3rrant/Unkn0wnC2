@@ -27,10 +27,10 @@
     "sleep_max": 1200
   },
   "stager": {
-    "jitter_min_ms": 100,
-    "jitter_max_ms": 150,
-    "chunks_per_burst": 10,
-    "burst_pause_ms": 100,
+    "jitter_min_ms": 1,
+    "jitter_max_ms": 2,
+    "chunks_per_burst": 20,
+    "burst_pause_ms": 1,
     "retry_delay_seconds": 3,
     "max_retries": 5
   },

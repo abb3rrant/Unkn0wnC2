@@ -27,7 +27,6 @@ type Beacon struct {
 	running  bool
 }
 
-// newBeacon creates a new DNS beacon with embedded configuration
 // newBeacon creates a new beacon instance with system information
 // including hostname, username, and operating system details.
 func newBeacon() (*Beacon, error) {
@@ -57,7 +56,6 @@ func newBeacon() (*Beacon, error) {
 	}, nil
 }
 
-// generateBeaconID creates a unique ID for this beacon
 // generateBeaconID creates a unique 4-character beacon identifier
 // based on MD5 hash of the hostname for C2 tracking.
 func generateBeaconID(hostname string) string {

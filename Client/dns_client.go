@@ -16,7 +16,6 @@ type DNSClient struct {
 	aesKey []byte
 }
 
-// newDNSClient creates a new DNS C2 client with embedded config
 // newDNSClient creates a DNS client with configured timeout and resolver settings
 // for communicating with the C2 DNS server.
 func newDNSClient() *DNSClient {

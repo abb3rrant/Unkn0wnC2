@@ -86,22 +86,22 @@
 
 // Jitter configuration for stealth - can be overridden at build time
 // Timing model: Request chunks in rapid bursts, then pause between bursts
-// Example with CHUNKS_PER_BURST=5, MIN_CHUNK_DELAY_MS=10000, MAX_CHUNK_DELAY_MS=15000, BURST_PAUSE_MS=60000:
+// Example with CHUNKS_PER_BURST=5, MIN_CHUNK_DELAY_MS=60000, MAX_CHUNK_DELAY_MS=120000, BURST_PAUSE_MS=120000:
 //   - Request 5 chunks rapidly (no delay within burst)
-//   - After 5 chunks: pause for random(10-15s) + 60s = 70-75 seconds total
+//   - After 5 chunks: pause for random(60-120s) + 120s = 180-240 seconds total
 //   - Request next 5 chunks rapidly
 //   - Repeat...
 #ifndef MIN_CHUNK_DELAY_MS
-    #define MIN_CHUNK_DELAY_MS 100   // Minimum jitter delay between bursts (milliseconds)
+    #define MIN_CHUNK_DELAY_MS 60000   // Minimum jitter delay between bursts (milliseconds) - 60s default
 #endif
 #ifndef MAX_CHUNK_DELAY_MS
-    #define MAX_CHUNK_DELAY_MS 500   // Maximum jitter delay between bursts (milliseconds)
+    #define MAX_CHUNK_DELAY_MS 120000  // Maximum jitter delay between bursts (milliseconds) - 120s default
 #endif
 #ifndef CHUNKS_PER_BURST
-    #define CHUNKS_PER_BURST 10      // Number of chunks to request rapidly before pausing
+    #define CHUNKS_PER_BURST 5         // Number of chunks to request rapidly before pausing
 #endif
 #ifndef BURST_PAUSE_MS
-    #define BURST_PAUSE_MS 2000      // Additional pause between bursts (milliseconds)
+    #define BURST_PAUSE_MS 120000      // Additional pause between bursts (milliseconds) - 120s default
 #endif
 
 #define MAX_CHUNKS 10000  // Maximum chunks to support

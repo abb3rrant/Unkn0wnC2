@@ -1,7 +1,24 @@
 #!/bin/bash
 #
-# Production Build Script for Unkn0wnC2
-# Builds optimized, stripped binaries for deployment
+# Production Build Script for Unkn0wnC2 DNS C2 Framework
+# 
+# This script builds optimized, stripped binaries for production deployment:
+#   1. Embeds configuration from build_config.json into server binary
+#   2. Builds server with production LDFLAGS (-s -w for stripping)
+#   3. Builds Linux and Windows clients
+#   4. Builds stager with configured jitter timing
+#   5. Optional UPX compression for reduced binary size
+#
+# BEFORE RUNNING:
+#   - Update build_config.json with your domain and network settings
+#   - Change encryption_key from default value
+#   - Review stager timing configuration for your OPSEC requirements
+#
+# USAGE:
+#   bash build_production.sh
+#
+# OUTPUT:
+#   All binaries will be in build/production/
 #
 
 set -e  # Exit on error

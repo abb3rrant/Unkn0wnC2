@@ -1,10 +1,25 @@
 @echo off
+:: ============================================================================
+:: DEPRECATED: This script is kept for legacy Windows compatibility only
+:: 
+:: For production builds, use WSL and run:
+::   bash build_production.sh
+::
+:: This script uses the old builder tool and may not include all features.
+:: See PRODUCTION_READY.md for proper deployment instructions.
+:: ============================================================================
+
 setlocal enabledelayedexpansion
 
-:: Unkn0wnC2 Build Script for Windows
+:: Unkn0wnC2 Build Script for Windows (DEPRECATED)
 :: Builds all components for deployment
 
-echo === Unkn0wnC2 Build System ===
+echo === Unkn0wnC2 Build System (Legacy) ===
+echo.
+echo WARNING: This script is deprecated. For production builds, use:
+echo   bash build_production.sh
+echo.
+pause
 echo.
 
 :: Check if Go is installed

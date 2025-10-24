@@ -39,26 +39,27 @@ openssl rand -base64 32
 # Edit build_config.json - set encryption_key, domain, server IPs
 vim build_config.json
 
-# Build all components
-chmod +x build.sh
-./build.sh
+# Build all components with production configuration
+bash build_production.sh
 ```
+
+Output will be in `build/production/`
 
 ### 3. 🖥️ Deploy Server
 ```bash
-# Copy and configure
-sudo cp build/dns-server-linux /opt/unkn0wnc2/
-sudo cp Server/config.json /opt/unkn0wnc2/
+# Copy to target server
+scp build/production/dns-server-linux user@server:/opt/unkn0wnc2/
 cd /opt/unkn0wnc2
-vim config.json  # Set encryption_key, domain, bind_addr
 
-# Run (requires root for port 53)
+# Run (requires root for port 53, config embedded at build time)
 sudo ./dns-server-linux
 ```
 
 ### 4. 📡 Deploy Client
 **Option A - Direct:** `./dns-client-linux`  
 **Option B - Stager:** `./stager-linux-x64` (downloads client via DNS)
+
+See [PRODUCTION_READY.md](PRODUCTION_READY.md) for detailed deployment guide.
 
 **Production:** Change encryption key, disable debug mode, use system DNS (stealth)
 

@@ -19,10 +19,11 @@ fi
 CONFIG_FILE="../build_config.json"
 DNS_SERVER="8.8.8.8"
 C2_DOMAIN="secwolf.net"
-JITTER_MIN_MS="100"
-JITTER_MAX_MS="500"
-CHUNKS_PER_BURST="10"
-BURST_PAUSE_MS="2000"
+# Fallback defaults - production stealth timing
+JITTER_MIN_MS="60000"      # 60 seconds
+JITTER_MAX_MS="120000"     # 120 seconds
+CHUNKS_PER_BURST="5"       # 5 chunks per burst
+BURST_PAUSE_MS="120000"    # 120 seconds between bursts
 RETRY_DELAY_SECONDS="3"
 MAX_RETRIES="5"
 

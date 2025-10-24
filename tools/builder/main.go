@@ -287,8 +287,8 @@ func tryLoadEmbeddedConfig() (Config, bool) {
 
 	end := pos
 
-	// Replace the function
-	newConfigStr := configStr[:start] + embeddedConfigFunc + configStr[end:]
+	// Replace the function including all comment lines before it
+	newConfigStr := configStr[:commentStart] + embeddedConfigFunc + configStr[end:]
 
 	return os.WriteFile(configPath, []byte(newConfigStr), 0644)
 }
