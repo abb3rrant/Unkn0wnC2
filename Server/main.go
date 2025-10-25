@@ -494,10 +494,22 @@ func main() {
 
 	// Log the actual local address we're bound to
 	localAddr := pc.LocalAddr()
-	fmt.Printf("==================================================\n")
-	fmt.Printf("Unkn0wnC2 DNS C2 Server v%s\n", version)
+	
+	// Display ASCII art banner
+	fmt.Println("\033[0;31m") // Red color
+	fmt.Println("  _    _       _           ___                    _____ ___  ")
+	fmt.Println(" | |  | |     | |         / _ \\                  / ____|__ \\ ")
+	fmt.Println(" | |  | |_ __ | | ___ __ | | | |_      ___ __   | |       ) |")
+	fmt.Println(" | |  | | '_ \\| |/ / '_ \\| | | \\ \\ /\\ / / '_ \\  | |      / / ")
+	fmt.Println(" | |__| | | | |   <| | | | |_| |\\ V  V /| | | | | |____ / /_ ")
+	fmt.Println("  \\____/|_| |_|_|\\_\\_| |_|\\___/  \\_/\\_/ |_| |_|  \\_____|____|")
+	fmt.Println("\033[0m") // Reset color
+	fmt.Println()
+	
+	fmt.Printf("\033[0;32m==================================================\n")
+	fmt.Printf("DNS C2 Server v%s\n", version)
 	fmt.Printf("Build: %s (commit: %s)\n", buildDate, gitCommit)
-	fmt.Printf("==================================================\n")
+	fmt.Printf("==================================================\033[0m\n")
 	fmt.Printf("Authoritative DNS Server for: %s\n", cfg.Domain)
 	fmt.Printf("Listening on: %s (local: %s)\n", bindAddr, localAddr.String())
 

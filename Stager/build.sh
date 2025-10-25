@@ -211,13 +211,3 @@ fi
 
 echo ""
 echo "=== Stager Build Complete ==="
-echo ""
-echo "Output directory: $BUILD_DIR"
-echo ""
-echo "Build modes:"
-echo "  Production (silent): ./build.sh"
-echo "  Debug (verbose):     ./build.sh --debug"
-echo ""
-echo "Note: Install mingw-w64 for Windows cross-compilation:"
-echo "  Ubuntu/Debian: sudo apt-get install mingw-w64"
-echo "  Fedora/RHEL:   sudo dnf install mingw64-gcc"

