@@ -494,7 +494,7 @@ func main() {
 
 	// Log the actual local address we're bound to
 	localAddr := pc.LocalAddr()
-	
+
 	// Display ASCII art banner
 	fmt.Println("\033[0;31m") // Red color
 	fmt.Println("  _    _       _           ___                    _____ ___  ")
@@ -505,7 +505,7 @@ func main() {
 	fmt.Println("  \\____/|_| |_|_|\\_\\_| |_|\\___/  \\_/\\_/ |_| |_|  \\_____|____|")
 	fmt.Println("\033[0m") // Reset color
 	fmt.Println()
-	
+
 	fmt.Printf("\033[0;32m==================================================\n")
 	fmt.Printf("DNS C2 Server v%s\n", version)
 	fmt.Printf("Build: %s (commit: %s)\n", buildDate, gitCommit)

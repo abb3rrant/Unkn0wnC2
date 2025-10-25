@@ -30,7 +30,7 @@ const (
 
 	// ANSI escape sequences
 	ansiClearScreen = "\033[2J\033[H"
-	
+
 	// ANSI color codes
 	colorReset  = "\033[0m"
 	colorRed    = "\033[0;31m"
@@ -65,15 +65,15 @@ func (cl *ConsoleLogger) Printf(format string, v ...interface{}) {
 
 	// Colorize the log message
 	msg := fmt.Sprintf(format, v...)
-	
+
 	// Color [C2] tags green
 	msg = strings.Replace(msg, "[C2]", colorGreen+"[C2]"+colorReset, -1)
-	
+
 	// Color ERROR messages red
 	if strings.Contains(msg, "Error") || strings.Contains(msg, "ERROR") {
 		msg = colorRed + msg + colorReset
 	}
-	
+
 	cl.Logger.Print(msg)
 	fmt.Printf("%sc2>%s ", colorGreen, colorReset)
 }
