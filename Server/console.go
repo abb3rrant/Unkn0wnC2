@@ -251,7 +251,7 @@ func listTasks() {
 
 	for _, task := range tasks {
 		statusDisplay := task.Status
-		
+
 		// Show progress for tasks receiving chunked results
 		if task.Status == "sent" {
 			if expected, exists := expectedResults[task.ID]; exists {
@@ -265,7 +265,7 @@ func listTasks() {
 				statusDisplay = fmt.Sprintf("receiving (%d%%)", int(percentage))
 			}
 		}
-		
+
 		fmt.Printf("%-8s %-10s %-10s %-40s %s\n",
 			task.ID,
 			task.BeaconID,

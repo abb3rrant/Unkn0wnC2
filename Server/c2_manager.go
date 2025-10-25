@@ -73,13 +73,13 @@ type ResultChunk struct {
 
 // ExpectedResult tracks metadata for incoming chunked results
 type ExpectedResult struct {
-	BeaconID        string
-	TaskID          string
-	TotalSize       int
-	TotalChunks     int
-	ReceivedAt      time.Time
-	ReceivedData    []string // Store chunks in order
-	LastChunkIndex  int      // Track last chunk received for progress calculation
+	BeaconID       string
+	TaskID         string
+	TotalSize      int
+	TotalChunks    int
+	ReceivedAt     time.Time
+	ReceivedData   []string // Store chunks in order
+	LastChunkIndex int      // Track last chunk received for progress calculation
 }
 
 // StagerSession tracks a stager deployment session

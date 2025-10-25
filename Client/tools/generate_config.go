@@ -98,8 +98,8 @@ func getConfig() Config {
 	fmt.Printf("Server Domain: %s\n", config.Client.ServerDomain)
 	fmt.Printf("Encryption Key: %s\n", strings.Repeat("*", len(config.Security.EncryptionKey)))
 	fmt.Printf("Sleep Interval: %d-%d seconds\n", config.Client.SleepMin, config.Client.SleepMax)
-	fmt.Printf("Exfil Timing: %d-%dms jitter, %d chunks/burst, %dms pause\n", 
-		config.Client.ExfilJitterMinMs, 
+	fmt.Printf("Exfil Timing: %d-%dms jitter, %d chunks/burst, %dms pause\n",
+		config.Client.ExfilJitterMinMs,
 		config.Client.ExfilJitterMaxMs,
 		config.Client.ExfilChunksPerBurst,
 		config.Client.ExfilBurstPauseMs)
