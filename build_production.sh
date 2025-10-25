@@ -52,7 +52,7 @@ if [ ! -f "build_config.json" ]; then
     exit 1
 fi
 
-echo -e "${YELLOW}[1/5] Embedding configuration from build_config.json...${NC}"
+echo -e "${YELLOW}[1/6] Embedding server configuration from build_config.json...${NC}"
 # Build and run the builder tool to embed config
 cd tools/builder
 go build -o ../../build-tool .
@@ -66,25 +66,32 @@ rm -f build-tool build-tool.exe
 echo -e "${GREEN}✓ Configuration embedded into source files${NC}"
 echo ""
 
-echo -e "${YELLOW}[2/5] Building Server (Linux) with optimizations...${NC}"
+echo -e "${YELLOW}[2/6] Building Server (Linux) with optimizations...${NC}"
 cd Server
 GOOS=linux GOARCH=amd64 go build ${BUILDFLAGS} -ldflags="${LDFLAGS}" -o ../build/production/dns-server-linux .
 echo -e "${GREEN}✓ Server built: $(du -h ../build/production/dns-server-linux | cut -f1)${NC}"
 cd ..
 
-echo -e "${YELLOW}[3/5] Building Client (Linux)...${NC}"
+echo -e "${YELLOW}[3/5] Regenerating Client configuration...${NC}"
+cd Client/tools
+go run generate_config.go
+cd ../..
+echo -e "${GREEN}✓ Client config.go regenerated from build_config.json${NC}"
+echo ""
+
+echo -e "${YELLOW}[4/5] Building Client (Linux)...${NC}"
 cd Client
 GOOS=linux GOARCH=amd64 go build ${BUILDFLAGS} -ldflags="${LDFLAGS}" -o ../build/production/dns-client-linux .
 echo -e "${GREEN}✓ Linux client built: $(du -h ../build/production/dns-client-linux | cut -f1)${NC}"
 cd ..
 
-echo -e "${YELLOW}[4/5] Building Client (Windows)...${NC}"
+echo -e "${YELLOW}[5/5] Building Client (Windows)...${NC}"
 cd Client
 GOOS=windows GOARCH=amd64 go build ${BUILDFLAGS} -ldflags="${LDFLAGS}" -o ../build/production/dns-client-windows.exe .
 echo -e "${GREEN}✓ Windows client built: $(du -h ../build/production/dns-client-windows.exe | cut -f1)${NC}"
 cd ..
 
-echo -e "${YELLOW}[5/5] Building Stager (Linux) with jitter config...${NC}"
+echo -e "${YELLOW}[6/6] Building Stager (Linux) with jitter config...${NC}"
 # Show stager config being used
 if command -v jq &> /dev/null && [ -f "build_config.json" ]; then
     STAGER_JITTER_MIN=$(jq -r '.stager.jitter_min_ms // 100' build_config.json)

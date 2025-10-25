@@ -246,11 +246,30 @@ func listTasks() {
 		"Task ID", "Beacon", "Status", "Command", "Created")
 	fmt.Println(strings.Repeat("-", taskListSeparatorLength))
 
+	// Get expected results for progress tracking
+	expectedResults := c2Manager.GetExpectedResults()
+
 	for _, task := range tasks {
+		statusDisplay := task.Status
+		
+		// Show progress for tasks receiving chunked results
+		if task.Status == "sent" {
+			if expected, exists := expectedResults[task.ID]; exists {
+				receivedCount := 0
+				for i := 0; i < expected.TotalChunks; i++ {
+					if expected.ReceivedData[i] != "" {
+						receivedCount++
+					}
+				}
+				percentage := float64(receivedCount) / float64(expected.TotalChunks) * 100
+				statusDisplay = fmt.Sprintf("receiving (%d%%)", int(percentage))
+			}
+		}
+		
 		fmt.Printf("%-8s %-10s %-10s %-40s %s\n",
 			task.ID,
 			task.BeaconID,
-			task.Status,
+			statusDisplay,
 			truncateString(task.Command, taskCommandWidth),
 			task.CreatedAt.Format(timeFormatShort))
 	}
@@ -284,7 +303,20 @@ func showTaskResult(taskID string) {
 		fmt.Println(task.Result)
 		fmt.Println(strings.Repeat("-", resultSeparatorLength))
 	} else {
-		fmt.Println("  Result: (no result yet)")
+		// Check if we're still receiving chunks
+		expectedResults := c2Manager.GetExpectedResults()
+		if expected, exists := expectedResults[taskID]; exists {
+			receivedCount := 0
+			for i := 0; i < expected.TotalChunks; i++ {
+				if expected.ReceivedData[i] != "" {
+					receivedCount++
+				}
+			}
+			percentage := float64(receivedCount) / float64(expected.TotalChunks) * 100
+			fmt.Printf("  Result: Receiving... %.0f%% (%d/%d chunks)\n", percentage, receivedCount, expected.TotalChunks)
+		} else {
+			fmt.Println("  Result: (no result yet)")
+		}
 	}
 	fmt.Println()
 }

