@@ -64,3 +64,5 @@ desktop.ini
 # Auto-generated config files (preserve templates)
 Client/config.go
 Server/config.go
+
+.github
