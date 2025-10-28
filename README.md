@@ -59,8 +59,6 @@ sudo ./dns-server-linux
 **Option A - Direct:** `./dns-client-linux`  
 **Option B - Stager:** `./stager-linux-x64` (downloads client via DNS)
 
-See [PRODUCTION_READY.md](PRODUCTION_READY.md) for detailed deployment guide.
-
 **Production:** Change encryption key, disable debug mode, use system DNS (stealth)
 
 ---
@@ -151,7 +149,7 @@ Result:           Legitimate DNS response
 | Session Type | Timeout | Cleanup |
 |-------------|---------|---------|
 | Stager downloads | 3 hours inactivity | Auto-delete on expire |
-| Expected results | 1 hour | Auto-delete on expire |
+| Expected results | 1 hour | Auto-delete on expire (Need to test large exfils with long timers) |
 | Cleanup ticker | 5 minutes | Background goroutine |
 
 ---
@@ -195,9 +193,8 @@ build/
 ├── dns-client-linux
 ├── dns-client-windows.exe
 ├── deployment_info.json
-└── stager/
-    ├── stager-linux-x64
-    └── stager-windows-x64.exe
+├── stager-linux-x64
+└── stager-windows-x64.exe
 ```
 
 ---
