@@ -2,6 +2,11 @@
 
 DNS-based Command & Control framework operating as an authoritative DNS server with encrypted C2 communications.
 
+
+This DNS C2 implementation's strengths comes from it's malleable C2 timing. 
+
+Many C2s can utilize DNS for covert communications, but the exfil/task timings aren't usually adjustable without changing code directly. This C2 allows you to change the timing of exfil during the build process. Keeping your exfil slow is key to staying stealthy as common C2s send outputs/exfil quickly, alerting Blue Teams on large ammounts of DNS traffic in a short period of time.
+
 ![Unkn0wnC2](assets/unkn0wnc2.png)
 
 ---
@@ -66,125 +71,56 @@ sudo ./dns-server-linux
 ## 🏗️ Protocol Architecture
 
 ### Communication Flow
-```
-Client → System DNS → Internet DNS Chain → Your Authoritative NS (C2 Server)
-                                                    ↓
-                                    Process C2 / Forward Legitimate DNS
-```
+![Communications Flow](assets/communication_flow.png)
 
 ### 🔐 Encoding Pipeline
 
-**Client Traffic:**
-```
-Plaintext → AES-GCM Encrypt → Base36 Encode → DNS Labels (62 chars) → TXT Query
-```
+![Encoding Pipeline](assets/encoding_pipeline.png)
 
-**Stager Traffic:**
-```
-Plaintext → Base36 Encode → DNS Labels → TXT Query
-```
+### 📨 Message Format
 
-### 🏷️ DNS Label Structure
-- **Max length:** 62 characters per label (RFC compliance)
-- **Characters:** 0-9, a-z (Base36 alphabet)
-- **Cache busting:** Unix timestamp subdomain prevents resolver caching
-- **Example:** `a1b2c3...xyz.1729123456.secwolf.net`
+![Message Format](assets/message_format.png)
 
+### 🎭 Authoritative DNS Server Logic Flow
 
-### 📨 Message Format (Encrypted + Base36 Encoded)
-```
-<base36(aes-gcm(<message>))>.<timestamp>.<domain>
-```
+![Authoritative DNS Server Logic Flow](assets/logic_flow.png)
 
-**Beacon Check-in:**
-```
-Query:    CHK|beaconID|hostname|user|os
-Response: ACK  or  TASK|taskID|command
-```
+### Malleable Timing (stager / client / exfil)
 
-**Small Result (<50 bytes):**
-```
-Query:    RESULT|beaconID|taskID|output
-Response: ACK
-```
+This project exposes several timing parameters that are intentionally malleable to tune stealth vs throughput. Defaults are set in build_config.json and in the Stager build defaults.
 
-**Large Result (>50 bytes, two-phase):**
-```
-Phase 1:  RESULT_META|beaconID|taskID|size|chunks → ACK
-Phase 2:  DATA|beaconID|taskID|index|chunk (×N)   → ACK
-```
+Key parameters and defaults (units):
 
-**Stager (Base36 only, no encryption):**
-```
-STG|IP|OS|ARCH         → META|totalChunks
-ACK|chunkIndex|IP|HOST → CHUNK|base64Data (×N)
-```
+- Stager
+  - jitter_min_ms = 1000 (1.0 s)
+  - jitter_max_ms = 2000 (2.0 s)
+  - chunks_per_burst = 5
+  - burst_pause_ms = 12000 (12 s)
+  - retry_delay_seconds = 3
+  - max_retries = 5
 
-### ⚡ Two-Phase Result Exfiltration
-**Why?** Large outputs exceed legitimate DNS packet limits
+- Client check-in
+  - sleep_min = 60 (60 s)
+  - sleep_max = 120 (120 s)
 
-**Phase 1 - Metadata:**
-```
-RESULT_META|beaconID|taskID|totalSize|chunkCount
-```
+- Client exfil
+  - exfil_jitter_min_ms = 10000 (10 s)
+  - exfil_jitter_max_ms = 30000 (30 s)
+  - exfil_chunks_per_burst = 5
+  - exfil_burst_pause_ms = 120000 (120 s)
 
-**Phase 2 - Data Chunks:**
-```
-DATA|beaconID|taskID|1|chunk1
-DATA|beaconID|taskID|2|chunk2
-... (server reassembles automatically)
-```
+How the pieces interact (approximate calculations):
+- Number of bursts for N chunks: bursts = ceil(N / chunks_per_burst)
+- Average jitter (ms) = (jitter_min_ms + jitter_max_ms) / 2
+- Stager total time ≈ N * RTT_seconds_per_chunk + bursts * ((avg_jitter_ms + burst_pause_ms) / 1000)
+  - Example (stager defaults, 100 chunks): avg_jitter = 1.5 s, burst pause = 12 s → per-burst pause ≈ 13.5 s
+    - bursts = 20 → pause_time ≈ 270 s
+    - transfer_time ≈ 100 s → total ≈ 370 s (~6 min 10 s)
 
-### 🎭 Traffic Blending
-```
-Non-C2 query:     www.secwolf.net
-Detection:        Not Base36-encoded
-Action:           Forward to 8.8.8.8
-Result:           Legitimate DNS response
-                  ↓
-                  Server appears as normal authoritative NS
-```
-
-### ⏱️ Session Management
-| Session Type | Timeout | Cleanup |
-|-------------|---------|---------|
-| Stager downloads | 3 hours inactivity | Auto-delete on expire |
-| Expected results | 1 hour | Auto-delete on expire (Need to test large exfils with long timers) |
-| Cleanup ticker | 5 minutes | Background goroutine |
-
----
-
-## 📊 Statistics & Configuration
-
-### Server Specs
-| Component | Value |
-|-----------|-------|
-| Port | UDP/53 |
-| Encryption | AES-GCM + Base36 |
-| Max chunk size | 403 bytes (tested maximum) |
-| Session timeout | 3 hours inactivity |
-| Cleanup interval | 5 minutes |
-| DNS forwarding | Enabled (8.8.8.8) |
-
-### Stager Specs
-| Component | Value |
-|-----------|-------|
-| Binary size | ~30 KB |
-| Encoding | Base36 only |
-| Chunk size | 403 bytes |
-| Jitter | 100-500ms |
-| Burst control | 10 chunks → 2s pause |
-| Download time | ~27-54 min (4MB client) |
-
-### Client Specs
-| Component | Value |
-|-----------|-------|
-| Binary size (stripped) | ~2.5 MB |
-| Binary size (UPX) | ~1 MB |
-| Encryption | AES-GCM |
-| Encoding | Base36 |
-| Check-in interval | 5-15s (configurable) |
-| DNS server | System default (configurable) |
+- Exfil (client) will be significantly slower with larger jitter/pause values:
+  - Example (exfil defaults, 100 chunks): avg_jitter = 20 s, burst pause = 120 s → per-burst pause ≈ 140 s
+    - bursts = 20 → pause_time ≈ 2800 s (~46 min 40 s)
+    - transfer_time ≈ 100 s → total ≈ 2900 s (~48 min 20 s)
 
 ### Build Output
 ```
@@ -233,13 +169,6 @@ admin
 
 ## 🔒 Security Features
 
-### OPSEC
-- ✅ Clients/stagers have zero logging in production
-- ✅ Server logs only essential events (debug mode available)
-- ✅ Encryption key warning on startup if using default
-- ✅ Stripped binaries (no debug symbols)
-- ✅ System DNS usage for traffic blending
-
 ### Encryption
 - **Algorithm:** AES-GCM (authenticated encryption)
 - **Key derivation:** SHA256 hash of passphrase
@@ -249,7 +178,7 @@ admin
 ### Stealth
 - DNS cache busting (timestamp subdomains)
 - Legitimate query forwarding (traffic blending)
-- Random check-in intervals (jitter)
+- Malleable check-in and exfil intervals (jitter)
 - Base36 appears as random subdomain patterns
 - System DNS resolver usage (blends with normal traffic)
 
