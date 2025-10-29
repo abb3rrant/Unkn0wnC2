@@ -167,23 +167,6 @@ admin
 
 ---
 
-## 🔒 Security Features
-
-### Encryption
-- **Algorithm:** AES-GCM (authenticated encryption)
-- **Key derivation:** SHA256 hash of passphrase
-- **Encoding:** Base36 (DNS-safe: 0-9, a-z)
-- **Key matching:** Server and clients must use identical key
-
-### Stealth
-- DNS cache busting (timestamp subdomains)
-- Legitimate query forwarding (traffic blending)
-- Malleable check-in and exfil intervals (jitter)
-- Base36 appears as random subdomain patterns
-- System DNS resolver usage (blends with normal traffic)
-
----
-
 ## 🔧 Troubleshooting
 
 **Server won't start (permission denied):**
@@ -229,39 +212,6 @@ dig @8.8.8.8 NS yourdomain.net
 - [ ] Copy client binary to `build/` (for stager)
 - [ ] Test in isolated environment
 - [ ] Verify DNS delegation working
-
----
-
-## ⚙️ Build Configuration
-
-**`build_config.json` structure:**
-```json
-{
-  "server": {
-    "bind_addr": "172.26.13.62",
-    "server_address": "98.90.218.70",
-    "domain": "secwolf.net",
-    "debug": false
-  },
-  "client": {
-    "server_domain": "secwolf.net",
-    "dns_server": "",
-    "sleep_min": 5,
-    "sleep_max": 15
-  },
-  "security": {
-    "encryption_key": "CHANGE_THIS_RANDOM_32CHAR_KEY"
-  }
-}
-```
-
-**Key fields:**
-- `bind_addr`: Server's internal/external IP
-- `server_address`: Public IP for DNS delegation
-- `domain`: Your registered domain
-- `dns_server`: Leave empty for system DNS (stealth), or set specific DNS
-- `sleep_min/max`: Beacon check-in interval (seconds)
-- `encryption_key`: **MUST MATCH** between server and clients
 
 ---
 
