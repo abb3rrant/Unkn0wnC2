@@ -6,7 +6,7 @@
 #   1. Embeds configuration from build_config.json into binaries
 #   2. Builds server with production LDFLAGS (-s -w for stripping)
 #   3. Builds Linux and Windows clients
-#   4. Builds stager with configured jitter timing
+#   4. Builds stagerss with configured jitter timing
 #   5. Optional UPX compression for reduced binary size
 #
 # BEFORE RUNNING:
@@ -18,7 +18,7 @@
 #   bash build_production.sh
 #
 # OUTPUT:
-#   All binaries will be in build/production/
+#   All binaries will be in build/
 #
 
 set -e  # Exit on error
@@ -45,7 +45,7 @@ cat << "EOF"
 EOF
 echo -e "${NC}"
 echo -e "${GREEN}================================${NC}"
-echo -e "${GREEN}Production Build System${NC}"
+echo -e "${GREEN}Build System${NC}"
 echo -e "${GREEN}Version: ${VERSION}${NC}"
 echo -e "${GREEN}================================${NC}"
 echo ""
@@ -54,8 +54,10 @@ echo ""
 LDFLAGS="-s -w -X main.version=${VERSION} -X main.buildDate=${BUILD_DATE} -X main.gitCommit=${GIT_COMMIT}"
 BUILDFLAGS="-trimpath"
 
-# Create build directory
-mkdir -p build/production
+# Remove old artifacts and create new build directory
+rm -rf build
+mkdir -p build
+
 
 # Check if build_config.json exists
 if [ ! -f "build_config.json" ]; then
@@ -73,18 +75,18 @@ echo "  Running builder tool to embed configuration..."
 # Note: Builder tool outputs binaries to build/ dir, but we'll rebuild with optimizations
 ./build-tool > /dev/null 2>&1
 
-# Clean up builder's output since we'll rebuild with optimizations
+# Clean up builder's output since we'll rebuild with optimizations - will fix builder on later update to avoid this
 rm -rf build/dns-server-linux build/dns-client-linux build/dns-client-windows.exe build/deployment_info.json 2>/dev/null || true
 
 # Clean up build-tool
 rm -f build-tool build-tool.exe
-echo -e "${GREEN}✓ Configuration embedded into source files${NC}"
+echo -e "${GREEN}Configuration embedded into source files${NC}"
 echo ""
 
 echo -e "${YELLOW}[2/6] Building Server (Linux) with optimizations...${NC}"
 cd Server
-GOOS=linux GOARCH=amd64 go build ${BUILDFLAGS} -ldflags="${LDFLAGS}" -o ../build/production/dns-server-linux .
-echo -e "${GREEN}✓ Server built: $(du -h ../build/production/dns-server-linux | cut -f1)${NC}"
+GOOS=linux GOARCH=amd64 go build ${BUILDFLAGS} -ldflags="${LDFLAGS}" -o ../build/dns-server-linux .
+echo -e "${GREEN}Server built: $(du -h ../build/dns-server-linux | cut -f1)${NC}"
 cd ..
 echo ""
 
@@ -92,20 +94,20 @@ echo -e "${YELLOW}[3/6] Regenerating Client configuration...${NC}"
 cd Client/tools
 go run generate_config.go
 cd ../..
-echo -e "${GREEN}✓ Client config.go regenerated from build_config.json${NC}"
+echo -e "${GREEN}Client config.go regenerated from build_config.json${NC}"
 echo ""
 
 echo -e "${YELLOW}[4/6] Building Client (Linux)...${NC}"
 cd Client
-GOOS=linux GOARCH=amd64 go build ${BUILDFLAGS} -ldflags="${LDFLAGS}" -o ../build/production/dns-client-linux .
-echo -e "${GREEN}✓ Linux client built: $(du -h ../build/production/dns-client-linux | cut -f1)${NC}"
+GOOS=linux GOARCH=amd64 go build ${BUILDFLAGS} -ldflags="${LDFLAGS}" -o ../build/dns-client-linux .
+echo -e "${GREEN}Linux client built: $(du -h ../build/dns-client-linux | cut -f1)${NC}"
 cd ..
 echo ""
 
 echo -e "${YELLOW}[5/6] Building Client (Windows)...${NC}"
 cd Client
-GOOS=windows GOARCH=amd64 go build ${BUILDFLAGS} -ldflags="${LDFLAGS}" -o ../build/production/dns-client-windows.exe .
-echo -e "${GREEN}✓ Windows client built: $(du -h ../build/production/dns-client-windows.exe | cut -f1)${NC}"
+GOOS=windows GOARCH=amd64 go build ${BUILDFLAGS} -ldflags="${LDFLAGS}" -o ../build/dns-client-windows.exe .
+echo -e "${GREEN}Windows client built: $(du -h ../build/dns-client-windows.exe | cut -f1)${NC}"
 cd ..
 echo ""
 
@@ -139,7 +141,6 @@ if command -v jq &> /dev/null && [ -f "build_config.json" ]; then
     EST_MIN=$(( EST_TIME_S / 60 ))
     EST_SEC=$(( EST_TIME_S % 60 ))
     
-    echo ""
     echo "  Stager Timing Configuration:"
     echo "  ────────────────────────────────────────"
     echo "  Jitter Range:        ${JITTER_MIN_S}s - ${JITTER_MAX_S}s"
@@ -149,6 +150,7 @@ if command -v jq &> /dev/null && [ -f "build_config.json" ]; then
     echo "  Retry Delay:         ${RETRY_DELAY}s"
     echo "  Max Retries:         ${MAX_RETRIES}"
     echo "  Est. Download Time:  ${EST_MIN}m ${EST_SEC}s (100 chunks)"
+    echo ""
 fi
 
 cd Stager
@@ -156,20 +158,15 @@ make clean > /dev/null 2>&1 || true
 
 # Build stager silently (build.sh has its own verbose output)
 if bash build.sh > /dev/null 2>&1; then
-    # Copy from build directory (where build.sh puts it)
-    if [ -f "../build/stager/stager-linux-x64" ]; then
-        cp ../build/stager/stager-linux-x64 ../build/production/
-        echo -e "${GREEN}✓ Stager built: $(du -h ../build/production/stager-linux-x64 | cut -f1)${NC}"
+        echo -e "${GREEN}Stagers built:${NC}" 
+        echo -e " Linux: $(du -h ../build/stager/stager-linux-x64 | cut -f1)${NC}"
+        echo -e " Windows: $(du -h ../build/stager/stager-windows-x64.exe | cut -f1)${NC}"
     else
-        echo -e "${RED}✗ Stager binary not found at expected location${NC}"
+        echo -e "${RED}Stager binary not found at expected location${NC}"
         cd ..
         exit 1
     fi
-else
-    echo -e "${RED}✗ Stager build failed${NC}"
-    cd ..
-    exit 1
-fi
+
 cd ..
 
 echo ""
@@ -177,29 +174,30 @@ echo -e "${GREEN}================================${NC}"
 echo -e "${GREEN}Optional: UPX Compression${NC}"
 echo -e "${GREEN}================================${NC}"
 if command -v upx &> /dev/null; then
-    read -p "Apply UPX compression? (reduces size but may trigger AV) [y/N]: " -n 1 -r
+    read -p "Apply UPX compression? (reduces size but adds signatures that may trigger AV) [y/N]: " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         echo "  Compressing binaries with UPX..."
-        upx --lzma --best build/production/dns-client-linux 2>/dev/null || true
-        upx --lzma --best build/production/dns-client-windows.exe 2>/dev/null || true
-        upx --lzma --best build/production/stager-linux-x64 2>/dev/null || true
-        echo -e "${GREEN}  ✓ UPX compression complete${NC}"
+        upx --lzma --best build/dns-client-linux 2>/dev/null || true
+        upx --lzma --best build/dns-client-windows.exe 2>/dev/null || true
+        upx --lzma --best build/stager/stager-linux-x64 2>/dev/null || true
+        upx --lzma --best build/stager/stager-windowsx-x64 2>/dev/null || true
+        echo -e "${GREEN}  UPX compression complete${NC}"
     else
         echo "  Skipping UPX compression (better for OPSEC)"
     fi
 else
-    echo "  UPX not found - skipping compression (install with: apt install upx-ucl)"
+    echo "  UPX not found - skipping compression (install with: apt install upx-ucl/pacman -S upx)"
 fi
 
 echo ""
 echo -e "${GREEN}================================${NC}"
-echo -e "${GREEN}Production Build Complete!${NC}"
+echo -e "${GREEN}Build Complete!${NC}"
 echo -e "${GREEN}================================${NC}"
 echo ""
-echo "Build artifacts in: build/production/"
+echo "Build artifacts in: build/"
 echo ""
-ls -lh build/production/
+ls -lhR build/
 echo ""
 
 # Show compiled configuration summary
@@ -244,12 +242,3 @@ if command -v jq &> /dev/null && [ -f "build_config.json" ]; then
     echo "  Burst Pause:          ${STAGER_BURST_S}s"
     echo ""
 fi
-
-echo -e "${YELLOW}⚠️  DEPLOYMENT CHECKLIST:${NC}"
-echo "  [ ] Change encryption key from default"
-echo "  [ ] Configure proper DNS delegation and glue records"
-echo "  [ ] Review timing configurations for your OPSEC requirements"
-echo "  [ ] Disable debug mode in production"
-echo "  [ ] Test in isolated environment first"
-echo ""
-echo -e "${GREEN}Ready for deployment!${NC}"

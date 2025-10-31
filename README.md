@@ -45,15 +45,15 @@ openssl rand -base64 32
 vim build_config.json
 
 # Build all components with production configuration
-bash build_production.sh
+bash build.sh
 ```
 
-Output will be in `build/production/`
+Output will be in `build/`
 
 ### 3. 🖥️ Deploy Server
 ```bash
 # Copy to target server
-scp build/production/dns-server-linux user@server:/opt/unkn0wnc2/
+scp build/dns-server-linux user@server:/opt/unkn0wnc2/
 cd /opt/unkn0wnc2
 
 # Run (requires root for port 53, config embedded at build time)
@@ -128,9 +128,9 @@ build/
 ├── dns-server-linux
 ├── dns-client-linux
 ├── dns-client-windows.exe
-├── deployment_info.json
-├── stager-linux-x64
-└── stager-windows-x64.exe
+└── Stager
+    ├── stager-linux-x64
+    └── stager-windows-x64.exe
 ```
 
 ---
