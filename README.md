@@ -41,11 +41,16 @@ Add glue records at registrar, verify: `dig @8.8.8.8 NS yourdomain.net`
 # Generate unique encryption key
 openssl rand -base64 32
 
-# Edit build_config.json - set encryption_key, domain, server IPs
+# Edit build_config.json - set encryption_key, domain, server IPs, and timings
+# Don't you dare use Nano!
 vim build_config.json
 
-# Build all components with production configuration
-bash build.sh
+# You may need to remove Windows line endings and make the scripts executable
+dos2unix build.sh && dos2unix Stager/build.sh
+chmod +x build.sh Stager/build.sh
+
+# Build all components with configuration
+./build.sh
 ```
 
 Output will be in `build/`
@@ -54,10 +59,10 @@ Output will be in `build/`
 ```bash
 # Copy to target server
 scp build/dns-server-linux user@server:/opt/unkn0wnc2/
-cd /opt/unkn0wnc2
+cd /usr/bin/unkn0wnc2
 
 # Run (requires root for port 53, config embedded at build time)
-sudo ./dns-server-linux
+sudo unkn0wnc2
 ```
 
 ### 4. 📡 Deploy Client
