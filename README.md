@@ -17,10 +17,10 @@ Many C2s can utilize DNS for covert communications, but the exfil/task timings a
 
 This software is provided for educational and authorized security testing purposes only. Users must:
 
-- ✅ Obtain explicit written authorization before deployment
-- ✅ Comply with all applicable local, state, and federal laws
-- ✅ Use only in controlled environments with proper authorization
-- ✅ Understand that unauthorized access to computer systems is illegal
+- Obtain explicit written authorization before deployment
+- Comply with all applicable local, state, and federal laws
+- Use only in controlled environments with proper authorization
+- Understand that unauthorized access to computer systems is illegal
 
 **The authors and contributors are not responsible for misuse or illegal activity. Use at your own risk.**
 
@@ -167,64 +167,9 @@ admin
 
 ---
 
-## 🔧 Troubleshooting
-
-**Server won't start (permission denied):**
-```bash
-# Port 53 requires root
-sudo ./dns-server-linux
-
-# Or use capability
-sudo setcap CAP_NET_BIND_SERVICE=+eip ./dns-server-linux
-```
-
-**Client not checking in:**
-```bash
-# Verify encryption key matches server
-# Check DNS delegation
-dig @8.8.8.8 NS yourdomain.net
-
-# Should return ns1/ns2.yourdomain.net pointing to YOUR_SERVER_IP
-```
-
-**Stager "No answers" errors:**
-```bash
-# DNS packet too large (reduce chunk size if needed)
-# Current: 403 bytes (tested maximum through Google DNS)
-# Edit Stager/stager.c: #define CHUNK_SIZE 300
-```
-
-**Session expiration mid-download:**
-```bash
-# Fixed in current version (3-hour timeout with activity tracking)
-# Rebuild server if using old version
-```
-
----
-
-## ✅ Production Checklist
-
-- [ ] Change encryption key from default
-- [ ] Disable debug mode (`debug: false`)
-- [ ] Configure domain and NS records
-- [ ] Add registrar glue records
-- [ ] Set proper bind address
-- [ ] Copy client binary to `build/` (for stager)
-- [ ] Test in isolated environment
-- [ ] Verify DNS delegation working
-
----
-
 **Version:** 0.1.0  
 **License:** Use for authorized security testing only  
 
 ---
 
-## ⚠️ Final Notice
-
-This tool is intended for **authorized security assessments and educational purposes only**. Unauthorized use against systems you do not own or have explicit permission to test is illegal and unethical.
-
-**The developers assume no liability for misuse of this software.**
-
-By using this software, you acknowledge that you have obtained proper authorization and will comply with all applicable laws and regulations.
 
