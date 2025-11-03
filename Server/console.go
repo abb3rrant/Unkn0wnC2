@@ -304,7 +304,7 @@ func listTasks() {
 func showTaskResult(taskID string) {
 	// Try to get task from database first (includes historical tasks)
 	task, err := c2Manager.GetTaskWithResult(taskID)
-	
+
 	if err != nil || task == nil {
 		fmt.Printf("%sTask %s not found%s\n", ColorRed, taskID, ColorReset)
 		return

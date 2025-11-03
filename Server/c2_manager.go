@@ -135,7 +135,7 @@ func NewC2Manager(debug bool, encryptionKey string, jitterConfig StagerJitter, d
 
 	// Start cleanup goroutine
 	go c2.cleanupExpiredSessions()
-	
+
 	// Start periodic database sync
 	if c2.db != nil {
 		go c2.periodicDBCleanup()
@@ -179,7 +179,7 @@ func (c2 *C2Manager) loadTasksFromDB() error {
 	// Load tasks and populate beacon task queues
 	for _, task := range tasks {
 		c2.tasks[task.ID] = task
-		
+
 		// Update task counter to avoid ID collisions
 		if strings.HasPrefix(task.ID, "T") {
 			if id, err := strconv.Atoi(task.ID[1:]); err == nil && id >= c2.taskCounter {
@@ -222,7 +222,7 @@ func (c2 *C2Manager) periodicDBCleanup() {
 		// Log database stats in debug mode
 		if c2.debug {
 			if stats, err := c2.db.GetDatabaseStats(); err == nil {
-				logf("[C2] DB Stats: %d beacons, %d active, %d tasks", 
+				logf("[C2] DB Stats: %d beacons, %d active, %d tasks",
 					stats["beacons"], stats["active_beacons"], stats["tasks"])
 			}
 		}
@@ -864,7 +864,7 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 			storedTask.Status = "sent"
 			now := time.Now()
 			storedTask.SentAt = &now
-			
+
 			// Update task status in database (async)
 			if c2.db != nil {
 				go func(tid string) {
@@ -906,7 +906,7 @@ func (c2 *C2Manager) handleResult(parts []string, isDuplicate bool) string {
 	if task, exists := c2.tasks[taskID]; exists {
 		task.Result = result
 		task.Status = "completed"
-		
+
 		// Save result to database (async)
 		if c2.db != nil {
 			go func(tid, bid, res string) {
@@ -1358,7 +1358,7 @@ func (c2 *C2Manager) GetBeaconTasks(beaconID string) ([]*Task, error) {
 		// Fallback to in-memory only if DB not available
 		c2.mutex.RLock()
 		defer c2.mutex.RUnlock()
-		
+
 		var tasks []*Task
 		for _, task := range c2.tasks {
 			if task.BeaconID == beaconID {
@@ -1367,7 +1367,7 @@ func (c2 *C2Manager) GetBeaconTasks(beaconID string) ([]*Task, error) {
 		}
 		return tasks, nil
 	}
-	
+
 	// Query from database for complete history
 	return c2.db.GetTasksForBeacon(beaconID)
 }
@@ -1379,7 +1379,7 @@ func (c2 *C2Manager) GetTaskHistory(status string, limit int) ([]*Task, error) {
 		// Fallback to in-memory only if DB not available
 		c2.mutex.RLock()
 		defer c2.mutex.RUnlock()
-		
+
 		var tasks []*Task
 		for _, task := range c2.tasks {
 			if status == "" || task.Status == status {
@@ -1391,12 +1391,12 @@ func (c2 *C2Manager) GetTaskHistory(status string, limit int) ([]*Task, error) {
 		}
 		return tasks, nil
 	}
-	
+
 	// Query from database for complete history
 	if status != "" {
 		return c2.db.GetTasksByStatus(status, limit)
 	}
-	
+
 	// Get all tasks with limit
 	return c2.db.GetAllTasksWithLimit(limit)
 }
@@ -1411,22 +1411,22 @@ func (c2 *C2Manager) GetTaskWithResult(taskID string) (*Task, error) {
 		return task, nil
 	}
 	c2.mutex.RUnlock()
-	
+
 	// If not in memory, query from database
 	if c2.db == nil {
 		return nil, fmt.Errorf("task not found and database not available")
 	}
-	
+
 	task, resultData, err := c2.db.GetTaskWithResult(taskID)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Populate the result field
 	if resultData != "" {
 		task.Result = resultData
 	}
-	
+
 	return task, nil
 }
 

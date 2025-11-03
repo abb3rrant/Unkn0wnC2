@@ -635,7 +635,7 @@ func (d *Database) GetTasksByStatus(status string, limit int) ([]*Task, error) {
 		WHERE status = ?
 		ORDER BY created_at DESC
 	`
-	
+
 	if limit > 0 {
 		query += fmt.Sprintf(" LIMIT %d", limit)
 	}
@@ -686,7 +686,7 @@ func (d *Database) GetAllTasksWithLimit(limit int) ([]*Task, error) {
 		FROM tasks
 		ORDER BY created_at DESC
 	`
-	
+
 	if limit > 0 {
 		query += fmt.Sprintf(" LIMIT %d", limit)
 	}
