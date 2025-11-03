@@ -109,8 +109,13 @@ func (c *DNSClient) sendDNSQuery(command string) (string, error) {
 			break
 		}
 
+		// Adaptive backoff - longer delays for repeated failures
 		if attempt < c.config.RetryAttempts-1 {
-			time.Sleep(time.Duration(attempt+1) * time.Second)
+			backoffDelay := time.Duration((attempt+1)*(attempt+1)) * time.Second // 1s, 4s, 9s
+			if backoffDelay > 10*time.Second {
+				backoffDelay = 10 * time.Second // Cap at 10s
+			}
+			time.Sleep(backoffDelay)
 		}
 	}
 

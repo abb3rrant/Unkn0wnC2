@@ -22,6 +22,9 @@ const (
 	StagerSessionTimeout = 3 * time.Hour
 
 	// ExpectedResultTimeout is how long we wait for chunked results before cleanup
+	// This timeout is reset with each chunk received, so long-running multi-hour
+	// exfiltrations will not be cleaned up as long as chunks keep arriving.
+	// Only cleaned up if NO chunks received for this duration.
 	ExpectedResultTimeout = 1 * time.Hour
 
 	// CleanupInterval is how often the cleanup goroutine runs

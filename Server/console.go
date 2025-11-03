@@ -123,6 +123,9 @@ func startC2Console() {
 		case "tasks":
 			listTasks()
 
+		case "progress":
+			showInProgress()
+
 		case "task", "cmd":
 			if len(parts) < 3 {
 				fmt.Println("Usage: task <beacon_id> <command>")
@@ -205,10 +208,11 @@ Available Commands:
   status, st           - Show C2 server status
   beacons, list        - List all registered beacons
   tasks                - List all tasks and their status
+  progress             - Show tasks currently receiving chunked results
   task <id> <cmd>      - Queue a command for a specific beacon
   result <task_id>     - Show result of a completed task
   history <id> [limit] - Show task history for a beacon (default: 50)
-  search <status> [n]  - Search tasks by status (pending/sent/completed/failed)
+  search <status> [n]  - Search tasks by status (pending/sent/completed/partial/failed)
   logs                 - Show count of log messages since start/clear
   clear                - Clear screen and reset log counter
   exit, quit           - Exit console
@@ -218,6 +222,8 @@ Examples:
   task a1b2 dir C:\
   result T1001
   history a1b2 25
+  progress
+  search partial
   search completed 100
 
 Note: Log messages appear between markers while you type.
@@ -387,6 +393,45 @@ func showBeaconHistory(beaconID string, limit int) {
 	}
 	fmt.Println()
 	fmt.Printf("Use 'result <task_id>' to view full task results\n\n")
+}
+
+// showInProgress displays tasks currently receiving chunked results
+func showInProgress() {
+	expectedResults := c2Manager.GetExpectedResults()
+	
+	if len(expectedResults) == 0 {
+		fmt.Println("No tasks currently receiving results")
+		return
+	}
+
+	fmt.Printf("\n%sResults in progress:%s\n", ColorYellow, ColorReset)
+	fmt.Printf("%-8s %-10s %-15s %-10s %s\n",
+		"Task ID", "Beacon", "Progress", "Size", "Last Update")
+	fmt.Println(strings.Repeat("-", 80))
+
+	for taskID, expected := range expectedResults {
+		// Count received chunks
+		receivedCount := 0
+		for i := 0; i < expected.TotalChunks; i++ {
+			if expected.ReceivedData[i] != "" {
+				receivedCount++
+			}
+		}
+		
+		progress := fmt.Sprintf("%d/%d chunks", receivedCount, expected.TotalChunks)
+		percentage := float64(receivedCount) / float64(expected.TotalChunks) * 100
+		progressBar := fmt.Sprintf("%.0f%%", percentage)
+		
+		timeAgo := time.Since(expected.ReceivedAt).Round(time.Second)
+		
+		fmt.Printf("%-8s %-10s %-15s %-10s %s ago\n",
+			taskID,
+			expected.BeaconID,
+			fmt.Sprintf("%s (%s)", progress, progressBar),
+			fmt.Sprintf("%d bytes", expected.TotalSize),
+			timeAgo)
+	}
+	fmt.Println()
 }
 
 // searchTasks searches for tasks by status with optional limit

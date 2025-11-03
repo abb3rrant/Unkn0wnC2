@@ -557,26 +557,43 @@ func (d *Database) SaveTaskResult(taskID, beaconID, resultData string, chunkInde
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 
+	// Use transaction for atomic operation
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback() // Will be ignored if tx.Commit() succeeds
+
 	isComplete := 0
 	if totalChunks == 1 || chunkIndex == totalChunks-1 {
 		isComplete = 1
 	}
 
-	_, err := d.db.Exec(`
+	// Insert task result
+	_, err = tx.Exec(`
 		INSERT INTO task_results (task_id, beacon_id, result_data, received_at, chunk_index, total_chunks, is_complete)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 	`, taskID, beaconID, resultData, time.Now().Unix(), chunkIndex, totalChunks, isComplete)
 
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to insert task result: %w", err)
 	}
 
 	// Update task result size
-	_, err = d.db.Exec(`
+	_, err = tx.Exec(`
 		UPDATE tasks SET result_size = result_size + ?, chunk_count = ? WHERE id = ?
 	`, len(resultData), totalChunks, taskID)
 
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to update task: %w", err)
+	}
+
+	// Commit transaction
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
 }
 
 // GetTaskResult retrieves the complete result for a task
