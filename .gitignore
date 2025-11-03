@@ -66,3 +66,5 @@ Client/config.go
 Server/config.go
 
 copilot-instructions.md
+
+agent_docs/

