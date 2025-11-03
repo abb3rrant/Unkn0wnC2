@@ -398,7 +398,7 @@ func showBeaconHistory(beaconID string, limit int) {
 // showInProgress displays tasks currently receiving chunked results
 func showInProgress() {
 	expectedResults := c2Manager.GetExpectedResults()
-	
+
 	if len(expectedResults) == 0 {
 		fmt.Println("No tasks currently receiving results")
 		return
@@ -417,13 +417,13 @@ func showInProgress() {
 				receivedCount++
 			}
 		}
-		
+
 		progress := fmt.Sprintf("%d/%d chunks", receivedCount, expected.TotalChunks)
 		percentage := float64(receivedCount) / float64(expected.TotalChunks) * 100
 		progressBar := fmt.Sprintf("%.0f%%", percentage)
-		
+
 		timeAgo := time.Since(expected.ReceivedAt).Round(time.Second)
-		
+
 		fmt.Printf("%-8s %-10s %-15s %-10s %s ago\n",
 			taskID,
 			expected.BeaconID,
