@@ -156,16 +156,22 @@ fi
 cd Stager
 make clean > /dev/null 2>&1 || true
 
-# Build stager silently (build.sh has its own verbose output)
-if bash build.sh > /dev/null 2>&1; then
-        echo -e "${GREEN}Stagers built:${NC}" 
-        echo -e " Linux: $(du -h ../build/stager/stager-linux-x64 | cut -f1)${NC}"
-        echo -e " Windows: $(du -h ../build/stager/stager-windows-x64.exe | cut -f1)${NC}"
-    else
-        echo -e "${RED}Stager binary not found at expected location${NC}"
-        cd ..
-        exit 1
+# Build stager (show output for debugging)
+bash build.sh
+
+# Check if binaries were created
+if [ -f "../build/stager/stager-linux-x64" ]; then
+    echo -e "${GREEN}Stagers built:${NC}" 
+    echo -e " Linux: $(du -h ../build/stager/stager-linux-x64 | cut -f1)"
+    
+    if [ -f "../build/stager/stager-windows-x64.exe" ]; then
+        echo -e " Windows: $(du -h ../build/stager/stager-windows-x64.exe | cut -f1)"
     fi
+else
+    echo -e "${RED}Error: Stager build failed - binaries not found${NC}"
+    cd ..
+    exit 1
+fi
 
 cd ..
 
