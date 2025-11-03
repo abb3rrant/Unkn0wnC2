@@ -272,7 +272,7 @@ func tryLoadEmbeddedConfig() (Config, bool) {
 	for commentStart > 0 && configStr[commentStart-1] != '\n' {
 		commentStart--
 	}
-	
+
 	// Look backwards for comment lines, but stop if we find non-comment content
 	tempPos := commentStart
 	for tempPos > 2 {
@@ -282,7 +282,7 @@ func tryLoadEmbeddedConfig() (Config, bool) {
 		for lineStart > 0 && configStr[lineStart-1] != '\n' {
 			lineStart--
 		}
-		
+
 		line := strings.TrimSpace(configStr[lineStart:lineEnd])
 		if strings.HasPrefix(line, "//") {
 			commentStart = lineStart
