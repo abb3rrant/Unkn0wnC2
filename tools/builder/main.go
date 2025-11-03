@@ -268,19 +268,30 @@ func tryLoadEmbeddedConfig() (Config, bool) {
 
 	// Find the start of the comment before the function
 	commentStart := functionStart
+	// Move back to the beginning of the line
 	for commentStart > 0 && configStr[commentStart-1] != '\n' {
 		commentStart--
 	}
-	// Look for the comment lines before the function
-	for commentStart > 0 {
-		lineStart := commentStart
+	
+	// Look backwards for comment lines, but stop if we find non-comment content
+	tempPos := commentStart
+	for tempPos > 2 {
+		// Move to start of previous line
+		lineEnd := tempPos - 1 // Skip the \n
+		lineStart := lineEnd
 		for lineStart > 0 && configStr[lineStart-1] != '\n' {
 			lineStart--
 		}
-		line := strings.TrimSpace(configStr[lineStart:commentStart])
+		
+		line := strings.TrimSpace(configStr[lineStart:lineEnd])
 		if strings.HasPrefix(line, "//") {
 			commentStart = lineStart
+			tempPos = lineStart
+		} else if line == "" {
+			// Empty line, keep looking
+			tempPos = lineStart
 		} else {
+			// Found non-comment, non-empty line - stop here
 			break
 		}
 	}
