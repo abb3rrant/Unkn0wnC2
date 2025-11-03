@@ -474,8 +474,8 @@ func main() {
 		fmt.Println("⚠️  Set encryption_key in config.json or via environment variable")
 	}
 
-	// Initialize C2Manager
-	c2Manager = NewC2Manager(debugMode, cfg.EncryptionKey, cfg.StagerJitter)
+	// Initialize C2Manager with database for persistence
+	c2Manager = NewC2Manager(debugMode, cfg.EncryptionKey, cfg.StagerJitter, DatabaseFileName)
 
 	bindAddr := fmt.Sprintf("%s:%d", cfg.BindAddr, cfg.BindPort)
 

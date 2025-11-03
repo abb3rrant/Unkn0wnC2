@@ -145,6 +145,31 @@ func startC2Console() {
 			taskID := parts[1]
 			showTaskResult(taskID)
 
+		case "history", "hist":
+			if len(parts) < 2 {
+				fmt.Println("Usage: history <beacon_id> [limit]")
+				continue
+			}
+			beaconID := parts[1]
+			limit := 50 // Default limit
+			if len(parts) >= 3 {
+				fmt.Sscanf(parts[2], "%d", &limit)
+			}
+			showBeaconHistory(beaconID, limit)
+
+		case "search":
+			if len(parts) < 2 {
+				fmt.Println("Usage: search <status> [limit]")
+				fmt.Println("Status values: pending, sent, completed, failed")
+				continue
+			}
+			status := parts[1]
+			limit := 50 // Default limit
+			if len(parts) >= 3 {
+				fmt.Sscanf(parts[2], "%d", &limit)
+			}
+			searchTasks(status, limit)
+
 		case "clear":
 			// Clear screen (simple version)
 			fmt.Print(ANSIClearScreen)
@@ -182,6 +207,8 @@ Available Commands:
   tasks                - List all tasks and their status
   task <id> <cmd>      - Queue a command for a specific beacon
   result <task_id>     - Show result of a completed task
+  history <id> [limit] - Show task history for a beacon (default: 50)
+  search <status> [n]  - Search tasks by status (pending/sent/completed/failed)
   logs                 - Show count of log messages since start/clear
   clear                - Clear screen and reset log counter
   exit, quit           - Exit console
@@ -190,6 +217,8 @@ Examples:
   task a1b2 whoami
   task a1b2 dir C:\
   result T1001
+  history a1b2 25
+  search completed 100
 
 Note: Log messages appear between markers while you type.
       Your input is preserved - continue typing after logs appear.
@@ -273,10 +302,10 @@ func listTasks() {
 // showTaskResult displays the complete output from a completed task
 // including formatted result data and execution metadata.
 func showTaskResult(taskID string) {
-	tasks := c2Manager.GetTasks()
-	task, exists := tasks[taskID]
-
-	if !exists {
+	// Try to get task from database first (includes historical tasks)
+	task, err := c2Manager.GetTaskWithResult(taskID)
+	
+	if err != nil || task == nil {
 		fmt.Printf("%sTask %s not found%s\n", ColorRed, taskID, ColorReset)
 		return
 	}
@@ -313,6 +342,86 @@ func showTaskResult(taskID string) {
 		}
 	}
 	fmt.Println()
+}
+
+// showBeaconHistory displays all tasks for a specific beacon from database
+// Provides complete historical view including completed and failed tasks
+func showBeaconHistory(beaconID string, limit int) {
+	tasks, err := c2Manager.GetBeaconTasks(beaconID)
+	if err != nil {
+		fmt.Printf("%sError retrieving beacon history: %v%s\n", ColorRed, err, ColorReset)
+		return
+	}
+
+	if len(tasks) == 0 {
+		fmt.Printf("No tasks found for beacon %s\n", beaconID)
+		return
+	}
+
+	// Apply limit if specified
+	if limit > 0 && len(tasks) > limit {
+		tasks = tasks[:limit]
+	}
+
+	fmt.Printf("\n%sTask History for Beacon %s%s (%d tasks", ColorYellow, beaconID, ColorReset, len(tasks))
+	if limit > 0 {
+		fmt.Printf(", showing latest %d", limit)
+	}
+	fmt.Println(")")
+	fmt.Printf("%-8s %-10s %-40s %-20s %s\n",
+		"Task ID", "Status", "Command", "Created", "Result")
+	fmt.Println(strings.Repeat("-", TaskListSeparatorLength))
+
+	for _, task := range tasks {
+		resultPreview := "(none)"
+		if task.Result != "" {
+			resultPreview = fmt.Sprintf("%d chars", len(task.Result))
+		}
+
+		fmt.Printf("%-8s %-10s %-40s %-20s %s\n",
+			task.ID,
+			task.Status,
+			truncateString(task.Command, TaskCommandWidth),
+			task.CreatedAt.Format(TimeFormatShort),
+			resultPreview)
+	}
+	fmt.Println()
+	fmt.Printf("Use 'result <task_id>' to view full task results\n\n")
+}
+
+// searchTasks searches for tasks by status with optional limit
+// Queries database for complete historical search across all beacons
+func searchTasks(status string, limit int) {
+	tasks, err := c2Manager.GetTaskHistory(status, limit)
+	if err != nil {
+		fmt.Printf("%sError searching tasks: %v%s\n", ColorRed, err, ColorReset)
+		return
+	}
+
+	if len(tasks) == 0 {
+		fmt.Printf("No tasks found with status '%s'\n", status)
+		return
+	}
+
+	fmt.Printf("\n%sTasks with status '%s'%s (%d found", ColorYellow, status, ColorReset, len(tasks))
+	if limit > 0 {
+		fmt.Printf(", showing %d", limit)
+	}
+	fmt.Println(")")
+	fmt.Printf("%-8s %-10s %-10s %-40s %s\n",
+		"Task ID", "Beacon", "Status", "Command", "Created")
+	fmt.Println(strings.Repeat("-", TaskListSeparatorLength))
+
+	for _, task := range tasks {
+		fmt.Printf("%-8s %-10s %-10s %-40s %s\n",
+			task.ID,
+			task.BeaconID,
+			task.Status,
+			truncateString(task.Command, TaskCommandWidth),
+			task.CreatedAt.Format(TimeFormatShort))
+	}
+	fmt.Println()
+	fmt.Printf("Use 'result <task_id>' to view full task results\n\n")
 }
 
 // truncateString shortens a string to the specified maximum length,

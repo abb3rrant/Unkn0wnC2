@@ -147,6 +147,8 @@ beacons              List all active beacons
 task <id> <cmd>      Queue command for beacon
 tasks                Show all tasks and status
 result <task_id>     Display task output
+history <id> [n]     Show task history for beacon (default: 50)
+search <status> [n]  Search tasks by status (pending/sent/completed/failed)
 logs                 Show log message count
 status               Server status summary
 clear                Clear console
