@@ -415,7 +415,7 @@ func (api *APIServer) handleBeaconReport(w http.ResponseWriter, r *http.Request)
 
 	if api.config.Debug {
 		fmt.Printf("[API] 📡 Beacon report received: %s from DNS server %s\n", req.Beacon.ID, dnsServerID)
-		fmt.Printf("[API]    Hostname: %s, User: %s, OS: %s, IP: %s\n", 
+		fmt.Printf("[API]    Hostname: %s, User: %s, OS: %s, IP: %s\n",
 			req.Beacon.Hostname, req.Beacon.Username, req.Beacon.OS, req.Beacon.IPAddress)
 		fmt.Printf("[API]    FirstSeen: %v, LastSeen: %v\n", req.Beacon.FirstSeen, req.Beacon.LastSeen)
 	}

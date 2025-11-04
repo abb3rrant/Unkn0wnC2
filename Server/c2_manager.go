@@ -615,7 +615,7 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 	// In distributed mode, we need to handle queries for any C2 domain, not just our own
 	// Extract subdomain by finding the last two labels (assumed to be the domain)
 	// Example: "base36data.timestamp.secwolf.net" -> subdomain = "base36data.timestamp"
-	
+
 	parts := strings.Split(qname, ".")
 	if len(parts) < 3 {
 		// Need at least subdomain.domain.tld
