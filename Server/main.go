@@ -25,7 +25,7 @@ var (
 
 // Build-time version information (set via -ldflags during build)
 var (
-	version   = "0.1.0"
+	version   = "0.2.0"
 	buildDate = "unknown"
 	gitCommit = "unknown"
 )

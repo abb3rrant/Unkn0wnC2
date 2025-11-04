@@ -23,7 +23,7 @@
 
 set -e  # Exit on error
 
-VERSION="0.1.0"
+VERSION="0.2.0"
 BUILD_DATE=$(date -u '+%Y-%m-%d_%H:%M:%S_UTC')
 GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 

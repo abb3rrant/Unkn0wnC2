@@ -1,11 +1,12 @@
 # 🕵️ Unkn0wnC2
-
 DNS-based Command & Control framework operating as an authoritative DNS server with encrypted C2 communications.
 
 
 This DNS C2 implementation's strengths comes from it's malleable C2 timing. 
 
 Many C2s can utilize DNS for covert communications, but the exfil/task timings aren't usually adjustable without changing code directly. This C2 allows you to change the timing of exfil during the build process. Keeping your exfil slow is key to staying stealthy as common C2s send outputs/exfil quickly, alerting Blue Teams on large ammounts of DNS traffic in a short period of time.
+
+A SQLite database has been implemented to maintain data persistence on long engagements and prevent memory leakage.
 
 ![Unkn0wnC2](assets/unkn0wnc2.png)
 
@@ -22,9 +23,19 @@ This software is provided for educational and authorized security testing purpos
 - Use only in controlled environments with proper authorization
 - Understand that unauthorized access to computer systems is illegal
 
-**The authors and contributors are not responsible for misuse or illegal activity. Use at your own risk.**
+**The author is not responsible for misuse or illegal activity. Use at your own risk.**
 
 ---
+
+## To-Do
+
+1. Teaming Server
+2. Documentation
+3. WebUI
+4. Campaign Tracking - Good visuals for Red Team debrief of TTPs
+5. Client Features utilizing systemcalls vs running commands
+6. Exfil/Upload features with a Loot folder
+7. BoF functionality maybe
 
 ## 🚀 Quick Deployment
 
