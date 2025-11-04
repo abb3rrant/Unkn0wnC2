@@ -332,15 +332,25 @@ func (d *MasterDatabase) VerifyDNSServerAPIKey(dnsServerID, apiKey string) (bool
 }
 
 // UpdateDNSServerCheckin updates last check-in time for a DNS server
-func (d *MasterDatabase) UpdateDNSServerCheckin(dnsServerID string) error {
+func (d *MasterDatabase) UpdateDNSServerCheckin(dnsServerID string) (bool, error) {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 
-	_, err := d.db.Exec(`
-		UPDATE dns_servers SET last_checkin = ?, updated_at = ? WHERE id = ?
+	// Check if this is the first checkin (last_checkin was 0)
+	var lastCheckin int64
+	err := d.db.QueryRow(`SELECT last_checkin FROM dns_servers WHERE id = ?`, dnsServerID).Scan(&lastCheckin)
+	if err != nil {
+		return false, err
+	}
+
+	isFirstCheckin := (lastCheckin == 0)
+
+	// Update checkin time
+	_, err = d.db.Exec(`
+		UPDATE dns_servers SET last_checkin = ?, updated_at = ?, status = 'active' WHERE id = ?
 	`, time.Now().Unix(), time.Now().Unix(), dnsServerID)
 
-	return err
+	return isFirstCheckin, err
 }
 
 // GetDNSServers retrieves all DNS servers
@@ -387,16 +397,18 @@ func (d *MasterDatabase) GetDNSServers() ([]map[string]interface{}, error) {
 // Beacon operations
 
 // UpsertBeacon inserts or updates a beacon (from DNS server reports)
-func (d *MasterDatabase) UpsertBeacon(beaconID, hostname, username, os, arch, ipAddress, dnsServerID string) error {
+func (d *MasterDatabase) UpsertBeacon(beaconID, hostname, username, os, arch, ipAddress, dnsServerID string, firstSeen, lastSeen time.Time) error {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 
+	firstSeenUnix := firstSeen.Unix()
+	lastSeenUnix := lastSeen.Unix()
 	now := time.Now().Unix()
 
 	// Try to insert first
 	_, err := d.db.Exec(`
-		INSERT INTO beacons (id, hostname, username, os, arch, ip_address, dns_server_id, first_seen, last_seen, status)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+		INSERT INTO beacons (id, hostname, username, os, arch, ip_address, dns_server_id, first_seen, last_seen, status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			hostname = excluded.hostname,
 			username = excluded.username,
@@ -405,8 +417,9 @@ func (d *MasterDatabase) UpsertBeacon(beaconID, hostname, username, os, arch, ip
 			ip_address = excluded.ip_address,
 			dns_server_id = excluded.dns_server_id,
 			last_seen = excluded.last_seen,
-			status = 'active'
-	`, beaconID, hostname, username, os, arch, ipAddress, dnsServerID, now, now)
+			status = 'active',
+			updated_at = excluded.updated_at
+	`, beaconID, hostname, username, os, arch, ipAddress, dnsServerID, firstSeenUnix, lastSeenUnix, now, now)
 
 	return err
 }
@@ -747,6 +760,126 @@ func (d *MasterDatabase) VerifyOperatorCredentials(username, password string) (s
 	}()
 
 	return id, role, nil
+}
+
+// CreateBroadcastTask creates a task for all active beacons
+// Used for distributing updates like new DNS server domains
+func (d *MasterDatabase) CreateBroadcastTask(command, createdBy string) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	// Get all active beacons (seen in last 30 minutes)
+	cutoff := time.Now().Add(-30 * time.Minute).Unix()
+	rows, err := d.db.Query(`
+		SELECT id, dns_server_id 
+		FROM beacons 
+		WHERE last_seen > ? AND status = 'active'
+	`, cutoff)
+	if err != nil {
+		return fmt.Errorf("failed to get active beacons: %w", err)
+	}
+	defer rows.Close()
+
+	now := time.Now().Unix()
+	created := 0
+
+	// Create a task for each active beacon
+	for rows.Next() {
+		var beaconID, dnsServerID string
+		if err := rows.Scan(&beaconID, &dnsServerID); err != nil {
+			continue
+		}
+
+		// Generate unique task ID
+		taskID := generateTaskID()
+
+		// Insert task
+		_, err := d.db.Exec(`
+			INSERT INTO tasks (id, beacon_id, command, status, assigned_dns_server, created_by, created_at)
+			VALUES (?, ?, ?, 'pending', ?, ?, ?)
+		`, taskID, beaconID, command, dnsServerID, createdBy, now)
+
+		if err == nil {
+			created++
+		}
+	}
+
+	if created == 0 {
+		return fmt.Errorf("no tasks created (no active beacons)")
+	}
+
+	return nil
+}
+
+// generateTaskID creates a unique task identifier
+func generateTaskID() string {
+	return fmt.Sprintf("task_%d_%d", time.Now().UnixNano(), randomInt(10000, 99999))
+}
+
+func randomInt(min, max int) int {
+	return min + int(time.Now().UnixNano()%(int64(max-min)))
+}
+
+// GetEnabledDNSDomains returns a list of all enabled DNS domains
+func (d *MasterDatabase) GetEnabledDNSDomains() ([]string, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	rows, err := d.db.Query(`
+		SELECT domain FROM dns_servers WHERE status = 'active' ORDER BY id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var domains []string
+	for rows.Next() {
+		var domain string
+		if err := rows.Scan(&domain); err != nil {
+			continue
+		}
+		domains = append(domains, domain)
+	}
+
+	return domains, rows.Err()
+}
+
+// GetTasksForDNSServer retrieves pending tasks assigned to a DNS server's beacons
+func (d *MasterDatabase) GetTasksForDNSServer(dnsServerID string) ([]map[string]interface{}, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	rows, err := d.db.Query(`
+		SELECT id, beacon_id, command, status, created_at
+		FROM tasks
+		WHERE assigned_dns_server = ? AND status = 'pending'
+		ORDER BY created_at ASC
+	`, dnsServerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tasks []map[string]interface{}
+	for rows.Next() {
+		var id, beaconID, command, status string
+		var createdAt int64
+
+		if err := rows.Scan(&id, &beaconID, &command, &status, &createdAt); err != nil {
+			continue
+		}
+
+		tasks = append(tasks, map[string]interface{}{
+			"id":         id,
+			"beacon_id":  beaconID,
+			"command":    command,
+			"status":     status,
+			"created_at": time.Unix(createdAt, 0).Format(time.RFC3339),
+		})
+	}
+
+	return tasks, rows.Err()
 }
 
 // LogAuditEvent logs an operator action to the audit log

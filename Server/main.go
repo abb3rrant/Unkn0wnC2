@@ -327,6 +327,26 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 						RData: ip4,
 					})
 				}
+			} else {
+				// In distributed mode, also respond to queries for other potential C2 domains
+				// Check if this looks like a C2 query (long subdomain with multiple labels)
+				parts := strings.Split(qname, ".")
+				if len(parts) >= 3 {
+					subdomain := strings.Join(parts[:len(parts)-2], ".")
+					// If subdomain is long and contains only alphanumeric chars, likely C2
+					if len(subdomain) > 20 {
+						randomIP := generateRandomIP()
+						if ip4, ok2 := toIPv4(randomIP); ok2 {
+							answers = append(answers, DNSResourceRecord{
+								Name:  q.Name,
+								Type:  1,
+								Class: 1,
+								TTL:   1, // Short TTL for C2-like queries
+								RData: ip4,
+							})
+						}
+					}
+				}
 			}
 
 		case 28: // AAAA

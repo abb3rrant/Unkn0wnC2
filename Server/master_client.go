@@ -213,7 +213,7 @@ func (mc *MasterClient) ReportBeacon(beacon *Beacon) error {
 		OS:        beacon.OS,
 		Arch:      beacon.Arch,
 		IPAddress: beacon.IPAddress,
-		FirstSeen: beacon.LastSeen, // Use LastSeen as proxy if FirstSeen not tracked
+		FirstSeen: beacon.FirstSeen,
 		LastSeen:  beacon.LastSeen,
 	}
 

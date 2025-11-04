@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Unkn0wnC2 - Master Control</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap" rel="stylesheet">
     <style>
         * {
             margin: 0;
@@ -37,10 +40,12 @@
         }
 
         .logo h1 {
-            color: #00ff88;
-            font-size: 32px;
+            color: #ff3333;
+            font-size: 42px;
             margin-bottom: 5px;
-            text-shadow: 0 0 10px rgba(0, 255, 136, 0.3);
+            text-shadow: 0 0 10px rgba(255, 51, 51, 0.5);
+            font-family: 'Bebas Neue', 'Impact', sans-serif;
+            letter-spacing: 5px;
         }
 
         .logo .subtitle {
@@ -74,18 +79,18 @@
 
         .form-group input:focus {
             outline: none;
-            border-color: #00ff88;
+            border-color: #ff3333;
             background: rgba(45, 45, 45, 0.9);
-            box-shadow: 0 0 0 3px rgba(0, 255, 136, 0.1);
+            box-shadow: 0 0 0 3px rgba(255, 51, 51, 0.2);
         }
 
         .btn-login {
             width: 100%;
             padding: 14px;
-            background: linear-gradient(135deg, #00ff88 0%, #00cc6a 100%);
+            background: linear-gradient(135deg, #ff3333 0%, #cc0000 100%);
             border: none;
             border-radius: 6px;
-            color: #000;
+            color: #fff;
             font-size: 16px;
             font-weight: 600;
             cursor: pointer;
@@ -95,7 +100,7 @@
 
         .btn-login:hover {
             transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(0, 255, 136, 0.3);
+            box-shadow: 0 6px 20px rgba(255, 51, 51, 0.4);
         }
 
         .btn-login:active {
@@ -134,7 +139,7 @@
             display: inline-block;
             width: 18px;
             height: 18px;
-            border: 3px solid #000;
+            border: 3px solid #fff;
             border-top-color: transparent;
             border-radius: 50%;
             animation: spin 0.8s linear infinite;
@@ -204,7 +209,7 @@
             btnText.innerHTML = 'Authenticating<span class="loading"></span>';
 
             try {
-                const response = await fetch('/api/login', {
+                const response = await fetch('/api/auth/login', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',

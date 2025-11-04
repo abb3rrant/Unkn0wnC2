@@ -22,7 +22,7 @@
       {
         "id": "dns-2",
         "domain": "errantshield.com",
-        "bind_addr": "10.100.0.2",
+        "bind_addr": "0.0.0.0",
         "bind_port": 53,
         "server_address": "159.203.152.188",
         "ns1": "ns1.errantshield.com",
