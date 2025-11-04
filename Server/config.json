@@ -16,5 +16,8 @@
     "burst_pause_ms": 120000,
     "retry_delay_seconds": 3,
     "max_retries": 5
-  }
+  },
+  "master_server": "",
+  "master_api_key": "",
+  "master_server_id": "dns1"
 }

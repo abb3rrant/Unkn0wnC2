@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - Unkn0wnC2</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+        }
+
+        .navbar {
+            background: rgba(20, 20, 20, 0.95);
+            border-bottom: 1px solid #333;
+            padding: 15px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+
+        .navbar-brand {
+            font-size: 24px;
+            font-weight: 700;
+            color: #00ff88;
+            text-shadow: 0 0 10px rgba(0, 255, 136, 0.3);
+        }
+
+        .navbar-right {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+
+        .user-info {
+            color: #aaa;
+            font-size: 14px;
+        }
+
+        .btn-logout {
+            padding: 8px 20px;
+            background: rgba(255, 50, 50, 0.2);
+            border: 1px solid rgba(255, 50, 50, 0.3);
+            border-radius: 6px;
+            color: #ff5555;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        .btn-logout:hover {
+            background: rgba(255, 50, 50, 0.3);
+            transform: translateY(-2px);
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 30px;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: rgba(20, 20, 20, 0.95);
+            border: 1px solid #333;
+            border-radius: 12px;
+            padding: 25px;
+            transition: all 0.3s ease;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-5px);
+            border-color: #00ff88;
+            box-shadow: 0 8px 24px rgba(0, 255, 136, 0.1);
+        }
+
+        .stat-card .label {
+            color: #888;
+            font-size: 14px;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .stat-card .value {
+            font-size: 36px;
+            font-weight: 700;
+            color: #00ff88;
+            margin-bottom: 5px;
+        }
+
+        .stat-card .subtitle {
+            color: #666;
+            font-size: 13px;
+        }
+
+        .section {
+            background: rgba(20, 20, 20, 0.95);
+            border: 1px solid #333;
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 30px;
+        }
+
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #333;
+        }
+
+        .section-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: #00ff88;
+        }
+
+        .table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .table thead {
+            background: rgba(0, 255, 136, 0.05);
+        }
+
+        .table th {
+            padding: 12px;
+            text-align: left;
+            font-size: 13px;
+            color: #00ff88;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 600;
+        }
+
+        .table td {
+            padding: 15px 12px;
+            border-top: 1px solid #2a2a2a;
+            font-size: 14px;
+        }
+
+        .table tbody tr {
+            transition: all 0.2s ease;
+        }
+
+        .table tbody tr:hover {
+            background: rgba(0, 255, 136, 0.05);
+        }
+
+        .status-badge {
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .status-online {
+            background: rgba(0, 255, 136, 0.2);
+            color: #00ff88;
+        }
+
+        .status-offline {
+            background: rgba(255, 50, 50, 0.2);
+            color: #ff5555;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #666;
+        }
+
+        .empty-state-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+            opacity: 0.3;
+        }
+
+        .btn-refresh {
+            padding: 8px 16px;
+            background: rgba(0, 255, 136, 0.1);
+            border: 1px solid rgba(0, 255, 136, 0.3);
+            border-radius: 6px;
+            color: #00ff88;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.3s ease;
+        }
+
+        .btn-refresh:hover {
+            background: rgba(0, 255, 136, 0.2);
+        }
+
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.8);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+        }
+
+        .loading-overlay.show {
+            display: flex;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid #333;
+            border-top-color: #00ff88;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="spinner"></div>
+    </div>
+
+    <nav class="navbar">
+        <div class="navbar-brand">Unkn0wnC2</div>
+        <div class="navbar-right">
+            <div class="user-info">Logged in as <strong id="username">admin</strong></div>
+            <button class="btn-logout" onclick="logout()">Logout</button>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- Statistics -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="label">Active Beacons</div>
+                <div class="value" id="beaconCount">0</div>
+                <div class="subtitle">Connected clients</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">DNS Servers</div>
+                <div class="value" id="serverCount">0</div>
+                <div class="subtitle">Lieutenant servers</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Pending Tasks</div>
+                <div class="value" id="taskCount">0</div>
+                <div class="subtitle">Queued commands</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Total Results</div>
+                <div class="value" id="resultCount">0</div>
+                <div class="subtitle">Completed tasks</div>
+            </div>
+        </div>
+
+        <!-- Beacons Table -->
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">Active Beacons</h2>
+                <button class="btn-refresh" onclick="loadBeacons()">↻ Refresh</button>
+            </div>
+            <div id="beaconsTable">
+                <div class="empty-state">
+                    <div class="empty-state-icon">📡</div>
+                    <div>No active beacons</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- DNS Servers Table -->
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">DNS Servers</h2>
+                <button class="btn-refresh" onclick="loadServers()">↻ Refresh</button>
+            </div>
+            <div id="serversTable">
+                <div class="empty-state">
+                    <div class="empty-state-icon">🖥️</div>
+                    <div>No DNS servers registered</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '';
+        let token = localStorage.getItem('token');
+
+        // Check authentication
+        if (!token) {
+            window.location.href = '/login';
+        }
+
+        // Fetch with authentication
+        async function authFetch(url, options = {}) {
+            const headers = {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+                ...options.headers
+            };
+
+            const response = await fetch(url, { ...options, headers });
+
+            if (response.status === 401) {
+                localStorage.removeItem('token');
+                window.location.href = '/login';
+                return null;
+            }
+
+            return response;
+        }
+
+        // Load dashboard data
+        async function loadDashboard() {
+            document.getElementById('loadingOverlay').classList.add('show');
+            
+            try {
+                await Promise.all([
+                    loadBeacons(),
+                    loadServers(),
+                    loadStats()
+                ]);
+            } catch (error) {
+                console.error('Error loading dashboard:', error);
+            } finally {
+                document.getElementById('loadingOverlay').classList.remove('show');
+            }
+        }
+
+        // Load beacons
+        async function loadBeacons() {
+            try {
+                const response = await authFetch('/api/beacons');
+                if (!response) return;
+
+                const data = await response.json();
+                const beacons = data.beacons || [];
+
+                document.getElementById('beaconCount').textContent = beacons.length;
+
+                if (beacons.length === 0) {
+                    document.getElementById('beaconsTable').innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-icon">📡</div>
+                            <div>No active beacons</div>
+                        </div>`;
+                    return;
+                }
+
+                const table = `
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Hostname</th>
+                                <th>User</th>
+                                <th>OS</th>
+                                <th>IP Address</th>
+                                <th>Last Seen</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${beacons.map(beacon => `
+                                <tr>
+                                    <td><code>${beacon.id}</code></td>
+                                    <td>${beacon.hostname}</td>
+                                    <td>${beacon.username}</td>
+                                    <td>${beacon.os}</td>
+                                    <td>${beacon.ip_address}</td>
+                                    <td>${formatTimestamp(beacon.last_seen)}</td>
+                                    <td><span class="status-badge ${isOnline(beacon.last_seen) ? 'status-online' : 'status-offline'}">${isOnline(beacon.last_seen) ? 'Online' : 'Offline'}</span></td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>`;
+                
+                document.getElementById('beaconsTable').innerHTML = table;
+            } catch (error) {
+                console.error('Error loading beacons:', error);
+            }
+        }
+
+        // Load DNS servers
+        async function loadServers() {
+            try {
+                const response = await authFetch('/api/dns-servers');
+                if (!response) return;
+
+                const data = await response.json();
+                const servers = data.servers || [];
+
+                document.getElementById('serverCount').textContent = servers.length;
+
+                if (servers.length === 0) {
+                    document.getElementById('serversTable').innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-icon">🖥️</div>
+                            <div>No DNS servers registered</div>
+                        </div>`;
+                    return;
+                }
+
+                const table = `
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Domain</th>
+                                <th>Address</th>
+                                <th>Beacons</th>
+                                <th>Last Checkin</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${servers.map(server => `
+                                <tr>
+                                    <td><code>${server.id}</code></td>
+                                    <td>${server.domain || 'N/A'}</td>
+                                    <td>${server.address || 'N/A'}</td>
+                                    <td>${server.beacon_count || 0}</td>
+                                    <td>${formatTimestamp(server.last_checkin)}</td>
+                                    <td><span class="status-badge ${isOnline(server.last_checkin) ? 'status-online' : 'status-offline'}">${isOnline(server.last_checkin) ? 'Online' : 'Offline'}</span></td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>`;
+                
+                document.getElementById('serversTable').innerHTML = table;
+            } catch (error) {
+                console.error('Error loading servers:', error);
+            }
+        }
+
+        // Load statistics
+        async function loadStats() {
+            // Task and result counts would come from separate endpoints
+            // For now, just display 0
+            document.getElementById('taskCount').textContent = '0';
+            document.getElementById('resultCount').textContent = '0';
+        }
+
+        // Helper functions
+        function formatTimestamp(timestamp) {
+            if (!timestamp) return 'Never';
+            const date = new Date(timestamp);
+            const now = new Date();
+            const diff = Math.floor((now - date) / 1000);
+
+            if (diff < 60) return `${diff}s ago`;
+            if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+            if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+            return date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
+        }
+
+        function isOnline(timestamp) {
+            if (!timestamp) return false;
+            const date = new Date(timestamp);
+            const now = new Date();
+            const diff = Math.floor((now - date) / 1000);
+            return diff < 300; // Online if seen within 5 minutes
+        }
+
+        function logout() {
+            localStorage.removeItem('token');
+            window.location.href = '/login';
+        }
+
+        // Initial load
+        loadDashboard();
+
+        // Auto-refresh every 10 seconds
+        setInterval(() => {
+            loadBeacons();
+            loadServers();
+        }, 10000);
+    </script>
+</body>
+</html>

