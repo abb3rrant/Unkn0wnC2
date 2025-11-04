@@ -626,7 +626,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	router.HandleFunc("/", api.handleRoot).Methods("GET")
 	router.HandleFunc("/login", api.handleLoginPage).Methods("GET")
 	router.HandleFunc("/dashboard", api.handleDashboardPage).Methods("GET")
-	
+
 	// Serve static files (CSS, JS, images)
 	router.PathPrefix("/web/static/").Handler(
 		http.StripPrefix("/web/static/", http.FileServer(http.Dir("./web/static"))),
