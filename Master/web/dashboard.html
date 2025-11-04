@@ -218,6 +218,22 @@
             background: rgba(255, 51, 51, 0.2);
         }
 
+        .btn-manage {
+            padding: 6px 12px;
+            background: rgba(255, 51, 51, 0.1);
+            border: 1px solid rgba(255, 51, 51, 0.3);
+            border-radius: 4px;
+            color: #ff3333;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.3s ease;
+        }
+
+        .btn-manage:hover {
+            background: rgba(255, 51, 51, 0.2);
+            border-color: rgba(255, 51, 51, 0.5);
+        }
+
         .loading-overlay {
             position: fixed;
             top: 0;
@@ -392,6 +408,7 @@
                                 <th>IP Address</th>
                                 <th>Last Seen</th>
                                 <th>Status</th>
+                                <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -404,6 +421,7 @@
                                     <td>${beacon.ip_address}</td>
                                     <td>${formatTimestamp(beacon.last_seen)}</td>
                                     <td><span class="status-badge ${isOnline(beacon.last_seen) ? 'status-online' : 'status-offline'}">${isOnline(beacon.last_seen) ? 'Online' : 'Offline'}</span></td>
+                                    <td><button class="btn-manage" onclick="manageBeacon('${beacon.id}', '${beacon.hostname}')">Manage</button></td>
                                 </tr>
                             `).join('')}
                         </tbody>
@@ -497,6 +515,11 @@
         function logout() {
             localStorage.removeItem('token');
             window.location.href = '/login';
+        }
+
+        function manageBeacon(beaconId, hostname) {
+            // Navigate to beacon management page
+            window.location.href = `/beacon?id=${beaconId}&hostname=${encodeURIComponent(hostname)}`;
         }
 
         // Initial load

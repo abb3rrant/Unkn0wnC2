@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Beacon Management - Unkn0wnC2</title>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Courier New', monospace;
+            background: #000;
+            color: #fff;
+            padding: 20px;
+        }
+
+        .navbar {
+            background: rgba(20, 20, 20, 0.9);
+            padding: 15px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid #ff3333;
+            margin-bottom: 30px;
+        }
+
+        .navbar-brand {
+            font-family: 'Bebas Neue', sans-serif;
+            font-size: 32px;
+            color: #ff3333;
+            letter-spacing: 3px;
+        }
+
+        .navbar-right {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+
+        .btn-back {
+            padding: 8px 16px;
+            background: rgba(255, 51, 51, 0.1);
+            border: 1px solid rgba(255, 51, 51, 0.3);
+            border-radius: 6px;
+            color: #ff3333;
+            cursor: pointer;
+            font-size: 13px;
+            text-decoration: none;
+            transition: all 0.3s ease;
+        }
+
+        .btn-back:hover {
+            background: rgba(255, 51, 51, 0.2);
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .beacon-header {
+            background: rgba(20, 20, 20, 0.6);
+            border: 1px solid rgba(255, 51, 51, 0.3);
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 30px;
+        }
+
+        .beacon-title {
+            font-family: 'Bebas Neue', sans-serif;
+            font-size: 28px;
+            color: #ff3333;
+            margin-bottom: 15px;
+            letter-spacing: 2px;
+        }
+
+        .beacon-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            font-size: 13px;
+        }
+
+        .beacon-info-item {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .beacon-info-label {
+            color: #888;
+            font-size: 11px;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+        }
+
+        .beacon-info-value {
+            color: #fff;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+
+        .status-online {
+            background: rgba(0, 255, 0, 0.2);
+            color: #00ff00;
+        }
+
+        .status-offline {
+            background: rgba(255, 0, 0, 0.2);
+            color: #ff6666;
+        }
+
+        .section {
+            background: rgba(20, 20, 20, 0.6);
+            border: 1px solid rgba(255, 51, 51, 0.3);
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .section-title {
+            font-family: 'Bebas Neue', sans-serif;
+            font-size: 22px;
+            color: #ff3333;
+            margin-bottom: 20px;
+            letter-spacing: 2px;
+        }
+
+        .task-form {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .task-input {
+            flex: 1;
+            padding: 12px;
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 51, 51, 0.3);
+            border-radius: 6px;
+            color: #fff;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+        }
+
+        .task-input:focus {
+            outline: none;
+            border-color: #ff3333;
+        }
+
+        .btn-task {
+            padding: 12px 24px;
+            background: rgba(255, 51, 51, 0.2);
+            border: 1px solid #ff3333;
+            border-radius: 6px;
+            color: #ff3333;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+        }
+
+        .btn-task:hover {
+            background: rgba(255, 51, 51, 0.3);
+        }
+
+        .btn-task:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .tasks-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .task-item {
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 51, 51, 0.2);
+            border-radius: 6px;
+            padding: 15px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .task-item:hover {
+            border-color: rgba(255, 51, 51, 0.5);
+            background: rgba(255, 51, 51, 0.05);
+        }
+
+        .task-item.selected {
+            border-color: #ff3333;
+            background: rgba(255, 51, 51, 0.1);
+        }
+
+        .task-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .task-id {
+            font-weight: bold;
+            color: #ff3333;
+        }
+
+        .task-status {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+
+        .task-status.pending {
+            background: rgba(255, 165, 0, 0.2);
+            color: #ffaa00;
+        }
+
+        .task-status.sent {
+            background: rgba(135, 206, 250, 0.2);
+            color: #87ceeb;
+        }
+
+        .task-status.completed {
+            background: rgba(0, 255, 0, 0.2);
+            color: #00ff00;
+        }
+
+        .task-status.failed {
+            background: rgba(255, 0, 0, 0.2);
+            color: #ff6666;
+        }
+
+        .task-command {
+            color: #ccc;
+            font-size: 13px;
+            margin-bottom: 5px;
+        }
+
+        .task-time {
+            color: #666;
+            font-size: 11px;
+        }
+
+        .result-viewer {
+            background: rgba(0, 0, 0, 0.7);
+            border: 1px solid rgba(255, 51, 51, 0.3);
+            border-radius: 6px;
+            padding: 15px;
+            margin-top: 15px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid rgba(255, 51, 51, 0.2);
+        }
+
+        .result-title {
+            color: #ff3333;
+            font-weight: bold;
+        }
+
+        .btn-copy {
+            padding: 6px 12px;
+            background: rgba(255, 51, 51, 0.1);
+            border: 1px solid rgba(255, 51, 51, 0.3);
+            border-radius: 4px;
+            color: #ff3333;
+            cursor: pointer;
+            font-size: 11px;
+            transition: all 0.3s ease;
+        }
+
+        .btn-copy:hover {
+            background: rgba(255, 51, 51, 0.2);
+        }
+
+        .result-content {
+            color: #fff;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .empty-state-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+            opacity: 0.3;
+        }
+
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.8);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+        }
+
+        .loading-overlay.show {
+            display: flex;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid #333;
+            border-top-color: #ff3333;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .alert {
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+            font-size: 13px;
+        }
+
+        .alert-success {
+            background: rgba(0, 255, 0, 0.1);
+            border: 1px solid rgba(0, 255, 0, 0.3);
+            color: #00ff00;
+        }
+
+        .alert-error {
+            background: rgba(255, 0, 0, 0.1);
+            border: 1px solid rgba(255, 0, 0, 0.3);
+            color: #ff6666;
+        }
+
+        code {
+            background: rgba(255, 51, 51, 0.1);
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+        }
+
+        .no-result {
+            text-align: center;
+            padding: 20px;
+            color: #888;
+            font-style: italic;
+        }
+
+        .btn-refresh {
+            padding: 6px 12px;
+            background: rgba(255, 51, 51, 0.1);
+            border: 1px solid rgba(255, 51, 51, 0.3);
+            border-radius: 4px;
+            color: #ff3333;
+            cursor: pointer;
+            font-size: 11px;
+            transition: all 0.3s ease;
+            margin-left: 10px;
+        }
+
+        .btn-refresh:hover {
+            background: rgba(255, 51, 51, 0.2);
+        }
+
+        .progress-bar-container {
+            width: 100%;
+            height: 8px;
+            background: rgba(0, 0, 0, 0.5);
+            border-radius: 4px;
+            margin-top: 5px;
+            overflow: hidden;
+        }
+
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #ff3333, #ff6666);
+            transition: width 0.3s ease;
+            border-radius: 4px;
+        }
+
+        .progress-text {
+            font-size: 11px;
+            color: #888;
+            margin-top: 3px;
+        }
+    </style>
+</head>
+<body>
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="spinner"></div>
+    </div>
+
+    <nav class="navbar">
+        <div class="navbar-brand">Unkn0wnC2</div>
+        <div class="navbar-right">
+            <a href="/dashboard" class="btn-back">← Back to Dashboard</a>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- Beacon Info Header -->
+        <div class="beacon-header" id="beaconHeader">
+            <div class="beacon-title">Loading beacon information...</div>
+        </div>
+
+        <!-- Create Task Section -->
+        <div class="section">
+            <h2 class="section-title">Create Task</h2>
+            <div id="alertContainer"></div>
+            <div class="task-form">
+                <input 
+                    type="text" 
+                    id="commandInput" 
+                    class="task-input" 
+                    placeholder="Enter command (e.g., whoami, ls, ipconfig)"
+                    onkeypress="handleEnterKey(event)"
+                />
+                <button class="btn-task" onclick="createTask()">Execute Task</button>
+            </div>
+        </div>
+
+        <!-- Tasks List Section -->
+        <div class="section">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h2 class="section-title" style="margin: 0;">Task History</h2>
+                <button class="btn-refresh" onclick="loadTasks()">↻ Refresh</button>
+            </div>
+            <div id="tasksList">
+                <div class="empty-state">
+                    <div class="empty-state-icon">📋</div>
+                    <div>No tasks yet</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Result Viewer Section -->
+        <div id="resultSection" style="display: none;">
+            <div class="section">
+                <h2 class="section-title">Task Result</h2>
+                <div class="result-viewer">
+                    <div class="result-header">
+                        <div class="result-title" id="resultTitle">Task Output</div>
+                        <button class="btn-copy" onclick="copyResult()">📋 Copy</button>
+                    </div>
+                    <div class="result-content" id="resultContent"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin;
+        let currentBeaconId = '';
+        let currentBeaconHostname = '';
+        let selectedTaskId = null;
+        let autoRefreshInterval = null;
+
+        // Get URL parameters
+        function getUrlParams() {
+            const params = new URLSearchParams(window.location.search);
+            return {
+                beaconId: params.get('id'),
+                hostname: params.get('hostname')
+            };
+        }
+
+        // Auth fetch wrapper
+        async function authFetch(url, options = {}) {
+            const token = localStorage.getItem('token');
+            if (!token) {
+                window.location.href = '/login';
+                return null;
+            }
+
+            const headers = {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+                ...options.headers
+            };
+
+            const response = await fetch(API_BASE + url, {
+                ...options,
+                headers
+            });
+
+            if (response.status === 401) {
+                localStorage.removeItem('token');
+                window.location.href = '/login';
+                return null;
+            }
+
+            return response;
+        }
+
+        // Show alert message
+        function showAlert(message, type = 'success') {
+            const container = document.getElementById('alertContainer');
+            const alert = document.createElement('div');
+            alert.className = `alert alert-${type}`;
+            alert.textContent = message;
+            container.innerHTML = '';
+            container.appendChild(alert);
+
+            setTimeout(() => {
+                alert.remove();
+            }, 5000);
+        }
+
+        // Load beacon information
+        async function loadBeaconInfo() {
+            try {
+                const response = await authFetch(`/api/beacons/${currentBeaconId}`);
+                if (!response) return;
+
+                const beacon = await response.json();
+
+                const isOnlineStatus = isOnline(beacon.last_seen);
+                const statusBadge = isOnlineStatus ? 
+                    '<span class="status-badge status-online">Online</span>' : 
+                    '<span class="status-badge status-offline">Offline</span>';
+
+                document.getElementById('beaconHeader').innerHTML = `
+                    <div class="beacon-title">Beacon: ${beacon.hostname || currentBeaconHostname}</div>
+                    <div class="beacon-info">
+                        <div class="beacon-info-item">
+                            <div class="beacon-info-label">Beacon ID</div>
+                            <div class="beacon-info-value"><code>${beacon.id}</code></div>
+                        </div>
+                        <div class="beacon-info-item">
+                            <div class="beacon-info-label">Hostname</div>
+                            <div class="beacon-info-value">${beacon.hostname}</div>
+                        </div>
+                        <div class="beacon-info-item">
+                            <div class="beacon-info-label">User</div>
+                            <div class="beacon-info-value">${beacon.username}</div>
+                        </div>
+                        <div class="beacon-info-item">
+                            <div class="beacon-info-label">Operating System</div>
+                            <div class="beacon-info-value">${beacon.os}</div>
+                        </div>
+                        <div class="beacon-info-item">
+                            <div class="beacon-info-label">Architecture</div>
+                            <div class="beacon-info-value">${beacon.arch}</div>
+                        </div>
+                        <div class="beacon-info-item">
+                            <div class="beacon-info-label">IP Address</div>
+                            <div class="beacon-info-value">${beacon.ip_address}</div>
+                        </div>
+                        <div class="beacon-info-item">
+                            <div class="beacon-info-label">Last Seen</div>
+                            <div class="beacon-info-value">${formatTimestamp(beacon.last_seen)}</div>
+                        </div>
+                        <div class="beacon-info-item">
+                            <div class="beacon-info-label">Status</div>
+                            <div class="beacon-info-value">${statusBadge}</div>
+                        </div>
+                    </div>
+                `;
+            } catch (error) {
+                console.error('Error loading beacon info:', error);
+                showAlert('Failed to load beacon information', 'error');
+            }
+        }
+
+        // Load tasks for this beacon
+        async function loadTasks() {
+            try {
+                const response = await authFetch('/api/tasks?limit=100');
+                if (!response) return;
+
+                const data = await response.json();
+                const allTasks = data.tasks || [];
+                
+                // Filter tasks for this beacon
+                const beaconTasks = allTasks.filter(task => task.beacon_id === currentBeaconId);
+
+                if (beaconTasks.length === 0) {
+                    document.getElementById('tasksList').innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-icon">📋</div>
+                            <div>No tasks yet</div>
+                        </div>`;
+                    return;
+                }
+
+                const tasksHtml = beaconTasks.map(task => `
+                    <div class="task-item ${selectedTaskId === task.id ? 'selected' : ''}" onclick="selectTask('${task.id}')">
+                        <div class="task-header">
+                            <span class="task-id">${task.id}</span>
+                            <span class="task-status ${task.status}">${task.status.toUpperCase()}</span>
+                        </div>
+                        <div class="task-command">$ ${task.command}</div>
+                        <div class="task-time">Created: ${formatTimestamp(task.created_at)}</div>
+                        ${task.completed_at ? `<div class="task-time">Completed: ${formatTimestamp(task.completed_at)}</div>` : ''}
+                    </div>
+                `).join('');
+
+                document.getElementById('tasksList').innerHTML = tasksHtml;
+            } catch (error) {
+                console.error('Error loading tasks:', error);
+            }
+        }
+
+        // Select a task and load its result
+        async function selectTask(taskId) {
+            selectedTaskId = taskId;
+            loadTasks(); // Refresh to show selection
+
+            try {
+                const response = await authFetch(`/api/tasks/${taskId}`);
+                if (!response) return;
+
+                const task = await response.json();
+
+                const resultSection = document.getElementById('resultSection');
+                const resultTitle = document.getElementById('resultTitle');
+                const resultContent = document.getElementById('resultContent');
+
+                resultTitle.textContent = `Task ${task.id} - ${task.command}`;
+
+                if (task.status === 'completed' && task.result) {
+                    resultContent.textContent = task.result;
+                    resultSection.style.display = 'block';
+                } else if (task.status === 'sent' && task.progress) {
+                    // Show progress bar for tasks in progress
+                    const progress = task.progress;
+                    resultContent.innerHTML = `
+                        <div class="no-result">
+                            ⏳ Task is being executed...<br><br>
+                            <div class="progress-bar-container">
+                                <div class="progress-bar" style="width: ${progress.progress}%"></div>
+                            </div>
+                            <div class="progress-text">
+                                Progress: ${progress.received_chunks} / ${progress.total_chunks} chunks (${progress.progress}%)
+                            </div>
+                        </div>`;
+                    resultSection.style.display = 'block';
+                } else if (task.status === 'pending' || task.status === 'sent') {
+                    resultContent.innerHTML = '<div class="no-result">⏳ Task is pending execution...</div>';
+                    resultSection.style.display = 'block';
+                } else {
+                    resultContent.innerHTML = '<div class="no-result">❌ No result available</div>';
+                    resultSection.style.display = 'block';
+                }
+
+                // Scroll to result
+                resultSection.scrollIntoView({ behavior: 'smooth' });
+            } catch (error) {
+                console.error('Error loading task result:', error);
+                showAlert('Failed to load task result', 'error');
+            }
+        }
+
+        // Create a new task
+        async function createTask() {
+            const commandInput = document.getElementById('commandInput');
+            const command = commandInput.value.trim();
+
+            if (!command) {
+                showAlert('Please enter a command', 'error');
+                return;
+            }
+
+            try {
+                document.getElementById('loadingOverlay').classList.add('show');
+
+                const response = await authFetch(`/api/beacons/${currentBeaconId}/task`, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        beacon_id: currentBeaconId,
+                        command: command
+                    })
+                });
+
+                if (!response) {
+                    throw new Error('Failed to create task');
+                }
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showAlert(`Task created successfully: ${result.data.task_id}`, 'success');
+                    commandInput.value = '';
+                    
+                    // Reload tasks after a short delay
+                    setTimeout(() => {
+                        loadTasks();
+                    }, 500);
+                } else {
+                    showAlert(result.message || 'Failed to create task', 'error');
+                }
+            } catch (error) {
+                console.error('Error creating task:', error);
+                showAlert('Failed to create task', 'error');
+            } finally {
+                document.getElementById('loadingOverlay').classList.remove('show');
+            }
+        }
+
+        // Handle Enter key in command input
+        function handleEnterKey(event) {
+            if (event.key === 'Enter') {
+                createTask();
+            }
+        }
+
+        // Copy result to clipboard
+        function copyResult() {
+            const resultContent = document.getElementById('resultContent').textContent;
+            navigator.clipboard.writeText(resultContent).then(() => {
+                showAlert('Result copied to clipboard', 'success');
+            }).catch(err => {
+                showAlert('Failed to copy result', 'error');
+            });
+        }
+
+        // Format timestamp
+        function formatTimestamp(timestamp) {
+            if (!timestamp) return 'Never';
+            const date = new Date(timestamp);
+            const now = new Date();
+            const diff = Math.floor((now - date) / 1000);
+
+            if (diff < 60) return `${diff}s ago`;
+            if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+            if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+            return date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
+        }
+
+        function isOnline(timestamp) {
+            if (!timestamp) return false;
+            const date = new Date(timestamp);
+            const now = new Date();
+            const diff = Math.floor((now - date) / 1000);
+            return diff < 300; // Online if seen within 5 minutes
+        }
+
+        // Initialize page
+        async function initializePage() {
+            const params = getUrlParams();
+            
+            if (!params.beaconId) {
+                showAlert('No beacon ID specified', 'error');
+                setTimeout(() => {
+                    window.location.href = '/dashboard';
+                }, 2000);
+                return;
+            }
+
+            currentBeaconId = params.beaconId;
+            currentBeaconHostname = params.hostname || 'Unknown';
+
+            document.getElementById('loadingOverlay').classList.add('show');
+
+            try {
+                await loadBeaconInfo();
+                await loadTasks();
+            } catch (error) {
+                console.error('Error initializing page:', error);
+                showAlert('Failed to load beacon data', 'error');
+            } finally {
+                document.getElementById('loadingOverlay').classList.remove('show');
+            }
+
+            // Auto-refresh tasks every 5 seconds
+            autoRefreshInterval = setInterval(() => {
+                loadTasks();
+                if (selectedTaskId) {
+                    selectTask(selectedTaskId);
+                }
+            }, 5000);
+        }
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+            }
+        });
+
+        // Start the page
+        initializePage();
+    </script>
+</body>
+</html>
