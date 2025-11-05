@@ -46,11 +46,101 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+echo -e "${YELLOW}[0/5] Checking build dependencies...${NC}"
+
+# Check for required commands
+MISSING_DEPS=()
+
+# Go compiler
+if ! command -v go &> /dev/null; then
+    MISSING_DEPS+=("go (Go compiler)")
+fi
+
+# GCC for Linux stager builds
+if ! command -v gcc &> /dev/null; then
+    MISSING_DEPS+=("gcc (GNU C compiler)")
+fi
+
+# MinGW for Windows stager builds
+if ! command -v x86_64-w64-mingw32-gcc &> /dev/null; then
+    MISSING_DEPS+=("x86_64-w64-mingw32-gcc (MinGW cross-compiler)")
+fi
+
+# OpenSSL for certificate generation
+if ! command -v openssl &> /dev/null; then
+    MISSING_DEPS+=("openssl")
+fi
+
+# Check for zlib development headers (required for Linux stager)
+if ! gcc -E -x c - < /dev/null 2>&1 | grep -q "include.*zlib.h" && \
+   ! [ -f /usr/include/zlib.h ] && \
+   ! [ -f /usr/local/include/zlib.h ]; then
+    MISSING_DEPS+=("zlib1g-dev (zlib development headers)")
+fi
+
+# If any dependencies are missing, show install commands
+if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
+    echo -e "${RED}✗ Missing required dependencies:${NC}"
+    for dep in "${MISSING_DEPS[@]}"; do
+        echo -e "${RED}  - ${dep}${NC}"
+    done
+    echo ""
+    echo -e "${YELLOW}Install missing dependencies with:${NC}"
+    echo ""
+    
+    # Detect package manager and show appropriate command
+    if command -v apt-get &> /dev/null; then
+        echo -e "${GREEN}  sudo apt-get update${NC}"
+        INSTALL_CMD="sudo apt-get install -y"
+        PACKAGES=()
+        
+        for dep in "${MISSING_DEPS[@]}"; do
+            case "$dep" in
+                *"Go compiler"*)
+                    PACKAGES+=("golang-go")
+                    ;;
+                *"GNU C compiler"*)
+                    PACKAGES+=("gcc" "build-essential")
+                    ;;
+                *"MinGW"*)
+                    PACKAGES+=("mingw-w64")
+                    ;;
+                *"openssl"*)
+                    PACKAGES+=("openssl")
+                    ;;
+                *"zlib"*)
+                    PACKAGES+=("zlib1g-dev")
+                    ;;
+            esac
+        done
+        
+        echo -e "${GREEN}  ${INSTALL_CMD} ${PACKAGES[@]}${NC}"
+        
+    elif command -v yum &> /dev/null; then
+        echo -e "${GREEN}  sudo yum install -y golang gcc gcc-c++ mingw64-gcc openssl zlib-devel${NC}"
+    else
+        echo -e "${YELLOW}  Please install the missing dependencies using your system's package manager${NC}"
+    fi
+    
+    echo ""
+    exit 1
+fi
+
+echo -e "${GREEN}✓ All build dependencies present${NC}"
+echo -e "${GREEN}  - Go compiler: $(go version | awk '{print $3}')${NC}"
+echo -e "${GREEN}  - GCC: $(gcc --version | head -1 | awk '{print $NF}')${NC}"
+if command -v x86_64-w64-mingw32-gcc &> /dev/null; then
+    echo -e "${GREEN}  - MinGW: $(x86_64-w64-mingw32-gcc --version | head -1 | awk '{print $NF}')${NC}"
+fi
+echo -e "${GREEN}  - OpenSSL: $(openssl version | awk '{print $2}')${NC}"
+echo -e "${GREEN}  - zlib: available${NC}"
+echo ""
+
 # Build flags
 LDFLAGS="-s -w -X main.version=${VERSION} -X main.buildDate=${BUILD_DATE} -X main.gitCommit=${GIT_COMMIT}"
 BUILDFLAGS="-trimpath"
 
-echo -e "${YELLOW}[1/5] Building Master Server...${NC}"
+echo -e "${YELLOW}[1/6] Building Master Server...${NC}"
 cd Master
 go build ${BUILDFLAGS} -ldflags="${LDFLAGS}" -o unkn0wnc2 .
 if [ $? -ne 0 ]; then
@@ -60,12 +150,12 @@ fi
 echo -e "${GREEN}✓ Master server compiled: $(du -h unkn0wnc2 | cut -f1)${NC}"
 echo ""
 
-echo -e "${YELLOW}[2/5] Creating directory structure...${NC}"
+echo -e "${YELLOW}[2/6] Creating directory structure...${NC}"
 mkdir -p /opt/unkn0wnc2/{certs,web,configs,builders,builds/dns-server,builds/client,builds/stager,src}
 echo -e "${GREEN}✓ Created /opt/unkn0wnc2/${NC}"
 echo ""
 
-echo -e "${YELLOW}[3/5] Installing files...${NC}"
+echo -e "${YELLOW}[3/6] Installing files...${NC}"
 
 # Install binary
 install -m 755 unkn0wnc2 /usr/bin/unkn0wnc2
@@ -117,7 +207,7 @@ fi
 cd ..
 echo ""
 
-echo -e "${YELLOW}[4/5] Generating TLS certificates...${NC}"
+echo -e "${YELLOW}[4/6] Generating TLS certificates...${NC}"
 if [ ! -f /opt/unkn0wnc2/certs/master.crt ]; then
     openssl req -x509 -newkey rsa:4096 -nodes \
         -keyout /opt/unkn0wnc2/certs/master.key \
@@ -135,11 +225,40 @@ else
 fi
 echo ""
 
-echo -e "${YELLOW}[5/5] Setting permissions...${NC}"
+echo -e "${YELLOW}[5/6] Setting permissions...${NC}"
 chown -R root:root /opt/unkn0wnc2
 chmod 755 /opt/unkn0wnc2
 chmod 600 /opt/unkn0wnc2/master_config.json
 echo -e "${GREEN}✓ Permissions set${NC}"
+echo ""
+
+echo -e "${YELLOW}[6/6] Verifying builder environment...${NC}"
+
+# Verify source files are in place
+SOURCE_CHECK=true
+for component in Server Client Stager; do
+    if [ ! -d "/opt/unkn0wnc2/src/${component}" ]; then
+        echo -e "${RED}✗ Missing source: ${component}${NC}"
+        SOURCE_CHECK=false
+    else
+        echo -e "${GREEN}✓ Source available: ${component}${NC}"
+    fi
+done
+
+# Verify build directories exist
+for build_type in dns-server client stager; do
+    if [ ! -d "/opt/unkn0wnc2/builds/${build_type}" ]; then
+        echo -e "${RED}✗ Missing build directory: ${build_type}${NC}"
+        SOURCE_CHECK=false
+    fi
+done
+
+if [ "$SOURCE_CHECK" = true ]; then
+    echo -e "${GREEN}✓ Builder environment ready${NC}"
+else
+    echo -e "${RED}✗ Builder environment incomplete${NC}"
+    exit 1
+fi
 echo ""
 
 echo -e "${GREEN}════════════════════════════════════${NC}"
