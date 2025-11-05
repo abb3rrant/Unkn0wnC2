@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -399,20 +400,30 @@ func (mc *MasterClient) ReportStagerProgress(sessionID string, chunkIndex int, s
 		"stager_ip":     stagerIP,
 	}
 
-	respData, err := mc.doRequest("POST", "/api/dns-server/stager/progress", req)
+	// Fire-and-forget with no retries to reduce Master load
+	// Use a short timeout for progress reports
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	jsonData, err := json.Marshal(req)
 	if err != nil {
-		return fmt.Errorf("stager progress report failed: %w", err)
+		return fmt.Errorf("failed to marshal progress request: %w", err)
 	}
 
-	var resp APIResponse
-	if err := json.Unmarshal(respData, &resp); err != nil {
-		return fmt.Errorf("failed to parse stager progress response: %w", err)
+	url := fmt.Sprintf("%s/api/dns-server/stager/progress", mc.masterURL)
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create progress request: %w", err)
 	}
+	httpReq.Header.Set("Content-Type", "application/json")
 
-	if !resp.Success {
-		return fmt.Errorf("stager progress report rejected: %s", resp.Message)
+	resp, err := mc.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("progress report failed: %w", err)
 	}
+	defer resp.Body.Close()
 
+	// Don't even check the response - truly fire-and-forget
 	return nil
 }
 

