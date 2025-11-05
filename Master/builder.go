@@ -744,8 +744,8 @@ func (api *APIServer) storeClientBinaryForStager(binaryPath, filename string, re
 	base64Data := base64.StdEncoding.EncodeToString(compressed)
 	base64Size := len(base64Data)
 
-	// Calculate chunks
-	const chunkSize = 403
+	// Calculate chunks (DNS-safe size)
+	const chunkSize = 370
 	totalChunks := (base64Size + chunkSize - 1) / chunkSize
 
 	// Join DNS domains

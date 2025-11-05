@@ -6,8 +6,9 @@ import "time"
 
 // DNS and Protocol Constants
 const (
-	// DNSChunkSize is the maximum chunk size for DNS transmission (tested maximum)
-	DNSChunkSize = 403
+	// DNSChunkSize is the maximum chunk size for DNS transmission (safe for 512-byte UDP limit)
+	// Calculation: 512 (UDP) - 125 (headers+question) - 6 (CHUNK| prefix) - 10 (TXT overhead) = ~370 bytes
+	DNSChunkSize = 370
 
 	// DNSLabelMaxLength is the maximum length for a single DNS label
 	DNSLabelMaxLength = 62

@@ -289,7 +289,7 @@ func (d *MasterDatabase) migration1InitialSchema() error {
 		original_size INTEGER NOT NULL,
 		compressed_size INTEGER NOT NULL,
 		base64_size INTEGER NOT NULL,
-		chunk_size INTEGER NOT NULL DEFAULT 403,
+		chunk_size INTEGER NOT NULL DEFAULT 370,
 		total_chunks INTEGER NOT NULL,
 		base64_data TEXT NOT NULL,
 		dns_domains TEXT NOT NULL,
@@ -999,7 +999,7 @@ func (d *MasterDatabase) UpsertClientBinary(id, filename, os, arch string, origi
 	_, err := d.db.Exec(`
 		INSERT INTO client_binaries (id, filename, os, arch, original_size, compressed_size, base64_size, 
 			chunk_size, total_chunks, base64_data, dns_domains, created_at, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 403, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 370, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			filename = excluded.filename,
 			os = excluded.os,
@@ -2110,8 +2110,8 @@ func (d *MasterDatabase) GetPendingStagerCaches(dnsServerID string) ([]map[strin
 			return nil, err
 		}
 
-		// Split base64 data into chunks
-		const chunkSize = 403
+		// Split base64 data into chunks (DNS-safe size)
+		const chunkSize = 370
 		var chunks []string
 		for i := 0; i < len(base64Data); i += chunkSize {
 			end := i + chunkSize

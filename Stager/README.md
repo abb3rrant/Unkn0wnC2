@@ -221,11 +221,17 @@ clientMap := map[string]string{
 
 ### Adjusting Chunk Size
 
-Edit `CHUNK_SIZE` in `stager.c` and `chunkSize` in `Server/c2_manager.go`:
+The chunk size is configured to 370 bytes for DNS-safe transmission within the 512-byte UDP limit.
+This value is controlled by the Master server when building the stager. Only modify if you have 
+specific DNS infrastructure requirements:
 
 ```c
-#define CHUNK_SIZE 200  // Smaller = more DNS queries, more reliable
+#define CHUNK_SIZE 370  // DNS-safe for standard 512-byte UDP limit
 ```
+
+**Note**: Chunk size must match across Master (`Master/api.go`, `Master/db.go`, `Master/builder.go`),
+DNS Server (`Server/constants.go`), and Stager (`stager.c`). Smaller values increase reliability 
+but require more DNS queries.
 
 ## License
 
