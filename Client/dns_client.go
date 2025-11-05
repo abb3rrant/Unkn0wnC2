@@ -17,6 +17,7 @@ import (
 type DNSClient struct {
 	config        *Config
 	aesKey        []byte
+	lastDomain    string               // Last domain used (to avoid consecutive repeats)
 	domainIndex   int                  // For round-robin selection
 	failedDomains map[string]time.Time // Tracks temporarily failed domains
 	mutex         sync.RWMutex
@@ -31,6 +32,7 @@ func newDNSClient() *DNSClient {
 	return &DNSClient{
 		config:        &config,
 		aesKey:        aesKey,
+		lastDomain:    "",
 		domainIndex:   0,
 		failedDomains: make(map[string]time.Time),
 	}
@@ -39,6 +41,7 @@ func newDNSClient() *DNSClient {
 // selectDomain chooses a domain based on the configured selection mode
 // Each chunk can go to a different DNS server for distributed load balancing
 // The chunk format contains taskID so Master can reassemble from any server
+// IMPORTANT: Never selects the same domain twice in a row for true Shadow Mesh behavior
 func (c *DNSClient) selectDomain(taskID string) (string, error) {
 	domains := c.config.GetDomains()
 	if len(domains) == 0 {
@@ -47,6 +50,9 @@ func (c *DNSClient) selectDomain(taskID string) (string, error) {
 
 	// Single domain case - no selection needed
 	if len(domains) == 1 {
+		c.mutex.Lock()
+		c.lastDomain = domains[0]
+		c.mutex.Unlock()
 		return domains[0], nil
 	}
 
@@ -63,6 +69,7 @@ func (c *DNSClient) selectDomain(taskID string) (string, error) {
 	// Filter out currently failed domains
 	availableDomains := []string{}
 	c.mutex.RLock()
+	lastUsed := c.lastDomain
 	for _, domain := range domains {
 		if _, failed := c.failedDomains[domain]; !failed {
 			availableDomains = append(availableDomains, domain)
@@ -76,6 +83,21 @@ func (c *DNSClient) selectDomain(taskID string) (string, error) {
 		c.mutex.Lock()
 		c.failedDomains = make(map[string]time.Time)
 		c.mutex.Unlock()
+	}
+
+	// CRITICAL: Exclude last used domain to force rotation (Shadow Mesh)
+	// Only if we have more than one available domain
+	if len(availableDomains) > 1 && lastUsed != "" {
+		filteredDomains := []string{}
+		for _, domain := range availableDomains {
+			if domain != lastUsed {
+				filteredDomains = append(filteredDomains, domain)
+			}
+		}
+		// Only use filtered list if it has domains (edge case: last used was the only working one)
+		if len(filteredDomains) > 0 {
+			availableDomains = filteredDomains
+		}
 	}
 
 	var selectedDomain string
@@ -113,6 +135,11 @@ func (c *DNSClient) selectDomain(taskID string) (string, error) {
 			selectedDomain = availableDomains[n.Int64()]
 		}
 	}
+
+	// Store the selected domain as the last used
+	c.mutex.Lock()
+	c.lastDomain = selectedDomain
+	c.mutex.Unlock()
 
 	// NOTE: Task domain mapping removed to enable proper load balancing
 	// Each chunk can go to a different DNS server for distributed processing
