@@ -1577,7 +1577,7 @@ func (api *APIServer) handleStagerProgress(w http.ResponseWriter, r *http.Reques
 	// Log progress (periodic batching could reduce logs)
 	if req.ChunkIndex%100 == 0 || api.config.Debug {
 		fmt.Printf("[API] 📊 Progress: Chunk %d delivered for session %s via DNS %s\n",
-			req.ChunkIndex, req.SessionID[:16], dnsServerID)
+			req.ChunkIndex, req.SessionID, dnsServerID)
 	}
 
 	api.sendSuccess(w, "progress recorded", nil)
