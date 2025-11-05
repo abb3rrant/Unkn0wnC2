@@ -289,6 +289,8 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 
 	// Build binary to temp location
 	outputPath := filepath.Join(buildDir, "dns-server")
+	fmt.Printf("Building DNS server to: %s\n", outputPath)
+
 	cmd := exec.Command("go", "build", "-trimpath", "-ldflags=-s -w", "-o", outputPath, ".")
 	cmd.Dir = buildDir
 	cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64")
@@ -298,6 +300,21 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 		return "", fmt.Errorf("build failed: %w\nOutput: %s", err, string(output))
 	}
 
+	fmt.Printf("Build command completed. Output: %s\n", string(output))
+
+	// Verify binary was created
+	if _, err := os.Stat(outputPath); os.IsNotExist(err) {
+		// List directory contents for debugging
+		entries, _ := os.ReadDir(buildDir)
+		var fileList []string
+		for _, e := range entries {
+			fileList = append(fileList, e.Name())
+		}
+		return "", fmt.Errorf("build succeeded but binary not found at %s\nDirectory contents: %v\nBuild output: %s",
+			outputPath, fileList, string(output))
+	}
+
+	fmt.Printf("Binary verified at: %s\n", outputPath)
 	return outputPath, nil
 }
 
@@ -371,6 +388,11 @@ func buildClient(req ClientBuildRequest, sourceRoot string) (string, error) {
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("build failed: %w\nOutput: %s", err, string(output))
+	}
+
+	// Verify binary was created
+	if _, err := os.Stat(outputPath); os.IsNotExist(err) {
+		return "", fmt.Errorf("build succeeded but binary not found at %s\nBuild output: %s", outputPath, string(output))
 	}
 
 	return outputPath, nil
