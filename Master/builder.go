@@ -333,9 +333,23 @@ func (api *APIServer) handleBuildStager(w http.ResponseWriter, r *http.Request) 
 	// Find the most recent client binary for this platform
 	clientBinaryID := ""
 	if req.ClientBinaryID != "" {
-		clientBinaryID = req.ClientBinaryID
-	} else {
-		// Auto-select most recent beacon for this platform
+		// The web UI sends the filename (e.g., "beacon-linux-1762375819")
+		// We need to look it up in the database to get the actual ID
+		clientBinaries, err := api.db.GetClientBinaries()
+		if err == nil {
+			for _, binary := range clientBinaries {
+				if filename, ok := binary["filename"].(string); ok && filename == req.ClientBinaryID {
+					if id, ok := binary["id"].(string); ok {
+						clientBinaryID = id
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// If still not found, auto-select most recent beacon for this platform
+	if clientBinaryID == "" {
 		clientBinaries, err := api.db.GetClientBinaries()
 		if err == nil {
 			for _, binary := range clientBinaries {
