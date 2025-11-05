@@ -64,6 +64,7 @@ type CheckinResponse struct {
 	Success       bool              `json:"success"`
 	Message       string            `json:"message"`
 	PendingCaches []StagerCacheTask `json:"pending_caches,omitempty"` // Stager chunks to cache
+	DomainUpdates []string          `json:"domain_updates,omitempty"` // New domains to add
 }
 
 type StagerCacheTask struct {
@@ -184,8 +185,8 @@ func (mc *MasterClient) doRequest(method, endpoint string, body interface{}) ([]
 }
 
 // Checkin sends a heartbeat to the Master Server
-// Returns any pending stager cache tasks
-func (mc *MasterClient) Checkin(stats map[string]interface{}) ([]StagerCacheTask, error) {
+// Returns any pending stager cache tasks and domain updates
+func (mc *MasterClient) Checkin(stats map[string]interface{}) ([]StagerCacheTask, []string, error) {
 	req := CheckinRequest{
 		DNSServerID: mc.serverID,
 		APIKey:      mc.apiKey,
@@ -195,16 +196,16 @@ func (mc *MasterClient) Checkin(stats map[string]interface{}) ([]StagerCacheTask
 
 	respData, err := mc.doRequest("POST", "/api/dns-server/checkin", req)
 	if err != nil {
-		return nil, fmt.Errorf("checkin failed: %w", err)
+		return nil, nil, fmt.Errorf("checkin failed: %w", err)
 	}
 
 	var resp CheckinResponse
 	if err := json.Unmarshal(respData, &resp); err != nil {
-		return nil, fmt.Errorf("failed to parse checkin response: %w", err)
+		return nil, nil, fmt.Errorf("failed to parse checkin response: %w", err)
 	}
 
 	if !resp.Success {
-		return nil, fmt.Errorf("checkin rejected: %s", resp.Message)
+		return nil, nil, fmt.Errorf("checkin rejected: %s", resp.Message)
 	}
 
 	mc.checkinMutex.Lock()
@@ -214,12 +215,14 @@ func (mc *MasterClient) Checkin(stats map[string]interface{}) ([]StagerCacheTask
 	if mc.debug {
 		if len(resp.PendingCaches) > 0 {
 			logf("[Master Client] Checkin successful - %d pending cache tasks", len(resp.PendingCaches))
+		} else if len(resp.DomainUpdates) > 0 {
+			logf("[Master Client] Checkin successful - domain update received: %v", resp.DomainUpdates)
 		} else {
 			logf("[Master Client] Checkin successful")
 		}
 	}
 
-	return resp.PendingCaches, nil
+	return resp.PendingCaches, resp.DomainUpdates, nil
 }
 
 // ReportBeacon reports a new or updated beacon to the Master Server
@@ -428,12 +431,12 @@ func (mc *MasterClient) ReportStagerProgress(sessionID string, chunkIndex int, s
 }
 
 // StartPeriodicCheckin starts a background goroutine for periodic check-ins
-func (mc *MasterClient) StartPeriodicCheckin(interval time.Duration, statsFn func() map[string]interface{}, cacheHandler func([]StagerCacheTask)) {
+func (mc *MasterClient) StartPeriodicCheckin(interval time.Duration, statsFn func() map[string]interface{}, cacheHandler func([]StagerCacheTask), domainHandler func([]string)) {
 	ticker := time.NewTicker(interval)
 	go func() {
 		for range ticker.C {
 			stats := statsFn()
-			cacheTasks, err := mc.Checkin(stats)
+			cacheTasks, domainUpdates, err := mc.Checkin(stats)
 			if err != nil {
 				if mc.debug {
 					logf("[Master Client] Checkin error: %v", err)
@@ -444,6 +447,11 @@ func (mc *MasterClient) StartPeriodicCheckin(interval time.Duration, statsFn fun
 			// Process any pending cache tasks
 			if len(cacheTasks) > 0 && cacheHandler != nil {
 				cacheHandler(cacheTasks)
+			}
+
+			// Process any domain updates
+			if len(domainUpdates) > 0 && domainHandler != nil {
+				domainHandler(domainUpdates)
 			}
 		}
 	}()

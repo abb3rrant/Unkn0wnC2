@@ -206,8 +206,8 @@
         }
 
         .progress-bar {
-            width: 200px;
-            height: 20px;
+            width: 250px;
+            height: 24px;
             background: rgba(0, 0, 0, 0.5);
             border: 1px solid rgba(255, 51, 51, 0.3);
             border-radius: 4px;
@@ -226,7 +226,7 @@
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            font-size: 10px;
+            font-size: 11px;
             font-weight: bold;
             color: #fff;
             text-shadow: 0 0 3px #000;
@@ -345,6 +345,10 @@
                 <div class="stat-label">Success Rate</div>
                 <div class="stat-value" id="statSuccessRate">0%</div>
             </div>
+            <div class="stat-card">
+                <div class="stat-label">Avg Speed</div>
+                <div class="stat-value" id="statAvgSpeed">0</div>
+            </div>
         </div>
 
         <!-- Sessions Table -->
@@ -357,14 +361,15 @@
                         <th>OS/Arch</th>
                         <th>Progress</th>
                         <th>Status</th>
+                        <th>Speed</th>
+                        <th>ETA</th>
                         <th>DNS Server</th>
                         <th>Started</th>
-                        <th>Duration</th>
                     </tr>
                 </thead>
                 <tbody id="sessionsTableBody">
                     <tr>
-                        <td colspan="8" class="empty-state">
+                        <td colspan="9" class="empty-state">
                             <div class="empty-state-icon">⏳</div>
                             <div>Loading stager sessions...</div>
                         </td>
@@ -442,11 +447,24 @@
                 const active = sessions.filter(s => !s.completed).length;
                 const completed = sessions.filter(s => s.completed).length;
                 const successRate = total > 0 ? Math.round((completed / total) * 100) : 0;
+                
+                // Calculate average speed from completed sessions
+                let avgSpeed = 0;
+                const completedSessions = sessions.filter(s => s.completed && s.completed_at);
+                if (completedSessions.length > 0) {
+                    const totalSpeed = completedSessions.reduce((sum, s) => {
+                        const duration = s.completed_at - s.created_at;
+                        const speed = duration > 0 ? s.total_chunks / duration : 0;
+                        return sum + speed;
+                    }, 0);
+                    avgSpeed = (totalSpeed / completedSessions.length).toFixed(1);
+                }
 
                 document.getElementById('statTotal').textContent = total;
                 document.getElementById('statActive').textContent = active;
                 document.getElementById('statCompleted').textContent = completed;
                 document.getElementById('statSuccessRate').textContent = successRate + '%';
+                document.getElementById('statAvgSpeed').textContent = avgSpeed > 0 ? avgSpeed + ' ch/s' : 'N/A';
 
                 // Update table
                 const tbody = document.getElementById('sessionsTableBody');
@@ -454,7 +472,7 @@
                 if (sessions.length === 0) {
                     tbody.innerHTML = `
                         <tr>
-                            <td colspan="8" class="empty-state">
+                            <td colspan="9" class="empty-state">
                                 <div class="empty-state-icon">📭</div>
                                 <div>No stager sessions yet</div>
                                 <div style="margin-top: 10px; color: #666; font-size: 12px;">
@@ -481,25 +499,44 @@
                     
                     const started = new Date(session.created_at * 1000).toLocaleString();
                     
-                    const duration = session.completed_at 
-                        ? formatDuration((session.completed_at - session.created_at) * 1000)
-                        : formatDuration((Date.now() - session.created_at * 1000));
+                    // Calculate speed and ETA
+                    const elapsedSeconds = session.completed_at 
+                        ? (session.completed_at - session.created_at)
+                        : (Date.now() / 1000 - session.created_at);
+                    
+                    const chunksPerSecond = elapsedSeconds > 0 
+                        ? (session.chunks_delivered / elapsedSeconds)
+                        : 0;
+                    
+                    const speed = chunksPerSecond > 0 
+                        ? `${chunksPerSecond.toFixed(1)} ch/s`
+                        : 'N/A';
+                    
+                    let eta = 'N/A';
+                    if (!session.completed && chunksPerSecond > 0 && session.chunks_delivered > 0) {
+                        const remainingChunks = session.total_chunks - session.chunks_delivered;
+                        const etaSeconds = Math.round(remainingChunks / chunksPerSecond);
+                        eta = formatDuration(etaSeconds * 1000);
+                    } else if (session.completed) {
+                        eta = 'Done ✓';
+                    }
 
                     return `
                         <tr>
-                            <td><code style="color: #ff3333;">${session.id.substring(0, 16)}...</code></td>
+                            <td><code style="color: #ff3333;">${session.id}</code></td>
                             <td>${session.stager_ip}</td>
                             <td>${session.os}/${session.arch}</td>
                             <td>
                                 <div class="progress-bar">
                                     <div class="progress-fill" style="width: ${progress}%"></div>
-                                    <div class="progress-text">${session.chunks_delivered}/${session.total_chunks}</div>
+                                    <div class="progress-text">${session.chunks_delivered}/${session.total_chunks} (${progress}%)</div>
                                 </div>
                             </td>
                             <td><span class="status-badge ${statusClass}">${status}</span></td>
+                            <td style="color: ${chunksPerSecond > 0 ? '#00ff00' : '#666'};">${speed}</td>
+                            <td style="color: ${session.completed ? '#00ff00' : '#ffa500'};">${eta}</td>
                             <td>${session.initiated_by_dns || 'N/A'}</td>
                             <td style="font-size: 11px;">${started}</td>
-                            <td>${duration}</td>
                         </tr>
                     `;
                 }).join('');

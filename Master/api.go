@@ -698,8 +698,8 @@ func (api *APIServer) handleDNSServerCheckin(w http.ResponseWriter, r *http.Requ
 	// If this is the first checkin, broadcast domain list to all beacons
 	if isFirstCheckin {
 		go func() {
-			// Get all enabled DNS domains
-			domains, err := api.db.GetEnabledDNSDomains()
+			// Get all active DNS domains
+			domains, err := api.db.GetAllActiveDomains()
 			if err != nil {
 				if api.config.Debug {
 					fmt.Printf("[Master] Failed to get DNS domains: %v\n", err)
@@ -707,31 +707,55 @@ func (api *APIServer) handleDNSServerCheckin(w http.ResponseWriter, r *http.Requ
 				return
 			}
 
-			// Create broadcast task with domain list as JSON
-			domainsJSON, _ := json.Marshal(domains)
-			command := fmt.Sprintf("update_domains:%s", string(domainsJSON))
-
-			err = api.db.CreateBroadcastTask(command, "system")
+			// Queue domain updates for ALL DNS servers (not just new one)
+			// This ensures all beacons get the updated domain list
+			allServers, err := api.db.GetAllDNSServers()
 			if err != nil {
 				if api.config.Debug {
-					fmt.Printf("[Master] Failed to create broadcast task: %v\n", err)
+					fmt.Printf("[Master] Failed to get DNS servers: %v\n", err)
 				}
 				return
 			}
 
-			if api.config.Debug {
-				fmt.Printf("[Master] 🔄 Broadcasting domain update to all beacons (new server: %s)\n", dnsServerID)
-				fmt.Printf("[Master] Updated domains: %v\n", domains)
+			for _, server := range allServers {
+				serverID := server["id"].(string)
+				if err := api.db.QueueDomainUpdate(serverID, domains); err != nil {
+					if api.config.Debug {
+						fmt.Printf("[Master] ⚠️  Failed to queue domain update for %s: %v\n", serverID, err)
+					}
+				}
 			}
+
+			fmt.Printf("[Master] 🔄 Queued domain updates for %d DNS servers (new server joined: %s)\n", len(allServers), dnsServerID)
+			fmt.Printf("[Master] Updated domain list: %v\n", domains)
 		}()
 	}
 
-	// Send response with pending caches
+	// Check for pending domain updates
+	pendingDomains, err := api.db.GetPendingDomainUpdates(dnsServerID)
+	if err != nil {
+		if api.config.Debug {
+			fmt.Printf("[API] ⚠️  Failed to get pending domain updates: %v\n", err)
+		}
+		pendingDomains = nil
+	}
+
+	// If domain updates exist, mark them as delivered
+	if len(pendingDomains) > 0 {
+		if err := api.db.MarkDomainUpdateDelivered(dnsServerID); err != nil {
+			fmt.Printf("[API] ⚠️  Failed to mark domain updates as delivered: %v\n", err)
+		} else {
+			fmt.Printf("[API] 🌐 Sent domain update to DNS server %s: %v\n", dnsServerID, pendingDomains)
+		}
+	}
+
+	// Send response with pending caches and domain updates
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success":        true,
 		"message":        "check-in recorded",
 		"pending_caches": cacheTasks,
+		"domain_updates": pendingDomains,
 		"data": map[string]interface{}{
 			"dns_server_id":    dnsServerID,
 			"timestamp":        time.Now(),
