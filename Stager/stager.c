@@ -864,12 +864,13 @@ static int send_dns_message(const char *message, const char *target_domain, char
                     }
                 }
                 
-                if (is_valid) {
-                    return 0;
-                } else {
-    DEBUG_PRINT("[!] Decoded data contains non-printable characters, using raw response\n");
-                    // Fall through to use raw response
+                if (!is_valid) {
+    DEBUG_PRINT("[!] WARNING: Decoded data contains non-printable characters\n");
                 }
+                
+                // Return the decoded data regardless of printability check
+                // The data should be valid if base36_decode succeeded
+                return 0;
             } else if (decoded_len == 0) {
                 // Maybe it's a plain text error response
                 strncpy(response, txt_response, response_size - 1);
