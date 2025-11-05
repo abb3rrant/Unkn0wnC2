@@ -49,7 +49,7 @@ type StagerBuildRequest struct {
 
 // Web UI handler for builder page
 func (api *APIServer) handleBuilderPage(w http.ResponseWriter, r *http.Request) {
-	http.ServeFile(w, r, "./web/builder.html")
+	http.ServeFile(w, r, filepath.Join(api.config.WebRoot, "builder.html"))
 }
 
 // handleBuildDNSServer builds a DNS server binary with provided configuration

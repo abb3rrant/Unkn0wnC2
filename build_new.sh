@@ -87,9 +87,10 @@ if [ ! -f /opt/unkn0wnc2/master_config.json ]; then
   "bind_port": 8443,
   "tls_cert": "/opt/unkn0wnc2/certs/master.crt",
   "tls_key": "/opt/unkn0wnc2/certs/master.key",
+  "database_path": "/opt/unkn0wnc2/master.db",
+  "web_root": "/opt/unkn0wnc2/web",
   "jwt_secret": "${JWT_SECRET}",
   "session_timeout": 480,
-  "database_path": "/opt/unkn0wnc2/master.db",
   "admin_credentials": {
     "username": "admin",
     "password": "${ADMIN_PASSWORD}"

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -799,7 +800,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 
 	// Serve static files (CSS, JS, images)
 	router.PathPrefix("/web/static/").Handler(
-		http.StripPrefix("/web/static/", http.FileServer(http.Dir("./web/static"))),
+		http.StripPrefix("/web/static/", http.FileServer(http.Dir(filepath.Join(api.config.WebRoot, "static")))),
 	)
 
 	// Public API endpoints (no auth required)
@@ -850,13 +851,13 @@ func (api *APIServer) handleRoot(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *APIServer) handleLoginPage(w http.ResponseWriter, r *http.Request) {
-	http.ServeFile(w, r, "./web/login.html")
+	http.ServeFile(w, r, filepath.Join(api.config.WebRoot, "login.html"))
 }
 
 func (api *APIServer) handleDashboardPage(w http.ResponseWriter, r *http.Request) {
-	http.ServeFile(w, r, "./web/dashboard.html")
+	http.ServeFile(w, r, filepath.Join(api.config.WebRoot, "dashboard.html"))
 }
 
 func (api *APIServer) handleBeaconPage(w http.ResponseWriter, r *http.Request) {
-	http.ServeFile(w, r, "./web/beacon.html")
+	http.ServeFile(w, r, filepath.Join(api.config.WebRoot, "beacon.html"))
 }
