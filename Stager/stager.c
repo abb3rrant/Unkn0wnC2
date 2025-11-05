@@ -29,6 +29,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <time.h>
+#include <ctype.h>
 #include <errno.h>
 
 #ifdef _WIN32
@@ -225,73 +226,73 @@ static size_t base36_decode(const char *input, unsigned char *output, size_t out
     size_t input_len = strlen(input);
     if (input_len == 0) return 0;
     
-    // Initialize big number as array of bytes (big-endian)
-    unsigned char bytes[512] = {0};
-    size_t bytes_len = 0;
+    // Initialize result as zero
+    unsigned char result[512] = {0};
+    size_t result_len = 1; // Start with one zero byte
     
     // Process each base36 digit from left to right
     for (size_t i = 0; i < input_len; i++) {
-        char c = input[i];
+        char c = tolower(input[i]); // Convert to lowercase for case-insensitive processing
         unsigned int digit;
         
-        // Convert character to digit value
+        // Convert character to digit value (0-35)
         if (c >= '0' && c <= '9') {
             digit = c - '0';
         } else if (c >= 'a' && c <= 'z') {
             digit = c - 'a' + 10;
-        } else if (c >= 'A' && c <= 'Z') {
-            digit = c - 'A' + 10;
         } else {
             continue; // Skip invalid characters
         }
         
-        // Multiply entire number by 36 (big-endian, process right to left)
+        // Multiply entire result by 36 and add new digit
         unsigned int carry = digit;
-        for (int j = bytes_len - 1; j >= 0; j--) {
-            unsigned int val = bytes[j] * 36 + carry;
-            bytes[j] = val & 0xFF;
-            carry = val >> 8;
+        
+        // Process from least significant byte (right) to most significant (left)
+        for (int j = result_len - 1; j >= 0; j--) {
+            unsigned int temp = result[j] * 36 + carry;
+            result[j] = temp & 0xFF;
+            carry = temp >> 8;
         }
         
-        // If there's still carry, shift everything right and add it at the front
-        if (carry > 0) {
-            if (bytes_len >= sizeof(bytes)) {
+        // If there's carry, need to extend the result
+        while (carry > 0) {
+            if (result_len >= sizeof(result)) {
                 return 0; // Overflow
             }
-            // Shift all bytes right
-            for (int j = bytes_len; j > 0; j--) {
-                bytes[j] = bytes[j - 1];
+            
+            // Shift all bytes right to make room at the front
+            for (int j = result_len; j > 0; j--) {
+                result[j] = result[j - 1];
             }
-            bytes[0] = carry;
-            bytes_len++;
-        }
-        
-        // If this is the first digit and bytes_len is still 0, initialize
-        if (bytes_len == 0 && digit > 0) {
-            bytes[0] = digit;
-            bytes_len = 1;
+            result[0] = carry & 0xFF;
+            carry >>= 8;
+            result_len++;
         }
     }
     
-    // Strip leading zeros
+    // Find the first non-zero byte (strip leading zeros)
     size_t start = 0;
-    while (start < bytes_len && bytes[start] == 0) {
+    while (start < result_len && result[start] == 0) {
         start++;
     }
     
-    // Copy result to output (already in big-endian format)
-    size_t result_len = bytes_len - start;
-    if (result_len == 0) {
-        result_len = 1;
-        bytes[0] = 0;
+    // Handle the all-zeros case
+    if (start >= result_len) {
+        if (output_size > 0) {
+            output[0] = 0;
+            return 1;
+        }
+        return 0;
     }
     
-    if (result_len > output_size) {
-        result_len = output_size;
+    // Copy result to output
+    size_t final_len = result_len - start;
+    if (final_len > output_size) {
+        final_len = output_size;
     }
     
-    memcpy(output, bytes + start, result_len);
-    return result_len;
+    memcpy(output, result + start, final_len);
+    return final_len;
 }
 
 /*
@@ -780,7 +781,25 @@ static int send_dns_message(const char *message, const char *target_domain, char
                 memcpy(response, decoded, decoded_len);
                 response[decoded_len] = '\0';
     DEBUG_PRINT("[*] Decoded response: %s\n", response);
-                return 0;
+                
+                // Verify it's printable ASCII before accepting
+                int is_valid = 1;
+                for (size_t i = 0; i < decoded_len; i++) {
+                    if (decoded[i] < 32 || decoded[i] > 126) {
+                        if (decoded[i] != 0) { // Allow null terminator
+    DEBUG_PRINT("[!] Non-printable byte at position %zu: 0x%02X\n", i, decoded[i]);
+                            is_valid = 0;
+                            break;
+                        }
+                    }
+                }
+                
+                if (is_valid) {
+                    return 0;
+                } else {
+    DEBUG_PRINT("[!] Decoded data contains non-printable characters, using raw response\n");
+                    // Fall through to use raw response
+                }
             } else if (decoded_len == 0) {
                 // Maybe it's a plain text error response
                 strncpy(response, txt_response, response_size - 1);
