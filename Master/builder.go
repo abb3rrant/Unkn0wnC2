@@ -107,7 +107,9 @@ func (api *APIServer) handleBuildDNSServer(w http.ResponseWriter, r *http.Reques
 		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("build failed: %v", err))
 		return
 	}
-	defer os.Remove(binaryPath)
+	// Clean up build directory (which contains the binary) after we're done with everything
+	buildDir := filepath.Dir(binaryPath)
+	defer os.RemoveAll(buildDir)
 
 	// Register DNS server in database ONLY after successful build
 	err = api.db.RegisterDNSServer(serverID, req.Domain, req.ServerAddress, apiKey)
@@ -160,7 +162,9 @@ func (api *APIServer) handleBuildClient(w http.ResponseWriter, r *http.Request) 
 		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("build failed: %v", err))
 		return
 	}
-	defer os.Remove(binaryPath)
+	// Clean up build directory after we're done
+	buildDir := filepath.Dir(binaryPath)
+	defer os.RemoveAll(buildDir)
 
 	// Save binary to builds directory
 	ext := ""
@@ -209,7 +213,8 @@ func (api *APIServer) handleBuildStager(w http.ResponseWriter, r *http.Request) 
 		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("build failed: %v", err))
 		return
 	}
-	defer os.Remove(binaryPath)
+	buildDir := filepath.Dir(binaryPath)
+	defer os.RemoveAll(buildDir)
 
 	// Save binary to builds directory
 	ext := ""
@@ -245,7 +250,7 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 	if err != nil {
 		return "", fmt.Errorf("failed to create build directory: %w", err)
 	}
-	defer os.RemoveAll(buildDir)
+	// NOTE: Caller is responsible for cleanup of buildDir
 
 	// Copy Server source files to build directory
 	serverSrcDir := filepath.Join(api.config.SourceDir, "Server")
@@ -325,7 +330,7 @@ func buildClient(req ClientBuildRequest, sourceRoot string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to create build directory: %w", err)
 	}
-	defer os.RemoveAll(buildDir)
+	// NOTE: Caller is responsible for cleanup of buildDir
 
 	// Copy Client source files
 	clientSrcDir := filepath.Join(sourceRoot, "Client")
@@ -406,7 +411,7 @@ func buildStager(req StagerBuildRequest, sourceRoot string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to create build directory: %w", err)
 	}
-	defer os.RemoveAll(buildDir)
+	// NOTE: Caller is responsible for cleanup of buildDir
 
 	// Copy Stager source files
 	stagerSrcDir := filepath.Join(sourceRoot, "Stager")
