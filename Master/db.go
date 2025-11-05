@@ -974,6 +974,28 @@ func (d *MasterDatabase) CreateStagerSession(id, stagerIP, os, arch, clientBinar
 	return err
 }
 
+// UpsertClientBinary inserts or updates a client binary record (for filesystem-loaded beacons)
+func (d *MasterDatabase) UpsertClientBinary(id, filename, os, arch string, originalSize, compressedSize, base64Size int) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	now := time.Now().Unix()
+
+	_, err := d.db.Exec(`
+		INSERT INTO client_binaries (id, filename, os, arch, original_size, compressed_size, base64_size, created_at, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			filename = excluded.filename,
+			os = excluded.os,
+			arch = excluded.arch,
+			original_size = excluded.original_size,
+			compressed_size = excluded.compressed_size,
+			base64_size = excluded.base64_size
+	`, id, filename, os, arch, originalSize, compressedSize, base64Size, now, "filesystem")
+
+	return err
+}
+
 // GetStagerSession retrieves a stager session by ID
 func (d *MasterDatabase) GetStagerSession(sessionID string) (map[string]interface{}, error) {
 	d.mutex.RLock()
