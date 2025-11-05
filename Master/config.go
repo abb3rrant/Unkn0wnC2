@@ -44,9 +44,9 @@ func DefaultConfig() Config {
 	return Config{
 		BindAddr:       "0.0.0.0",
 		BindPort:       8443, // 8443 for non-root, 443 for production with proper permissions
-		TLSCert:        "certs/master.crt",
-		TLSKey:         "certs/master.key",
-		DatabasePath:   "master.db",
+		TLSCert:        "/opt/unkn0wnc2/certs/master.crt",
+		TLSKey:         "/opt/unkn0wnc2/certs/master.key",
+		DatabasePath:   "/opt/unkn0wnc2/master.db",
 		Debug:          false,
 		JWTSecret:      "CHANGE_THIS_SECRET_IN_PRODUCTION",
 		SessionTimeout: 60,
@@ -60,13 +60,16 @@ func DefaultConfig() Config {
 
 // LoadConfig attempts to load configuration from a JSON file or environment
 // Falls back to defaults if file not present
-func LoadConfig() (Config, error) {
+func LoadConfig(configPath string) (Config, error) {
 	cfg := DefaultConfig()
 
-	// Check for config file path from environment
-	path := os.Getenv("MASTER_CONFIG")
+	// Use provided path, or check environment, or use default
+	path := configPath
 	if path == "" {
-		path = "master_config.json"
+		path = os.Getenv("MASTER_CONFIG")
+		if path == "" {
+			path = "master_config.json"
+		}
 	}
 
 	// Try to read config file

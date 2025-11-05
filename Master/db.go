@@ -921,7 +921,7 @@ func (d *MasterDatabase) CreateTask(beaconID, command, createdBy string) (string
 	err := d.db.QueryRow(`
 		SELECT dns_server_id FROM beacons WHERE id = ? AND status = 'active'
 	`, beaconID).Scan(&dnsServerID)
-	
+
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return "", fmt.Errorf("beacon not found or inactive")
@@ -995,7 +995,7 @@ func (d *MasterDatabase) GetAllTasks(limit int) ([]map[string]interface{}, error
 		LEFT JOIN beacons b ON t.beacon_id = b.id
 		ORDER BY t.created_at DESC
 	`
-	
+
 	if limit > 0 {
 		query += fmt.Sprintf(" LIMIT %d", limit)
 	}
@@ -1121,7 +1121,7 @@ func (d *MasterDatabase) MarkTasksSent(taskIDs []string) error {
 	placeholders := make([]string, len(taskIDs))
 	args := make([]interface{}, len(taskIDs)+1)
 	args[0] = now
-	
+
 	for i, taskID := range taskIDs {
 		placeholders[i] = "?"
 		args[i+1] = taskID
@@ -1168,7 +1168,7 @@ func (d *MasterDatabase) GetTaskProgress(taskID string) (map[string]interface{},
 	// Get overall progress - sum all received chunks from different servers
 	var totalReceived, totalExpected int
 	var status string
-	
+
 	err := d.db.QueryRow(`
 		SELECT 
 			COALESCE(SUM(received_chunks), 0) as total_received,
@@ -1261,7 +1261,7 @@ func (d *MasterDatabase) GetTaskProgressFromResults(taskID string) (map[string]i
 			SELECT MAX(total_chunks) FROM task_progress
 			WHERE task_id = ? AND total_chunks > 0
 		`, taskID).Scan(&progressTotal)
-		
+
 		if err == nil && progressTotal.Valid && progressTotal.Int64 > 0 {
 			totalExpected = progressTotal
 		}
@@ -1322,7 +1322,7 @@ func (d *MasterDatabase) markTaskCompleted(taskID string) {
 		SET status = 'completed', completed_at = ?
 		WHERE id = ? AND status != 'completed'
 	`, now, taskID)
-	
+
 	if err != nil {
 		fmt.Printf("[Master DB] Error marking task %s as completed: %v\n", taskID, err)
 	}

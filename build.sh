@@ -1,5 +1,21 @@
 #!/bin/bash
 #
+# ⚠️  LEGACY BUILD SCRIPT - DEPRECATED ⚠️
+#
+# This is the legacy build script. For production deployments, use:
+#
+#   sudo bash build_new.sh
+#
+# The new installer provides:
+#   ✅ Package-style installation (/opt/unkn0wnc2/)
+#   ✅ Auto-generated secure credentials
+#   ✅ Web-based component builder
+#   ✅ Runtime configuration (--bind-addr, --bind-port)
+#
+# This legacy script is kept for backward compatibility and development builds.
+#
+# ---
+#
 # Production Build Script for Unkn0wnC2 DNS C2 Framework
 # 
 # This script builds optimized, stripped binaries for production deployment:

@@ -39,6 +39,33 @@ This software is provided for educational and authorized security testing purpos
 
 ## 🚀 Quick Deployment
 
+**NEW: Package-Style Installation with Web-Based Builder**
+
+### Installation (Production)
+```bash
+sudo bash build_new.sh
+```
+This will:
+- ✅ Compile and install Master to `/opt/unkn0wnc2/`
+- ✅ Auto-generate secure credentials (displayed once)
+- ✅ Create TLS certificates
+- ✅ Install to `/usr/bin/unkn0wnc2`
+
+**Save the admin password!** Then start:
+```bash
+unkn0wnc2 --bind-addr 0.0.0.0 --bind-port 8443
+```
+
+Access web UI: `https://<server-ip>:8443/`  
+Build components (DNS servers, clients, stagers) through the web interface.
+
+📖 **See [QUICKSTART.md](QUICKSTART.md) for step-by-step guide**  
+📖 **See [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md) for full documentation**
+
+---
+
+### Legacy Build (Manual)
+
 ### 1. 🌐 Domain Setup
 Configure NS records at registrar:
 ```
@@ -47,7 +74,7 @@ ns2.yourdomain.net  →  YOUR_SERVER_IP
 ```
 Add glue records at registrar, verify: `dig @8.8.8.8 NS yourdomain.net`
 
-### 2. 🔨 Build
+### 2. 🔨 Build (Legacy)
 ```bash
 # Generate unique encryption key
 openssl rand -base64 32

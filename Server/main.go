@@ -475,6 +475,7 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 func main() {
 	// Parse command line flags
 	debugFlag := flag.Bool("d", false, "Enable debug mode (overrides config)")
+	bindAddrFlag := flag.String("bind-addr", "", "Override bind address (e.g., 0.0.0.0)")
 	flag.Parse()
 
 	// Load configuration (from config.json or DNS_CONFIG env var)
@@ -483,9 +484,12 @@ func main() {
 		panic(fmt.Sprintf("failed to load config: %v", err))
 	}
 
-	// Command line flag overrides config file
+	// Command line flags override config file
 	if *debugFlag {
 		cfg.Debug = true
+	}
+	if *bindAddrFlag != "" {
+		cfg.BindAddr = *bindAddrFlag
 	}
 	debugMode = cfg.Debug
 

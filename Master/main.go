@@ -29,7 +29,9 @@ func main() {
 	// Parse command line flags
 	debugFlag := flag.Bool("debug", false, "Enable debug mode")
 	generateConfig := flag.Bool("generate-config", false, "Generate example configuration file")
-	configPath := flag.String("config", "master_config.json", "Path to configuration file")
+	configPath := flag.String("config", "/opt/unkn0wnc2/master_config.json", "Path to configuration file")
+	bindAddr := flag.String("bind-addr", "", "Override bind address (e.g., 0.0.0.0 or 192.168.1.100)")
+	bindPort := flag.Int("bind-port", 0, "Override bind port (e.g., 8443)")
 	flag.Parse()
 
 	// Generate example config and exit if requested
@@ -47,15 +49,23 @@ func main() {
 	printBanner()
 
 	// Load configuration
-	cfg, err := LoadConfig()
+	cfg, err := LoadConfig(*configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Override debug mode from command line
+	// Override with command line flags
 	if *debugFlag {
 		cfg.Debug = true
+	}
+	if *bindAddr != "" {
+		cfg.BindAddr = *bindAddr
+		fmt.Printf("✓ Overriding bind address: %s\n", *bindAddr)
+	}
+	if *bindPort != 0 {
+		cfg.BindPort = *bindPort
+		fmt.Printf("✓ Overriding bind port: %d\n", *bindPort)
 	}
 
 	// Validate configuration
