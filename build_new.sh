@@ -61,7 +61,7 @@ echo -e "${GREEN}✓ Master server compiled: $(du -h unkn0wnc2 | cut -f1)${NC}"
 echo ""
 
 echo -e "${YELLOW}[2/5] Creating directory structure...${NC}"
-mkdir -p /opt/unkn0wnc2/{certs,web,configs,builders}
+mkdir -p /opt/unkn0wnc2/{certs,web,configs,builders,builds/dns-server,builds/client,builds/stager,src}
 echo -e "${GREEN}✓ Created /opt/unkn0wnc2/${NC}"
 echo ""
 
@@ -74,6 +74,12 @@ echo -e "${GREEN}✓ Installed binary to /usr/bin/unkn0wnc2${NC}"
 # Copy web files
 cp -r web/* /opt/unkn0wnc2/web/
 echo -e "${GREEN}✓ Copied web interface files${NC}"
+
+# Copy source files for building components
+cd ..
+cp -r Server Client Stager /opt/unkn0wnc2/src/
+echo -e "${GREEN}✓ Copied source files for builder${NC}"
+cd Master
 
 # Generate secure credentials
 JWT_SECRET=$(openssl rand -hex 32)
@@ -89,6 +95,7 @@ if [ ! -f /opt/unkn0wnc2/master_config.json ]; then
   "tls_key": "/opt/unkn0wnc2/certs/master.key",
   "database_path": "/opt/unkn0wnc2/master.db",
   "web_root": "/opt/unkn0wnc2/web",
+  "source_dir": "/opt/unkn0wnc2/src",
   "jwt_secret": "${JWT_SECRET}",
   "session_timeout": 480,
   "admin_credentials": {

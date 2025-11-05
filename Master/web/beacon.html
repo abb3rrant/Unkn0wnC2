@@ -4,7 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Beacon Management - Unkn0wnC2</title>
-    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=ITC+Benguiat:wght@400;700&display=swap" rel="stylesheet">
     <style>
         * {
             margin: 0;
@@ -13,27 +15,30 @@
         }
 
         body {
-            font-family: 'Courier New', monospace;
-            background: #000;
-            color: #fff;
-            padding: 20px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
         }
 
         .navbar {
-            background: rgba(20, 20, 20, 0.9);
+            background: rgba(20, 20, 20, 0.95);
+            border-bottom: 1px solid #333;
             padding: 15px 30px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            border-bottom: 2px solid #ff3333;
-            margin-bottom: 30px;
+            position: sticky;
+            top: 0;
+            z-index: 1000;
         }
 
         .navbar-brand {
-            font-family: 'Bebas Neue', sans-serif;
             font-size: 32px;
+            font-weight: 700;
             color: #ff3333;
-            letter-spacing: 3px;
+            text-shadow: 0 0 10px rgba(255, 51, 51, 0.5);
+            font-family: 'Bebas Neue', 'Impact', sans-serif;
+            letter-spacing: 4px;
         }
 
         .navbar-right {
@@ -97,22 +102,25 @@
         .container {
             max-width: 1400px;
             margin: 0 auto;
+            padding: 40px 30px;
         }
 
         .beacon-header {
-            background: rgba(20, 20, 20, 0.6);
-            border: 1px solid rgba(255, 51, 51, 0.3);
+            background: rgba(30, 30, 30, 0.8);
+            border: 1px solid rgba(255, 51, 51, 0.2);
             border-radius: 8px;
-            padding: 20px;
+            padding: 25px;
             margin-bottom: 30px;
         }
 
         .beacon-title {
-            font-family: 'Bebas Neue', sans-serif;
-            font-size: 28px;
+            font-family: 'Bebas Neue', 'Arial Narrow', sans-serif;
+            font-size: 36px;
+            font-weight: 700;
             color: #ff3333;
-            margin-bottom: 15px;
-            letter-spacing: 2px;
+            margin-bottom: 20px;
+            letter-spacing: 3px;
+            text-shadow: 0 0 15px rgba(255, 51, 51, 0.3);
         }
 
         .beacon-info {

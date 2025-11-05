@@ -18,6 +18,7 @@ type Config struct {
 	TLSKey           string           `json:"tls_key"`           // Path to TLS key
 	DatabasePath     string           `json:"database_path"`     // Path to master SQLite database
 	WebRoot          string           `json:"web_root"`          // Path to web UI files directory
+	SourceDir        string           `json:"source_dir"`        // Path to source code directory for building
 	Debug            bool             `json:"debug"`             // Enable debug logging
 	JWTSecret        string           `json:"jwt_secret"`        // Secret for JWT token signing
 	SessionTimeout   int              `json:"session_timeout"`   // Session timeout in minutes (default: 60)
@@ -49,6 +50,7 @@ func DefaultConfig() Config {
 		TLSKey:         "/opt/unkn0wnc2/certs/master.key",
 		DatabasePath:   "/opt/unkn0wnc2/master.db",
 		WebRoot:        "/opt/unkn0wnc2/web",
+		SourceDir:      "/opt/unkn0wnc2/src",
 		Debug:          false,
 		JWTSecret:      "CHANGE_THIS_SECRET_IN_PRODUCTION",
 		SessionTimeout: 60,
