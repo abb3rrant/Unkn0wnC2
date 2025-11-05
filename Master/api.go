@@ -1091,22 +1091,29 @@ func (api *APIServer) handleListClientBinaries(w http.ResponseWriter, r *http.Re
 	dbDir := filepath.Dir(api.config.DatabasePath)
 	buildsDir := filepath.Join(dbDir, "builds")
 
+	fmt.Printf("[API] Listing client binaries from: %s\n", buildsDir)
+
 	// Find all beacon client files
 	files, err := filepath.Glob(filepath.Join(buildsDir, "beacon-*"))
 	if err != nil {
+		fmt.Printf("[API] Error globbing files: %v\n", err)
 		api.sendError(w, http.StatusInternalServerError, "failed to search builds directory")
 		return
 	}
+
+	fmt.Printf("[API] Found %d files matching beacon-*\n", len(files))
 
 	// Build response with beacon info
 	var binaries []map[string]interface{}
 	for _, filePath := range files {
 		info, err := os.Stat(filePath)
 		if err != nil {
+			fmt.Printf("[API] Error stating file %s: %v\n", filePath, err)
 			continue
 		}
 
 		filename := filepath.Base(filePath)
+		fmt.Printf("[API] Processing file: %s\n", filename)
 
 		// Parse OS from filename (beacon-linux-* or beacon-windows-*)
 		var osType string
@@ -1118,6 +1125,7 @@ func (api *APIServer) handleListClientBinaries(w http.ResponseWriter, r *http.Re
 			osType = "windows"
 			arch = "x64"
 		} else {
+			fmt.Printf("[API] Skipping file (doesn't match pattern): %s\n", filename)
 			continue // Skip non-beacon files
 		}
 
@@ -1139,7 +1147,10 @@ func (api *APIServer) handleListClientBinaries(w http.ResponseWriter, r *http.Re
 			"created_at":      info.ModTime().Format(time.RFC3339),
 		}
 		binaries = append(binaries, binary)
+		fmt.Printf("[API] Added binary: %s (%s/%s)\n", filename, osType, arch)
 	}
+
+	fmt.Printf("[API] Returning %d client binaries\n", len(binaries))
 
 	if len(binaries) == 0 {
 		binaries = []map[string]interface{}{} // Return empty array instead of null

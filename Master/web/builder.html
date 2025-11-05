@@ -424,9 +424,11 @@
                 <div class="form-group">
                     <label class="form-label">Client Binary *</label>
                     <select id="stagerClientBinary" class="form-select">
-                        <option value="" disabled selected>Select a client binary</option>
+                        <option value="" disabled selected>Loading...</option>
                     </select>
-                    <div class="help-text">Pre-built beacon to deploy via stager</div>
+                    <div class="help-text">Pre-built beacon to deploy via stager 
+                        <button onclick="loadClientBinaries(); return false;" style="background: none; border: none; color: #ff3333; cursor: pointer; padding: 0 5px;">🔄 Refresh</button>
+                    </div>
                 </div>
 
                 <div class="form-group">
@@ -571,35 +573,41 @@
 
         async function loadClientBinaries() {
             try {
+                console.log('[DEBUG] Fetching client binaries from /api/builder/client-binaries');
                 const response = await authFetch('/api/builder/client-binaries');
                 if (!response) {
-                    console.error('Failed to fetch client binaries - no response');
+                    console.error('[ERROR] Failed to fetch client binaries - no response');
                     return;
                 }
 
+                console.log('[DEBUG] Response status:', response.status);
                 const binaries = await response.json();
-                console.log('Client binaries loaded:', binaries);
+                console.log('[DEBUG] Client binaries loaded:', binaries);
+                console.log('[DEBUG] Number of binaries:', binaries.length);
                 
                 const stagerSelect = document.getElementById('stagerClientBinary');
 
                 stagerSelect.innerHTML = '<option value="">Select a client binary</option>';
                 
                 if (!binaries || binaries.length === 0) {
-                    console.warn('No client binaries available');
+                    console.warn('[WARN] No client binaries available - check /opt/unkn0wnc2/builds/ directory on server');
                     stagerSelect.innerHTML = '<option value="" disabled>No client binaries available - build a client first</option>';
                     return;
                 }
 
-                binaries.forEach(binary => {
+                console.log('[DEBUG] Adding binaries to dropdown...');
+                binaries.forEach((binary, index) => {
                     const option = document.createElement('option');
                     option.value = binary.id;
                     const sizeMB = (binary.compressed_size / 1024 / 1024).toFixed(2);
                     option.textContent = `${binary.os}/${binary.arch} - ${sizeMB}MB (${binary.total_chunks} chunks) - ${new Date(binary.created_at).toLocaleDateString()}`;
                     stagerSelect.appendChild(option);
-                    console.log('Added client binary option:', option.textContent);
+                    console.log(`[DEBUG] Added binary ${index + 1}:`, option.textContent);
                 });
+                console.log('[DEBUG] Client binaries loaded successfully');
             } catch (error) {
-                console.error('Failed to load client binaries:', error);
+                console.error('[ERROR] Failed to load client binaries:', error);
+                showAlert('Failed to load client binaries. Check console for details.', 'error');
             }
         }
 
