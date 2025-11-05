@@ -497,18 +497,23 @@
                 ...options.headers
             };
 
-            const response = await fetch(API_BASE + url, {
-                ...options,
-                headers
-            });
+            try {
+                const response = await fetch(API_BASE + url, {
+                    ...options,
+                    headers
+                });
 
-            if (response.status === 401) {
-                localStorage.removeItem('token');
-                window.location.href = '/login';
-                return null;
+                if (response.status === 401) {
+                    localStorage.removeItem('token');
+                    window.location.href = '/login';
+                    return null;
+                }
+
+                return response;
+            } catch (error) {
+                console.error('Fetch error:', error);
+                throw new Error(`Network error: ${error.message}`);
             }
-
-            return response;
         }
 
         function showAlert(message, type = 'success') {
@@ -606,7 +611,7 @@
                 });
 
                 if (!response) {
-                    throw new Error('Build failed');
+                    throw new Error('Authentication failed or network error');
                 }
 
                 if (response.ok) {
@@ -622,10 +627,17 @@
                     await loadDNSServers(); // Refresh server list
                     await loadBuilds(); // Refresh builds list
                 } else {
-                    const error = await response.json();
-                    throw new Error(error.message || 'Build failed');
+                    let errorMsg = 'Build failed';
+                    try {
+                        const error = await response.json();
+                        errorMsg = error.message || error.error || errorMsg;
+                    } catch (e) {
+                        errorMsg = `HTTP ${response.status}: ${response.statusText}`;
+                    }
+                    throw new Error(errorMsg);
                 }
             } catch (error) {
+                console.error('Build error:', error);
                 showAlert(`Build failed: ${error.message}`, 'error');
             } finally {
                 hideLoading();

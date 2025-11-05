@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	buildsDir = "builds" // Directory to store compiled binaries
+	buildsDir = "/opt/unkn0wnc2/builds" // Directory to store compiled binaries
 )
 
 // Builder request structures
@@ -287,8 +287,8 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 		return "", fmt.Errorf("go mod tidy failed: %w\nOutput: %s", err, string(output))
 	}
 
-	// Build binary
-	outputPath := filepath.Join("/opt/unkn0wnc2/builders", fmt.Sprintf("dns-server-%s-%d", req.Domain, time.Now().Unix()))
+	// Build binary to temp location
+	outputPath := filepath.Join(buildDir, "dns-server")
 	cmd := exec.Command("go", "build", "-trimpath", "-ldflags=-s -w", "-o", outputPath, ".")
 	cmd.Dir = buildDir
 	cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64")
@@ -355,7 +355,7 @@ func buildClient(req ClientBuildRequest, sourceRoot string) (string, error) {
 		return "", fmt.Errorf("go mod tidy failed: %w\nOutput: %s", err, string(output))
 	}
 
-	// Build binary
+	// Build binary to temp location
 	ext := ""
 	goos := "linux"
 	if req.Platform == "windows" {
@@ -363,7 +363,7 @@ func buildClient(req ClientBuildRequest, sourceRoot string) (string, error) {
 		goos = "windows"
 	}
 
-	outputPath := filepath.Join("/opt/unkn0wnc2/builders", fmt.Sprintf("beacon-%s-%d%s", req.Platform, time.Now().Unix(), ext))
+	outputPath := filepath.Join(buildDir, fmt.Sprintf("beacon%s", ext))
 	cmd := exec.Command("go", "build", "-trimpath", "-ldflags=-s -w", "-o", outputPath, ".")
 	cmd.Dir = buildDir
 	cmd.Env = append(os.Environ(), fmt.Sprintf("GOOS=%s", goos), "GOARCH=amd64")
@@ -426,13 +426,8 @@ func buildStager(req StagerBuildRequest, sourceRoot string) (string, error) {
 		return "", fmt.Errorf("build failed: %w\nOutput: %s", err, string(output))
 	}
 
-	// Copy built binary to output location
-	srcBinary := filepath.Join(buildDir, fmt.Sprintf("stager-%s-x64%s", req.Platform, ext))
-	outputPath := filepath.Join("/opt/unkn0wnc2/builders", fmt.Sprintf("stager-%s-%d%s", req.Platform, time.Now().Unix(), ext))
-
-	if err := copyFile(srcBinary, outputPath); err != nil {
-		return "", fmt.Errorf("failed to copy binary: %w", err)
-	}
+	// Return path to built binary (still in temp dir)
+	outputPath := filepath.Join(buildDir, fmt.Sprintf("stager-%s-x64%s", req.Platform, ext))
 
 	return outputPath, nil
 }
