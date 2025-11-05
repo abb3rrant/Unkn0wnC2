@@ -109,6 +109,15 @@ func LoadConfig(configPath string) (Config, error) {
 	if fileCfg.DatabasePath != "" {
 		cfg.DatabasePath = fileCfg.DatabasePath
 	}
+	if fileCfg.WebRoot != "" {
+		cfg.WebRoot = fileCfg.WebRoot
+	}
+	if fileCfg.SourceDir != "" {
+		cfg.SourceDir = fileCfg.SourceDir
+	}
+	if fileCfg.EncryptionKey != "" {
+		cfg.EncryptionKey = fileCfg.EncryptionKey
+	}
 	if fileCfg.JWTSecret != "" {
 		cfg.JWTSecret = fileCfg.JWTSecret
 	}
