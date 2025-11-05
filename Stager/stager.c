@@ -145,79 +145,89 @@ static const unsigned char base64_decode_table[256] = {
  */
 static void base36_encode(const unsigned char *input, size_t input_len, char *output, size_t output_size) {
     // Handle empty input
-    if (input_len == 0) {
-        output[0] = '0';
-        output[1] = '\0';
+    if (input_len == 0 || output_size == 0) {
+        if (output_size > 0) {
+            output[0] = '0';
+            output[1] = '\0';
+        }
         return;
     }
     
-    // Convert bytes to a large number using simple base256 to base36 conversion
-    // For simplicity, we'll use a digit array approach
-    unsigned char bytes[512];
-    size_t bytes_len = input_len;
+    // Copy input to working buffer (big-endian byte array)
+    unsigned char num[512] = {0};
+    size_t num_len = input_len;
     
-    if (bytes_len > sizeof(bytes)) {
-        bytes_len = sizeof(bytes);
+    if (num_len > sizeof(num)) {
+        num_len = sizeof(num);
     }
     
-    memcpy(bytes, input, bytes_len);
+    memcpy(num, input, num_len);
     
-    // Calculate required output length (log36(256^n) ≈ 1.23 * n)
-    size_t max_output = (bytes_len * 123) / 100 + 2;
-    if (max_output > output_size) {
-        max_output = output_size - 1;
-    }
+    // Build base36 string by repeatedly dividing by 36
+    char result[1024];
+    int result_len = 0;
     
-    char temp[1024];
-    int temp_len = 0;
-    
-    // Convert to base36 using repeated division
-    while (bytes_len > 0) {
+    // Keep dividing until number is zero
+    while (num_len > 0) {
         // Check if all bytes are zero
-        int all_zero = 1;
-        for (size_t i = 0; i < bytes_len; i++) {
-            if (bytes[i] != 0) {
-                all_zero = 0;
+        int is_zero = 1;
+        for (size_t i = 0; i < num_len; i++) {
+            if (num[i] != 0) {
+                is_zero = 0;
                 break;
             }
         }
-        if (all_zero) break;
         
-        // Divide by 36
-        unsigned int remainder = 0;
-        for (size_t i = 0; i < bytes_len; i++) {
-            unsigned int val = remainder * 256 + bytes[i];
-            bytes[i] = val / 36;
-            remainder = val % 36;
+        if (is_zero) {
+            break;
         }
         
-        // Add digit to result
-        if (temp_len < sizeof(temp) - 1) {
+        // Divide the big-endian number by 36
+        unsigned int remainder = 0;
+        for (size_t i = 0; i < num_len; i++) {
+            unsigned int current = remainder * 256 + num[i];
+            num[i] = current / 36;
+            remainder = current % 36;
+        }
+        
+        // Add the remainder as a base36 digit
+        if (result_len < (int)sizeof(result) - 1) {
             if (remainder < 10) {
-                temp[temp_len++] = '0' + remainder;
+                result[result_len++] = '0' + remainder;
             } else {
-                temp[temp_len++] = 'a' + (remainder - 10);
+                result[result_len++] = 'a' + (remainder - 10);
             }
         }
         
-        // Remove leading zeros
-        while (bytes_len > 0 && bytes[0] == 0) {
-            memmove(bytes, bytes + 1, bytes_len - 1);
-            bytes_len--;
+        // Trim leading zeros from num to keep it efficient
+        size_t first_nonzero = 0;
+        while (first_nonzero < num_len && num[first_nonzero] == 0) {
+            first_nonzero++;
+        }
+        
+        if (first_nonzero > 0 && first_nonzero < num_len) {
+            memmove(num, num + first_nonzero, num_len - first_nonzero);
+            num_len -= first_nonzero;
+        } else if (first_nonzero >= num_len) {
+            num_len = 0; // All zeros
         }
     }
     
-    // Reverse the result
-    if (temp_len == 0) {
-        output[0] = '0';
-        output[1] = '\0';
-    } else {
-        for (int i = 0; i < temp_len && i < (int)output_size - 1; i++) {
-            output[i] = temp[temp_len - 1 - i];
+    // Result is built in reverse order, so reverse it
+    if (result_len == 0) {
+        if (output_size > 1) {
+            output[0] = '0';
+            output[1] = '\0';
         }
-        output[temp_len < output_size ? temp_len : output_size - 1] = '\0';
+    } else {
+        size_t copy_len = result_len < (int)output_size - 1 ? result_len : output_size - 1;
+        for (size_t i = 0; i < copy_len; i++) {
+            output[i] = result[result_len - 1 - i];
+        }
+        output[copy_len] = '\0';
     }
 }
+
 
 /*
  * Base36 decoding - decode base36 string to binary data
