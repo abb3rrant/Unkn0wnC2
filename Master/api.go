@@ -1085,12 +1085,64 @@ func (api *APIServer) handleStats(w http.ResponseWriter, r *http.Request) {
 
 // Stager Management Handlers
 
-// handleListClientBinaries returns all stored client binaries
+// handleListClientBinaries returns all stored client binaries from the builds directory
 func (api *APIServer) handleListClientBinaries(w http.ResponseWriter, r *http.Request) {
-	binaries, err := api.db.GetClientBinaries()
+	// Derive builds directory from database path
+	dbDir := filepath.Dir(api.config.DatabasePath)
+	buildsDir := filepath.Join(dbDir, "builds")
+
+	// Find all beacon client files
+	files, err := filepath.Glob(filepath.Join(buildsDir, "beacon-*"))
 	if err != nil {
-		api.sendError(w, http.StatusInternalServerError, "failed to retrieve client binaries")
+		api.sendError(w, http.StatusInternalServerError, "failed to search builds directory")
 		return
+	}
+
+	// Build response with file info
+	var binaries []map[string]interface{}
+	for _, filePath := range files {
+		info, err := os.Stat(filePath)
+		if err != nil {
+			continue
+		}
+
+		filename := filepath.Base(filePath)
+
+		// Parse OS from filename (beacon-linux-* or beacon-windows-*)
+		var osType string
+		var arch string
+		if strings.HasPrefix(filename, "beacon-linux") {
+			osType = "linux"
+			arch = "x64"
+		} else if strings.HasPrefix(filename, "beacon-windows") {
+			osType = "windows"
+			arch = "x64"
+		} else {
+			continue // Skip non-beacon files
+		}
+
+		// Calculate compressed size estimate (rough estimate: 40% of original)
+		compressedSize := int64(float64(info.Size()) * 0.4)
+
+		// Calculate chunk count
+		base64Size := int64(float64(compressedSize) * 1.34) // base64 overhead
+		totalChunks := (base64Size + 402) / 403
+
+		binary := map[string]interface{}{
+			"id":              filename,
+			"filename":        filename,
+			"os":              osType,
+			"arch":            arch,
+			"original_size":   info.Size(),
+			"compressed_size": compressedSize,
+			"total_chunks":    totalChunks,
+			"created_at":      info.ModTime().Format(time.RFC3339),
+		}
+		binaries = append(binaries, binary)
+	}
+
+	if len(binaries) == 0 {
+		binaries = []map[string]interface{}{} // Return empty array instead of null
 	}
 
 	api.sendJSON(w, binaries)
