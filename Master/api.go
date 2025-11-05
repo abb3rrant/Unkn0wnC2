@@ -1087,9 +1087,9 @@ func (api *APIServer) handleStats(w http.ResponseWriter, r *http.Request) {
 
 // handleListClientBinaries returns all stored client binaries from the builds directory
 func (api *APIServer) handleListClientBinaries(w http.ResponseWriter, r *http.Request) {
-	// Derive builds directory from database path (/opt/unkn0wnc2/master.db -> /opt/unkn0wnc2/builds/clients)
+	// Derive builds directory from database path (/opt/unkn0wnc2/master.db -> /opt/unkn0wnc2/builds/client)
 	dbDir := filepath.Dir(api.config.DatabasePath)
-	buildsDir := filepath.Join(dbDir, "builds", "clients")
+	buildsDir := filepath.Join(dbDir, "builds", "client")
 
 	fmt.Printf("[API] Listing client binaries from: %s\n", buildsDir)
 
@@ -1206,9 +1206,9 @@ type StagerInitResponse struct {
 // Automatically finds the most recent beacon for the given OS/Arch from builds directory
 // Returns: clientBinaryID, base64Data, totalChunks, error
 func (api *APIServer) loadAndProcessClientBinary(osType, arch string) (string, string, int, error) {
-	// Derive builds directory from database path (/opt/unkn0wnc2/master.db -> /opt/unkn0wnc2/builds/clients)
+	// Derive builds directory from database path (/opt/unkn0wnc2/master.db -> /opt/unkn0wnc2/builds/client)
 	dbDir := filepath.Dir(api.config.DatabasePath)
-	buildsDir := filepath.Join(dbDir, "builds", "clients")
+	buildsDir := filepath.Join(dbDir, "builds", "client")
 
 	// Determine what we're looking for
 	var clientFilename string
