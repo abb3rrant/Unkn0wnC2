@@ -370,6 +370,25 @@ func (mc *MasterClient) SubmitProgress(taskID, beaconID string, receivedChunks, 
 	return nil
 }
 
+// ReportStagerContact reports that a stager made first contact with this DNS server (from cache)
+func (mc *MasterClient) ReportStagerContact(clientBinaryID, stagerIP, os, arch string) error {
+	req := map[string]interface{}{
+		"dns_server_id":    mc.serverID,
+		"api_key":          mc.apiKey,
+		"client_binary_id": clientBinaryID,
+		"stager_ip":        stagerIP,
+		"os":               os,
+		"arch":             arch,
+	}
+
+	_, err := mc.doRequest("POST", "/api/dns-server/stager/contact", req)
+	if err != nil {
+		return fmt.Errorf("stager contact report failed: %w", err)
+	}
+
+	return nil
+}
+
 // ReportStagerProgress reports chunk delivery progress for a stager session
 func (mc *MasterClient) ReportStagerProgress(sessionID string, chunkIndex int, stagerIP string) error {
 	req := map[string]interface{}{

