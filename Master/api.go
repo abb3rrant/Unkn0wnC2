@@ -340,6 +340,296 @@ func (api *APIServer) handleLogout(w http.ResponseWriter, r *http.Request) {
 	api.sendSuccess(w, "logged out successfully", nil)
 }
 
+// User Management Endpoints
+
+// handleListOperators returns all operator accounts
+func (api *APIServer) handleListOperators(w http.ResponseWriter, r *http.Request) {
+	operators, err := api.db.GetAllOperators()
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve operators")
+		return
+	}
+
+	api.sendSuccess(w, "operators retrieved", operators)
+}
+
+// handleGetOperator retrieves a single operator
+func (api *APIServer) handleGetOperator(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	operatorID := vars["id"]
+
+	operator, err := api.db.GetOperator(operatorID)
+	if err != nil {
+		api.sendError(w, http.StatusNotFound, "operator not found")
+		return
+	}
+
+	api.sendSuccess(w, "operator retrieved", operator)
+}
+
+// handleCreateOperator creates a new operator account
+func (api *APIServer) handleCreateOperator(w http.ResponseWriter, r *http.Request) {
+	// Only admins can create operators
+	role := r.Header.Get("X-Operator-Role")
+	if role != "admin" {
+		api.sendError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
+
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Role     string `json:"role"`
+		Email    string `json:"email"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Validate required fields
+	if req.Username == "" || req.Password == "" || req.Role == "" {
+		api.sendError(w, http.StatusBadRequest, "username, password, and role are required")
+		return
+	}
+
+	// Validate role
+	if req.Role != "admin" && req.Role != "operator" && req.Role != "viewer" {
+		api.sendError(w, http.StatusBadRequest, "invalid role (must be admin, operator, or viewer)")
+		return
+	}
+
+	// Check if username already exists
+	exists, err := api.db.CheckUsernameExists(req.Username)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to check username")
+		return
+	}
+	if exists {
+		api.sendError(w, http.StatusConflict, "username already exists")
+		return
+	}
+
+	// Generate operator ID
+	operatorID := generateID()
+
+	// Create operator
+	if err := api.db.CreateOperator(operatorID, req.Username, req.Password, req.Role, req.Email); err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to create operator")
+		return
+	}
+
+	// Log audit event
+	currentOperatorID := r.Header.Get("X-Operator-ID")
+	api.db.LogAuditEvent(currentOperatorID, "operator_created", "operator", operatorID,
+		fmt.Sprintf("Created operator: %s (role: %s)", req.Username, req.Role), r.RemoteAddr)
+
+	api.sendSuccess(w, "operator created successfully", map[string]string{"id": operatorID})
+}
+
+// handleUpdateOperator updates operator details
+func (api *APIServer) handleUpdateOperator(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	operatorID := vars["id"]
+
+	// Check permissions
+	currentOperatorID := r.Header.Get("X-Operator-ID")
+	currentRole := r.Header.Get("X-Operator-Role")
+
+	// Operators can only update themselves, admins can update anyone
+	if currentRole != "admin" && currentOperatorID != operatorID {
+		api.sendError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
+
+	var req struct {
+		Username string `json:"username"`
+		Role     string `json:"role"`
+		Email    string `json:"email"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Validate role if provided
+	if req.Role != "" && req.Role != "admin" && req.Role != "operator" && req.Role != "viewer" {
+		api.sendError(w, http.StatusBadRequest, "invalid role")
+		return
+	}
+
+	// Non-admins cannot change role
+	if currentRole != "admin" && req.Role != "" {
+		api.sendError(w, http.StatusForbidden, "cannot change your own role")
+		return
+	}
+
+	// Update operator
+	if err := api.db.UpdateOperator(operatorID, req.Username, req.Role, req.Email); err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to update operator")
+		return
+	}
+
+	// Log audit event
+	api.db.LogAuditEvent(currentOperatorID, "operator_updated", "operator", operatorID,
+		fmt.Sprintf("Updated operator: %s", req.Username), r.RemoteAddr)
+
+	api.sendSuccess(w, "operator updated successfully", nil)
+}
+
+// handleChangePassword changes an operator's password
+func (api *APIServer) handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	operatorID := vars["id"]
+
+	// Check permissions
+	currentOperatorID := r.Header.Get("X-Operator-ID")
+	currentRole := r.Header.Get("X-Operator-Role")
+
+	// Operators can only change their own password, admins can change anyone's
+	if currentRole != "admin" && currentOperatorID != operatorID {
+		api.sendError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
+
+	var req struct {
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.NewPassword == "" {
+		api.sendError(w, http.StatusBadRequest, "new password is required")
+		return
+	}
+
+	// If not admin, verify current password
+	if currentRole != "admin" {
+		// Get current operator's username
+		operator, err := api.db.GetOperator(currentOperatorID)
+		if err != nil {
+			api.sendError(w, http.StatusInternalServerError, "failed to verify credentials")
+			return
+		}
+
+		// Verify current password
+		_, _, err = api.db.VerifyOperatorCredentials(operator["username"].(string), req.CurrentPassword)
+		if err != nil {
+			api.sendError(w, http.StatusUnauthorized, "current password is incorrect")
+			return
+		}
+	}
+
+	// Update password
+	if err := api.db.UpdateOperatorPassword(operatorID, req.NewPassword); err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to update password")
+		return
+	}
+
+	// Log audit event
+	api.db.LogAuditEvent(currentOperatorID, "password_changed", "operator", operatorID,
+		"Password changed", r.RemoteAddr)
+
+	api.sendSuccess(w, "password changed successfully", nil)
+}
+
+// handleDeleteOperator deletes an operator account
+func (api *APIServer) handleDeleteOperator(w http.ResponseWriter, r *http.Request) {
+	// Only admins can delete operators
+	role := r.Header.Get("X-Operator-Role")
+	if role != "admin" {
+		api.sendError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
+
+	vars := mux.Vars(r)
+	operatorID := vars["id"]
+
+	// Prevent deleting yourself
+	currentOperatorID := r.Header.Get("X-Operator-ID")
+	if currentOperatorID == operatorID {
+		api.sendError(w, http.StatusBadRequest, "cannot delete your own account")
+		return
+	}
+
+	// Get operator info for audit log
+	operator, err := api.db.GetOperator(operatorID)
+	if err != nil {
+		api.sendError(w, http.StatusNotFound, "operator not found")
+		return
+	}
+
+	// Delete operator
+	if err := api.db.DeleteOperator(operatorID); err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to delete operator")
+		return
+	}
+
+	// Log audit event
+	api.db.LogAuditEvent(currentOperatorID, "operator_deleted", "operator", operatorID,
+		fmt.Sprintf("Deleted operator: %s", operator["username"]), r.RemoteAddr)
+
+	api.sendSuccess(w, "operator deleted successfully", nil)
+}
+
+// handleToggleOperatorStatus enables/disables an operator account
+func (api *APIServer) handleToggleOperatorStatus(w http.ResponseWriter, r *http.Request) {
+	// Only admins can toggle operator status
+	role := r.Header.Get("X-Operator-Role")
+	if role != "admin" {
+		api.sendError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
+
+	vars := mux.Vars(r)
+	operatorID := vars["id"]
+
+	// Prevent disabling yourself
+	currentOperatorID := r.Header.Get("X-Operator-ID")
+	if currentOperatorID == operatorID {
+		api.sendError(w, http.StatusBadRequest, "cannot disable your own account")
+		return
+	}
+
+	var req struct {
+		Active bool `json:"active"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Get operator info
+	operator, err := api.db.GetOperator(operatorID)
+	if err != nil {
+		api.sendError(w, http.StatusNotFound, "operator not found")
+		return
+	}
+
+	// Update status
+	if err := api.db.SetOperatorActive(operatorID, req.Active); err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to update operator status")
+		return
+	}
+
+	// Log audit event
+	status := "disabled"
+	if req.Active {
+		status = "enabled"
+	}
+	api.db.LogAuditEvent(currentOperatorID, "operator_status_changed", "operator", operatorID,
+		fmt.Sprintf("%s operator: %s", status, operator["username"]), r.RemoteAddr)
+
+	api.sendSuccess(w, fmt.Sprintf("operator %s successfully", status), nil)
+}
+
 // DNS Server Management Endpoints
 
 // handleListDNSServers returns all registered DNS servers
@@ -797,6 +1087,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	router.HandleFunc("/dashboard", api.handleDashboardPage).Methods("GET")
 	router.HandleFunc("/beacon", api.handleBeaconPage).Methods("GET")
 	router.HandleFunc("/builder", api.handleBuilderPage).Methods("GET")
+	router.HandleFunc("/users", api.handleUsersPage).Methods("GET")
 
 	// Serve static files (CSS, JS, images)
 	router.PathPrefix("/web/static/").Handler(
@@ -811,6 +1102,16 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	operatorRouter.Use(api.authMiddleware)
 
 	operatorRouter.HandleFunc("/auth/logout", api.handleLogout).Methods("POST")
+
+	// User management endpoints
+	operatorRouter.HandleFunc("/operators", api.handleListOperators).Methods("GET")
+	operatorRouter.HandleFunc("/operators/{id}", api.handleGetOperator).Methods("GET")
+	operatorRouter.HandleFunc("/operators", api.handleCreateOperator).Methods("POST")
+	operatorRouter.HandleFunc("/operators/{id}", api.handleUpdateOperator).Methods("PUT")
+	operatorRouter.HandleFunc("/operators/{id}/password", api.handleChangePassword).Methods("POST")
+	operatorRouter.HandleFunc("/operators/{id}", api.handleDeleteOperator).Methods("DELETE")
+	operatorRouter.HandleFunc("/operators/{id}/status", api.handleToggleOperatorStatus).Methods("POST")
+
 	operatorRouter.HandleFunc("/dns-servers", api.handleListDNSServers).Methods("GET")
 	operatorRouter.HandleFunc("/beacons", api.handleListBeacons).Methods("GET")
 	operatorRouter.HandleFunc("/beacons/{id}", api.handleGetBeacon).Methods("GET")
@@ -863,4 +1164,8 @@ func (api *APIServer) handleDashboardPage(w http.ResponseWriter, r *http.Request
 
 func (api *APIServer) handleBeaconPage(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, filepath.Join(api.config.WebRoot, "beacon.html"))
+}
+
+func (api *APIServer) handleUsersPage(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, filepath.Join(api.config.WebRoot, "users.html"))
 }

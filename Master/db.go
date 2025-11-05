@@ -830,6 +830,174 @@ func (d *MasterDatabase) VerifyOperatorCredentials(username, password string) (s
 	return id, role, nil
 }
 
+// GetAllOperators returns all operator accounts
+func (d *MasterDatabase) GetAllOperators() ([]map[string]interface{}, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	rows, err := d.db.Query(`
+		SELECT id, username, role, email, created_at, last_login, login_count, is_active
+		FROM operators
+		ORDER BY created_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var operators []map[string]interface{}
+	for rows.Next() {
+		var id, username, role string
+		var email sql.NullString
+		var createdAt, loginCount int64
+		var lastLogin sql.NullInt64
+		var isActive int
+
+		if err := rows.Scan(&id, &username, &role, &email, &createdAt, &lastLogin, &loginCount, &isActive); err != nil {
+			continue
+		}
+
+		operator := map[string]interface{}{
+			"id":          id,
+			"username":    username,
+			"role":        role,
+			"email":       email.String,
+			"created_at":  time.Unix(createdAt, 0).Format(time.RFC3339),
+			"login_count": loginCount,
+			"is_active":   isActive == 1,
+		}
+
+		if lastLogin.Valid {
+			operator["last_login"] = time.Unix(lastLogin.Int64, 0).Format(time.RFC3339)
+		} else {
+			operator["last_login"] = nil
+		}
+
+		operators = append(operators, operator)
+	}
+
+	return operators, nil
+}
+
+// GetOperator retrieves a single operator by ID
+func (d *MasterDatabase) GetOperator(operatorID string) (map[string]interface{}, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	var id, username, role string
+	var email sql.NullString
+	var createdAt, loginCount int64
+	var lastLogin sql.NullInt64
+	var isActive int
+
+	err := d.db.QueryRow(`
+		SELECT id, username, role, email, created_at, last_login, login_count, is_active
+		FROM operators
+		WHERE id = ?
+	`, operatorID).Scan(&id, &username, &role, &email, &createdAt, &lastLogin, &loginCount, &isActive)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("operator not found")
+		}
+		return nil, err
+	}
+
+	operator := map[string]interface{}{
+		"id":          id,
+		"username":    username,
+		"role":        role,
+		"email":       email.String,
+		"created_at":  time.Unix(createdAt, 0).Format(time.RFC3339),
+		"login_count": loginCount,
+		"is_active":   isActive == 1,
+	}
+
+	if lastLogin.Valid {
+		operator["last_login"] = time.Unix(lastLogin.Int64, 0).Format(time.RFC3339)
+	} else {
+		operator["last_login"] = nil
+	}
+
+	return operator, nil
+}
+
+// UpdateOperator updates operator details (not password)
+func (d *MasterDatabase) UpdateOperator(operatorID, username, role, email string) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	_, err := d.db.Exec(`
+		UPDATE operators 
+		SET username = ?, role = ?, email = ?
+		WHERE id = ?
+	`, username, role, email, operatorID)
+
+	return err
+}
+
+// UpdateOperatorPassword changes an operator's password
+func (d *MasterDatabase) UpdateOperatorPassword(operatorID, newPassword string) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	// Hash new password
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("failed to hash password: %w", err)
+	}
+
+	_, err = d.db.Exec(`
+		UPDATE operators 
+		SET password_hash = ?
+		WHERE id = ?
+	`, string(passwordHash), operatorID)
+
+	return err
+}
+
+// SetOperatorActive enables or disables an operator account
+func (d *MasterDatabase) SetOperatorActive(operatorID string, active bool) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	activeInt := 0
+	if active {
+		activeInt = 1
+	}
+
+	_, err := d.db.Exec(`
+		UPDATE operators 
+		SET is_active = ?
+		WHERE id = ?
+	`, activeInt, operatorID)
+
+	return err
+}
+
+// DeleteOperator removes an operator account
+func (d *MasterDatabase) DeleteOperator(operatorID string) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	_, err := d.db.Exec(`DELETE FROM operators WHERE id = ?`, operatorID)
+	return err
+}
+
+// CheckUsernameExists checks if a username is already taken
+func (d *MasterDatabase) CheckUsernameExists(username string) (bool, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	var count int
+	err := d.db.QueryRow(`SELECT COUNT(*) FROM operators WHERE username = ?`, username).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+
+	return count > 0, nil
+}
+
 // CreateBroadcastTask creates a task for all active beacons
 // Used for distributing updates like new DNS server domains
 func (d *MasterDatabase) CreateBroadcastTask(command, createdBy string) error {

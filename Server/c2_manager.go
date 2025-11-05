@@ -1204,7 +1204,7 @@ func (c2 *C2Manager) handleData(parts []string, isDuplicate bool) string {
 			}
 
 			// Forward chunk to Master for reassembly
-			if err := masterClient.SubmitResultChunk(submitTaskID, bid, chunkIdx, total, chunkData); err != nil {
+			if err := masterClient.SubmitResult(submitTaskID, bid, chunkIdx, total, chunkData); err != nil {
 				if c2.debug {
 					logf("[C2] Failed to forward chunk to master: %v", err)
 				}
@@ -1212,9 +1212,7 @@ func (c2 *C2Manager) handleData(parts []string, isDuplicate bool) string {
 				logf("[C2] Forwarded chunk %d/%d to Master for task %s", chunkIdx, total, submitTaskID)
 			}
 		}(taskID, beaconID, chunkIndex, totalChunks, data)
-	}
-
-	// Local tracking for fallback/redundancy (but don't rely on it for Shadow Mesh)
+	} // Local tracking for fallback/redundancy (but don't rely on it for Shadow Mesh)
 	if hasExpectation {
 		c2.mutex.Lock()
 		if chunkIndex > 0 && chunkIndex <= expected.TotalChunks {
