@@ -279,6 +279,14 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 		return "", fmt.Errorf("failed to write config: %w", err)
 	}
 
+	// Clean and download dependencies to ensure compatible versions
+	modTidyCmd := exec.Command("go", "mod", "tidy")
+	modTidyCmd.Dir = buildDir
+	modTidyCmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64")
+	if output, err := modTidyCmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("go mod tidy failed: %w\nOutput: %s", err, string(output))
+	}
+
 	// Build binary
 	outputPath := filepath.Join("/opt/unkn0wnc2/builders", fmt.Sprintf("dns-server-%s-%d", req.Domain, time.Now().Unix()))
 	cmd := exec.Command("go", "build", "-trimpath", "-ldflags=-s -w", "-o", outputPath, ".")
@@ -338,6 +346,13 @@ func buildClient(req ClientBuildRequest, sourceRoot string) (string, error) {
 
 	if err := os.WriteFile(configPath, []byte(configStr), 0644); err != nil {
 		return "", fmt.Errorf("failed to write config: %w", err)
+	}
+
+	// Clean and download dependencies
+	modTidyCmd := exec.Command("go", "mod", "tidy")
+	modTidyCmd.Dir = buildDir
+	if output, err := modTidyCmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("go mod tidy failed: %w\nOutput: %s", err, string(output))
 	}
 
 	// Build binary
