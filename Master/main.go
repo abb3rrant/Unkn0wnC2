@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -209,7 +210,9 @@ func initializeAdmin(db *MasterDatabase, cfg Config) error {
 
 	if err != nil {
 		// If error is about duplicate username, admin already exists
-		if err.Error() == "UNIQUE constraint failed: operators.username" {
+		// Check if error string contains "UNIQUE constraint" or "constraint failed"
+		errStr := err.Error()
+		if strings.Contains(errStr, "UNIQUE constraint") || strings.Contains(errStr, "constraint failed") {
 			fmt.Println("✓ Admin account already exists")
 			return nil
 		}
