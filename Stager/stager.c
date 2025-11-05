@@ -770,7 +770,6 @@ static int send_dns_message(const char *message, const char *target_domain, char
     // Example: 71v92tj2ch04qd3mf5xqa35wsl2hl4rhwt8jzaogdby29k40dx87m15a.34lfco5q3sge90lwpz26yba.1762372821.secwolf.net (4 labels)
     char split_domain[1024];
     size_t encoded_len = strlen(encoded);
-    const size_t MAX_LABEL_LEN = 63;
     
     if (encoded_len <= MAX_LABEL_LEN) {
         // Fits in one label: <data>.<timestamp>.<domain>
