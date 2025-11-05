@@ -225,15 +225,16 @@ static size_t base36_decode(const char *input, unsigned char *output, size_t out
     size_t input_len = strlen(input);
     if (input_len == 0) return 0;
     
-    // Initialize output buffer
+    // Initialize big number as array of bytes (big-endian)
     unsigned char bytes[512] = {0};
-    size_t bytes_len = 1;
+    size_t bytes_len = 0;
     
-    // Process each base36 digit
+    // Process each base36 digit from left to right
     for (size_t i = 0; i < input_len; i++) {
         char c = input[i];
         unsigned int digit;
         
+        // Convert character to digit value
         if (c >= '0' && c <= '9') {
             digit = c - '0';
         } else if (c >= 'a' && c <= 'z') {
@@ -244,31 +245,52 @@ static size_t base36_decode(const char *input, unsigned char *output, size_t out
             continue; // Skip invalid characters
         }
         
-        // Multiply current value by 36 and add new digit
+        // Multiply entire number by 36 (big-endian, process right to left)
         unsigned int carry = digit;
-        for (size_t j = 0; j < bytes_len; j++) {
+        for (int j = bytes_len - 1; j >= 0; j--) {
             unsigned int val = bytes[j] * 36 + carry;
             bytes[j] = val & 0xFF;
             carry = val >> 8;
         }
         
-        // Add carry bytes
-        while (carry > 0 && bytes_len < sizeof(bytes)) {
-            bytes[bytes_len++] = carry & 0xFF;
-            carry >>= 8;
+        // If there's still carry, shift everything right and add it at the front
+        if (carry > 0) {
+            if (bytes_len >= sizeof(bytes)) {
+                return 0; // Overflow
+            }
+            // Shift all bytes right
+            for (int j = bytes_len; j > 0; j--) {
+                bytes[j] = bytes[j - 1];
+            }
+            bytes[0] = carry;
+            bytes_len++;
+        }
+        
+        // If this is the first digit and bytes_len is still 0, initialize
+        if (bytes_len == 0 && digit > 0) {
+            bytes[0] = digit;
+            bytes_len = 1;
         }
     }
     
-    // Reverse bytes (we built it backwards)
-    size_t result_len = bytes_len;
+    // Strip leading zeros
+    size_t start = 0;
+    while (start < bytes_len && bytes[start] == 0) {
+        start++;
+    }
+    
+    // Copy result to output (already in big-endian format)
+    size_t result_len = bytes_len - start;
+    if (result_len == 0) {
+        result_len = 1;
+        bytes[0] = 0;
+    }
+    
     if (result_len > output_size) {
         result_len = output_size;
     }
     
-    for (size_t i = 0; i < result_len; i++) {
-        output[i] = bytes[bytes_len - 1 - i];
-    }
-    
+    memcpy(output, bytes + start, result_len);
     return result_len;
 }
 
