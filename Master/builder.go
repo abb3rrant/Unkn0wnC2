@@ -265,19 +265,10 @@ func (api *APIServer) handleBuildStager(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Validate - in Shadow Mesh mode, client_binary_id is required
+	// Note: client_binary_id is optional and just for UI tracking
+	// The Master will automatically select the appropriate beacon based on OS when stager runs
 	if req.ClientBinaryID != "" {
-		// Verify client binary exists
-		_, err := api.db.GetClientBinary(req.ClientBinaryID)
-		if err != nil {
-			api.sendError(w, http.StatusBadRequest, "invalid client_binary_id: client binary not found")
-			return
-		}
-		fmt.Printf("[Builder] Building stager for client binary: %s\n", req.ClientBinaryID)
-	} else if req.Domain == "" {
-		// Standalone mode requires domain
-		api.sendError(w, http.StatusBadRequest, "either client_binary_id or domain is required")
-		return
+		fmt.Printf("[Builder] Building stager (will use client binary: %s when deployed)\n", req.ClientBinaryID)
 	}
 
 	// Build the stager

