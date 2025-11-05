@@ -4,136 +4,269 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>User Management - Unkn0wnC2</title>
-    <link rel="stylesheet" href="/web/static/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=ITC+Benguiat:wght@400;700&display=swap" rel="stylesheet">
     <style>
-        .users-container {
-            max-width: 1400px;
-            margin: 20px auto;
-            padding: 20px;
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
         }
 
-        .page-header {
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+        }
+
+        .navbar {
+            background: rgba(20, 20, 20, 0.95);
+            border-bottom: 1px solid #333;
+            padding: 15px 30px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 30px;
-            padding-bottom: 20px;
-            border-bottom: 2px solid #0ff;
+            position: sticky;
+            top: 0;
+            z-index: 1000;
         }
 
-        .page-header h1 {
-            color: #0ff;
+        .navbar-brand {
             font-size: 32px;
-            margin: 0;
+            font-weight: 700;
+            color: #ff3333;
+            text-shadow: 0 0 10px rgba(255, 51, 51, 0.5);
+            font-family: 'Bebas Neue', 'Impact', sans-serif;
+            letter-spacing: 4px;
+        }
+
+        .navbar-right {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+
+        .btn-logout {
+            padding: 8px 20px;
+            background: rgba(255, 50, 50, 0.2);
+            border: 1px solid rgba(255, 50, 50, 0.3);
+            border-radius: 6px;
+            color: #ff5555;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        .btn-logout:hover {
+            background: rgba(255, 50, 50, 0.3);
+            transform: translateY(-2px);
+        }
+
+        .nav-menu {
+            background: rgba(25, 25, 25, 0.95);
+            border-bottom: 1px solid #333;
+            padding: 12px 30px;
+            display: flex;
+            gap: 15px;
+            position: sticky;
+            top: 61px;
+            z-index: 999;
+        }
+
+        .nav-btn {
+            padding: 10px 24px;
+            background: rgba(255, 50, 50, 0.1);
+            border: 1px solid rgba(255, 50, 50, 0.3);
+            border-radius: 6px;
+            color: #e0e0e0;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .nav-btn:hover {
+            background: rgba(255, 50, 50, 0.2);
+            border-color: rgba(255, 50, 50, 0.5);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(255, 50, 50, 0.2);
+        }
+
+        .nav-btn.active {
+            background: rgba(255, 50, 50, 0.3);
+            border-color: #ff3333;
+            color: #ff3333;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 30px;
+        }
+
+        .section {
+            background: rgba(20, 20, 20, 0.95);
+            border: 1px solid #333;
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 30px;
+        }
+
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #333;
+        }
+
+        .section-title {
+            font-size: 24px;
+            font-weight: 600;
+            color: #ff3333;
+            font-family: 'Bebas Neue', 'Arial Narrow', sans-serif;
+            letter-spacing: 2px;
+        }
+
+        .section-title {
+            font-size: 24px;
+            font-weight: 600;
+            color: #ff3333;
+            font-family: 'Bebas Neue', 'Arial Narrow', sans-serif;
+            letter-spacing: 2px;
         }
 
         .btn {
-            padding: 10px 20px;
-            border: 1px solid #0ff;
-            background: rgba(0, 255, 255, 0.1);
-            color: #0ff;
+            padding: 8px 16px;
+            background: rgba(255, 51, 51, 0.1);
+            border: 1px solid rgba(255, 51, 51, 0.3);
+            border-radius: 6px;
+            color: #ff3333;
             cursor: pointer;
-            font-family: 'Courier New', monospace;
-            transition: all 0.3s;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
         }
 
         .btn:hover {
-            background: rgba(0, 255, 255, 0.3);
-            box-shadow: 0 0 10px #0ff;
+            background: rgba(255, 51, 51, 0.2);
+            border-color: rgba(255, 51, 51, 0.5);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(255, 50, 50, 0.2);
         }
 
         .btn-primary {
-            background: rgba(0, 255, 255, 0.2);
+            background: rgba(255, 51, 51, 0.2);
+            border-color: #ff3333;
+        }
+
+        .btn-primary:hover {
+            background: rgba(255, 51, 51, 0.3);
         }
 
         .btn-danger {
-            border-color: #f00;
-            color: #f00;
-            background: rgba(255, 0, 0, 0.1);
+            background: rgba(255, 50, 50, 0.2);
+            border-color: #ff5555;
+            color: #ff5555;
         }
 
         .btn-danger:hover {
-            background: rgba(255, 0, 0, 0.3);
-            box-shadow: 0 0 10px #f00;
+            background: rgba(255, 50, 50, 0.3);
         }
 
         .btn-success {
-            border-color: #0f0;
-            color: #0f0;
-            background: rgba(0, 255, 0, 0.1);
+            background: rgba(0, 255, 136, 0.2);
+            border-color: #00ff88;
+            color: #00ff88;
         }
 
         .btn-success:hover {
-            background: rgba(0, 255, 0, 0.3);
-            box-shadow: 0 0 10px #0f0;
+            background: rgba(0, 255, 136, 0.3);
         }
 
         .btn-small {
-            padding: 5px 10px;
+            padding: 6px 12px;
             font-size: 12px;
             margin: 0 2px;
         }
 
-        .users-table {
+        .table {
             width: 100%;
-            background: rgba(0, 0, 0, 0.7);
-            border: 1px solid #0ff;
             border-collapse: collapse;
+            margin-top: 20px;
         }
 
-        .users-table th,
-        .users-table td {
+        .table thead {
+            background: rgba(255, 51, 51, 0.1);
+        }
+
+        .table th {
             padding: 12px;
             text-align: left;
-            border-bottom: 1px solid rgba(0, 255, 255, 0.3);
+            font-size: 13px;
+            color: #ff3333;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 600;
         }
 
-        .users-table th {
-            background: rgba(0, 255, 255, 0.2);
-            color: #0ff;
-            font-weight: bold;
+        .table td {
+            padding: 15px 12px;
+            border-top: 1px solid #2a2a2a;
+            font-size: 14px;
         }
 
-        .users-table tr:hover {
-            background: rgba(0, 255, 255, 0.1);
+        .table tbody tr {
+            transition: all 0.2s ease;
+        }
+
+        .table tbody tr:hover {
+            background: rgba(255, 51, 51, 0.05);
         }
 
         .role-badge {
-            padding: 4px 8px;
-            border-radius: 3px;
+            padding: 4px 12px;
+            border-radius: 12px;
             font-size: 12px;
-            font-weight: bold;
+            font-weight: 600;
+            text-transform: uppercase;
         }
 
         .role-admin {
-            background: rgba(255, 0, 0, 0.3);
-            border: 1px solid #f00;
-            color: #f00;
+            background: rgba(255, 50, 50, 0.2);
+            color: #ff5555;
         }
 
         .role-operator {
-            background: rgba(0, 100, 255, 0.3);
-            border: 1px solid #06f;
-            color: #06f;
+            background: rgba(0, 136, 255, 0.2);
+            color: #0088ff;
         }
 
         .role-viewer {
-            background: rgba(0, 255, 0, 0.3);
-            border: 1px solid #0f0;
-            color: #0f0;
+            background: rgba(0, 255, 136, 0.2);
+            color: #00ff88;
         }
 
         .status-indicator {
             display: inline-block;
-            width: 10px;
-            height: 10px;
+            width: 8px;
+            height: 8px;
             border-radius: 50%;
-            margin-right: 5px;
+            margin-right: 8px;
         }
 
         .status-active {
-            background: #0f0;
-            box-shadow: 0 0 5px #0f0;
+            background: #00ff88;
+            box-shadow: 0 0 8px #00ff88;
+        }
+
+        .status-inactive {
+            background: #666;
         }
 
         .status-inactive {
@@ -147,23 +280,24 @@
             left: 0;
             width: 100%;
             height: 100%;
-            background: rgba(0, 0, 0, 0.8);
-            z-index: 1000;
-        }
-
-        .modal.active {
-            display: flex;
+            background: rgba(0, 0, 0, 0.85);
+            z-index: 2000;
             align-items: center;
             justify-content: center;
         }
 
+        .modal.active {
+            display: flex;
+        }
+
         .modal-content {
-            background: #000;
-            border: 2px solid #0ff;
+            background: rgba(20, 20, 20, 0.98);
+            border: 1px solid #333;
+            border-radius: 12px;
             padding: 30px;
             max-width: 500px;
             width: 90%;
-            box-shadow: 0 0 20px #0ff;
+            box-shadow: 0 0 40px rgba(255, 51, 51, 0.3);
         }
 
         .modal-header {
@@ -171,25 +305,31 @@
             justify-content: space-between;
             align-items: center;
             margin-bottom: 20px;
-            padding-bottom: 10px;
-            border-bottom: 1px solid #0ff;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #333;
         }
 
         .modal-header h2 {
-            color: #0ff;
+            color: #ff3333;
+            font-size: 20px;
+            font-weight: 600;
             margin: 0;
+            font-family: 'Bebas Neue', 'Arial Narrow', sans-serif;
+            letter-spacing: 2px;
         }
 
         .close-btn {
             background: none;
             border: none;
-            color: #0ff;
-            font-size: 24px;
+            color: #666;
+            font-size: 28px;
             cursor: pointer;
+            line-height: 1;
+            transition: color 0.3s;
         }
 
         .close-btn:hover {
-            color: #f00;
+            color: #ff5555;
         }
 
         .form-group {
@@ -198,110 +338,130 @@
 
         .form-group label {
             display: block;
-            color: #0ff;
-            margin-bottom: 5px;
+            color: #ff3333;
+            margin-bottom: 8px;
+            font-size: 13px;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 1px;
         }
 
         .form-group input,
         .form-group select {
             width: 100%;
-            padding: 10px;
-            background: rgba(0, 255, 255, 0.1);
-            border: 1px solid #0ff;
-            color: #0ff;
-            font-family: 'Courier New', monospace;
+            padding: 10px 12px;
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid #333;
+            border-radius: 6px;
+            color: #e0e0e0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-size: 14px;
+            transition: all 0.3s;
         }
 
         .form-group input:focus,
         .form-group select:focus {
             outline: none;
-            box-shadow: 0 0 10px #0ff;
+            border-color: #ff3333;
+            box-shadow: 0 0 8px rgba(255, 51, 51, 0.3);
         }
 
         .form-actions {
             display: flex;
             gap: 10px;
             justify-content: flex-end;
+            margin-top: 25px;
         }
 
         .error-message {
-            color: #f00;
+            color: #ff5555;
             margin-top: 10px;
             padding: 10px;
-            background: rgba(255, 0, 0, 0.1);
-            border: 1px solid #f00;
+            background: rgba(255, 50, 50, 0.1);
+            border: 1px solid rgba(255, 50, 50, 0.3);
+            border-radius: 6px;
+            font-size: 14px;
         }
 
         .success-message {
-            color: #0f0;
+            color: #00ff88;
             margin-top: 10px;
             padding: 10px;
-            background: rgba(0, 255, 0, 0.1);
-            border: 1px solid #0f0;
-        }
-
-        .nav-link {
-            display: inline-block;
-            margin-right: 20px;
-            color: #0ff;
-            text-decoration: none;
-            padding: 10px;
-            border: 1px solid transparent;
-        }
-
-        .nav-link:hover {
-            border-color: #0ff;
-            background: rgba(0, 255, 255, 0.1);
+            background: rgba(0, 255, 136, 0.1);
+            border: 1px solid rgba(0, 255, 136, 0.3);
+            border-radius: 6px;
+            font-size: 14px;
         }
 
         .loading {
             text-align: center;
-            padding: 40px;
-            color: #0ff;
+            padding: 60px 20px;
+            color: #666;
+            font-size: 16px;
         }
 
         .no-data {
             text-align: center;
-            padding: 40px;
+            padding: 60px 20px;
             color: #666;
+            font-size: 16px;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #666;
+        }
+
+        .empty-state-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+            opacity: 0.3;
         }
     </style>
 </head>
 <body>
-    <nav style="padding: 20px; background: rgba(0, 0, 0, 0.5); border-bottom: 1px solid #0ff; margin-bottom: 20px;">
-        <a href="/dashboard" class="nav-link">📊 Dashboard</a>
-        <a href="/beacon" class="nav-link">🎯 Beacons</a>
-        <a href="/builder" class="nav-link">🔨 Builder</a>
-        <a href="/users" class="nav-link" style="border-color: #0ff; background: rgba(0, 255, 255, 0.1);">👥 Users</a>
-        <a href="#" onclick="logout()" class="nav-link" style="float: right;">🚪 Logout</a>
-    </nav>
-
-    <div class="users-container">
-        <div class="page-header">
-            <h1>👥 User Management</h1>
-            <button class="btn btn-primary" onclick="openCreateModal()" id="createUserBtn">
-                ➕ Create User
-            </button>
+    <div class="navbar">
+        <div class="navbar-brand">UNKN0WNC2</div>
+        <div class="navbar-right">
+            <button class="btn-logout" onclick="logout()">Logout</button>
         </div>
+    </div>
 
-        <div id="loadingIndicator" class="loading">Loading users...</div>
-        <div id="noDataIndicator" class="no-data" style="display: none;">No users found</div>
+    <div class="nav-menu">
+        <a href="/dashboard" class="nav-btn">Dashboard</a>
+        <a href="/builder" class="nav-btn">Builder</a>
+        <a href="/users" class="nav-btn active" id="usersNavBtn">Users</a>
+    </div>
 
-        <table class="users-table" id="usersTable" style="display: none;">
-            <thead>
-                <tr>
-                    <th>Status</th>
-                    <th>Username</th>
-                    <th>Role</th>
-                    <th>Email</th>
-                    <th>Last Login</th>
-                    <th>Created</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody id="usersTableBody">
-            </tbody>
-        </table>
+    <div class="container">
+        <div class="section">
+            <div class="section-header">
+                <h1 class="section-title">User Management</h1>
+                <button class="btn btn-primary" onclick="openCreateModal()" id="createUserBtn">
+                    Create User
+                </button>
+            </div>
+
+            <div id="loadingIndicator" class="loading">Loading users...</div>
+            <div id="noDataIndicator" class="no-data" style="display: none;">No users found</div>
+
+            <table class="table" id="usersTable" style="display: none;">
+                <thead>
+                    <tr>
+                        <th>Status</th>
+                        <th>Username</th>
+                        <th>Role</th>
+                        <th>Email</th>
+                        <th>Last Login</th>
+                        <th>Created</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="usersTableBody">
+                </tbody>
+            </table>
+        </div>
     </div>
 
     <!-- Create User Modal -->
@@ -514,14 +674,14 @@
                 const isCurrentUser = user.id === currentUserId;
                 
                 if (currentUserRole === 'admin' || isCurrentUser) {
-                    actions += `<button class="btn btn-small" onclick="openEditModal('${user.id}', '${user.username}', '${user.role}', '${user.email || ''}')">✏️ Edit</button>`;
-                    actions += `<button class="btn btn-small" onclick="openPasswordModal('${user.id}')">🔑 Password</button>`;
+                    actions += `<button class="btn btn-small" onclick="openEditModal('${user.id}', '${user.username}', '${user.role}', '${user.email || ''}')">Edit</button>`;
+                    actions += `<button class="btn btn-small" onclick="openPasswordModal('${user.id}')">Password</button>`;
                 }
                 
                 if (currentUserRole === 'admin' && !isCurrentUser) {
-                    const toggleText = user.active ? '🚫 Disable' : '✅ Enable';
+                    const toggleText = user.active ? 'Disable' : 'Enable';
                     actions += `<button class="btn btn-small ${user.active ? 'btn-danger' : 'btn-success'}" onclick="toggleStatus('${user.id}', ${!user.active})">${toggleText}</button>`;
-                    actions += `<button class="btn btn-small btn-danger" onclick="openDeleteModal('${user.id}', '${user.username}')">🗑️ Delete</button>`;
+                    actions += `<button class="btn btn-small btn-danger" onclick="openDeleteModal('${user.id}', '${user.username}')">Delete</button>`;
                 }
                 
                 tr.innerHTML = `

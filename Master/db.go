@@ -613,20 +613,18 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 		`, taskID).Scan(&chunkCount)
 
 		if err == nil && chunkCount == totalChunks {
-			// We have all chunks! Reassemble them
+			// We have all chunks! Reassemble them (call directly, we already hold the lock)
 			fmt.Printf("[Master DB] All %d chunks received for task %s, reassembling...\n", totalChunks, taskID)
-			go d.reassembleChunkedResult(taskID, beaconID, totalChunks)
+			d.reassembleChunkedResultLocked(taskID, beaconID, totalChunks)
 		}
 	}
 
 	return nil
 }
 
-// reassembleChunkedResult combines all chunks into a complete result
-func (d *MasterDatabase) reassembleChunkedResult(taskID, beaconID string, totalChunks int) {
-	d.mutex.Lock()
-	defer d.mutex.Unlock()
-
+// reassembleChunkedResultLocked combines all chunks into a complete result
+// Must be called with d.mutex already locked
+func (d *MasterDatabase) reassembleChunkedResultLocked(taskID, beaconID string, totalChunks int) {
 	// Check if we already have a complete assembled result (avoid duplicate work)
 	var existingID int
 	err := d.db.QueryRow(`
@@ -1520,22 +1518,32 @@ func (d *MasterDatabase) GetDatabaseStats() (map[string]interface{}, error) {
 
 	// Count DNS servers
 	var dnsServerCount, activeDNSServerCount int
-	d.db.QueryRow("SELECT COUNT(*) FROM dns_servers").Scan(&dnsServerCount)
-	d.db.QueryRow("SELECT COUNT(*) FROM dns_servers WHERE status = 'active'").Scan(&activeDNSServerCount)
+	if err := d.db.QueryRow("SELECT COUNT(*) FROM dns_servers").Scan(&dnsServerCount); err != nil {
+		dnsServerCount = 0
+	}
+	if err := d.db.QueryRow("SELECT COUNT(*) FROM dns_servers WHERE status = 'active'").Scan(&activeDNSServerCount); err != nil {
+		activeDNSServerCount = 0
+	}
 	stats["dns_servers"] = dnsServerCount
 	stats["active_dns_servers"] = activeDNSServerCount
 
 	// Count beacons
 	var beaconCount, activeBeaconCount int
-	d.db.QueryRow("SELECT COUNT(*) FROM beacons").Scan(&beaconCount)
+	if err := d.db.QueryRow("SELECT COUNT(*) FROM beacons").Scan(&beaconCount); err != nil {
+		beaconCount = 0
+	}
 	cutoff := time.Now().Add(-24 * time.Hour).Unix()
-	d.db.QueryRow("SELECT COUNT(*) FROM beacons WHERE last_seen > ? AND status = 'active'", cutoff).Scan(&activeBeaconCount)
+	if err := d.db.QueryRow("SELECT COUNT(*) FROM beacons WHERE last_seen > ? AND status = 'active'", cutoff).Scan(&activeBeaconCount); err != nil {
+		activeBeaconCount = 0
+	}
 	stats["beacons"] = beaconCount
 	stats["active_beacons"] = activeBeaconCount
 
 	// Count tasks
 	var taskCount int
-	d.db.QueryRow("SELECT COUNT(*) FROM tasks").Scan(&taskCount)
+	if err := d.db.QueryRow("SELECT COUNT(*) FROM tasks").Scan(&taskCount); err != nil {
+		taskCount = 0
+	}
 	stats["tasks"] = taskCount
 
 	// Tasks by status
@@ -1546,20 +1554,25 @@ func (d *MasterDatabase) GetDatabaseStats() (map[string]interface{}, error) {
 		for rows.Next() {
 			var status string
 			var count int
-			rows.Scan(&status, &count)
-			tasksByStatus[status] = count
+			if err := rows.Scan(&status, &count); err == nil {
+				tasksByStatus[status] = count
+			}
 		}
 		stats["tasks_by_status"] = tasksByStatus
 	}
 
 	// Count operators
 	var operatorCount int
-	d.db.QueryRow("SELECT COUNT(*) FROM operators WHERE is_active = 1").Scan(&operatorCount)
+	if err := d.db.QueryRow("SELECT COUNT(*) FROM operators WHERE is_active = 1").Scan(&operatorCount); err != nil {
+		operatorCount = 0
+	}
 	stats["operators"] = operatorCount
 
 	// Recent audit events
 	var auditEventCount int
-	d.db.QueryRow("SELECT COUNT(*) FROM audit_log WHERE timestamp > ?", cutoff).Scan(&auditEventCount)
+	if err := d.db.QueryRow("SELECT COUNT(*) FROM audit_log WHERE timestamp > ?", cutoff).Scan(&auditEventCount); err != nil {
+		auditEventCount = 0
+	}
 	stats["recent_audit_events"] = auditEventCount
 
 	return stats, nil
