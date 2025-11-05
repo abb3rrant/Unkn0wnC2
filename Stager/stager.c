@@ -674,6 +674,8 @@ static int dns_query_txt(const char *domain, char *response, size_t response_siz
     int recv_len = recvfrom(sock, (char *)answer, sizeof(answer), 0,
                            (struct sockaddr *)&dns_addr, &addr_len);
     
+    fprintf(stderr, "[DIAG] recvfrom returned: %d bytes (buffer size: %zu)\n", recv_len, sizeof(answer));
+
 #ifdef _WIN32
     closesocket(sock);
     WSACleanup();
@@ -682,6 +684,7 @@ static int dns_query_txt(const char *domain, char *response, size_t response_siz
 #endif
     
     if (recv_len <= 0) {
+        fprintf(stderr, "[DIAG] Failed to receive response (recv_len=%d)\n", recv_len);
         DEBUG_PRINT("[!] Failed to receive response (recv_len=%d)\n", recv_len);
         return -1;
     }
@@ -689,36 +692,47 @@ static int dns_query_txt(const char *domain, char *response, size_t response_siz
     DEBUG_PRINT("[*] Received %d bytes\n", recv_len);
     
     if (recv_len < sizeof(dns_header_t)) {
+        fprintf(stderr, "[DIAG] Response too short: %d bytes (need at least %zu)\n", 
+                recv_len, sizeof(dns_header_t));
         DEBUG_PRINT("[!] Response too short: %d bytes\n", recv_len);
         return -1;
-    }
-    
-    // Parse response header
+    }    // Parse response header
     dns_header_t *resp_header = (dns_header_t *)answer;
     uint16_t ancount = ntohs(resp_header->ancount);
     
+    fprintf(stderr, "[DIAG] Answer count: %d\n", ancount);
     DEBUG_PRINT("[*] Answer count: %d\n", ancount);
     
     if (ancount == 0) {
+        fprintf(stderr, "[DIAG] No answers in DNS response\n");
         DEBUG_PRINT("[!] No answers in DNS response\n");
         return -1;
     }
     
     // Skip question section
     size_t offset = sizeof(dns_header_t);
+    fprintf(stderr, "[DIAG] Starting to parse at offset: %zu\n", offset);
     if (skip_domain_name(answer, recv_len, &offset) < 0) {
+        fprintf(stderr, "[DIAG] Failed to skip question domain name\n");
         return -1;
     }
     offset += 4; // Skip QTYPE and QCLASS
+    fprintf(stderr, "[DIAG] After skipping question, offset: %zu\n", offset);
     
     // Parse answer section
     for (int i = 0; i < ancount && offset < recv_len; i++) {
+        fprintf(stderr, "[DIAG] Parsing answer %d at offset %zu\n", i, offset);
         // Skip name
         if (skip_domain_name(answer, recv_len, &offset) < 0) {
+            fprintf(stderr, "[DIAG] Failed to skip answer domain name\n");
             break;
         }
         
-        if (offset + 10 > recv_len) break;
+        if (offset + 10 > recv_len) {
+            fprintf(stderr, "[DIAG] Not enough data for answer header (offset=%zu, recv_len=%d)\n", 
+                    offset, recv_len);
+            break;
+        }
         
         uint16_t type = (answer[offset] << 8) | answer[offset + 1];
         offset += 2; // Type
@@ -728,14 +742,20 @@ static int dns_query_txt(const char *domain, char *response, size_t response_siz
         uint16_t rdlen = (answer[offset] << 8) | answer[offset + 1];
         offset += 2;
         
+        fprintf(stderr, "[DIAG] Answer type=%d, rdlen=%d, offset=%zu\n", type, rdlen, offset);
+        
         if (type == 16 && offset + rdlen <= recv_len) { // TXT record
-            parse_txt_record(answer + offset, rdlen, response, response_size);
+            fprintf(stderr, "[DIAG] Found TXT record, parsing %d bytes of data\n", rdlen);
+            int parsed = parse_txt_record(answer + offset, rdlen, response, response_size);
+            fprintf(stderr, "[DIAG] Parsed %d bytes from TXT record, result: %.80s...\n", 
+                    parsed, response);
             return 0;
         }
         
         offset += rdlen;
     }
     
+    fprintf(stderr, "[DIAG] No valid TXT record found in response\n");
     return -1;
 }
 

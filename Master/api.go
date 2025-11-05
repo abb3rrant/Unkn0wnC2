@@ -1395,8 +1395,9 @@ func (api *APIServer) handleStagerInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Split base64 data into chunks (already done by loadAndProcessClientBinary)
-	const chunkSize = 403
+	// Split base64 data into chunks
+	// DNS UDP limit: 512 bytes - headers (~125 bytes) - "CHUNK|" (6 bytes) - TXT overhead (~10 bytes) = ~370 bytes safe
+	const chunkSize = 370
 	var chunks []string
 	for i := 0; i < len(base64Data); i += chunkSize {
 		end := i + chunkSize
