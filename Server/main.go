@@ -100,6 +100,18 @@ var zoneA map[string]string
 var zoneAAAA map[string]string
 var zoneCNAME map[string]string
 var zoneNS map[string]string
+var zoneSOA map[string]SOARecord
+
+// SOARecord holds the fields for a DNS SOA record
+type SOARecord struct {
+	MNAME   string // Primary name server
+	RNAME   string // Admin email (dots instead of @)
+	Serial  uint32 // Zone serial number
+	Refresh uint32 // Seconds before secondary checks for updates
+	Retry   uint32 // Seconds before secondary retries after failed refresh
+	Expire  uint32 // Seconds before secondary stops answering
+	Minimum uint32 // TTL for negative caching
+}
 
 // getOutboundIP gets the preferred outbound IP of this machine
 
@@ -112,9 +124,21 @@ func initializeZones(cfg Config) {
 	zoneAAAA = make(map[string]string)
 	zoneCNAME = make(map[string]string)
 	zoneNS = make(map[string]string)
+	zoneSOA = make(map[string]SOARecord)
 
 	// Set up NS records for our domain
 	zoneNS[cfg.Domain] = cfg.NS1
+
+	// Set up SOA record for our domain
+	zoneSOA[cfg.Domain] = SOARecord{
+		MNAME:   cfg.NS1,                     // Primary nameserver
+		RNAME:   "admin." + cfg.Domain + ".", // Admin email as admin@domain
+		Serial:  1,                           // Zone serial
+		Refresh: 3600,                        // 1 hour
+		Retry:   600,                         // 10 minutes
+		Expire:  86400,                       // 1 day
+		Minimum: 300,                         // 5 minute negative cache TTL
+	}
 
 	// Determine server IP for A records
 	serverIP := cfg.SvrAddr
@@ -456,6 +480,29 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 						})
 					}
 				}
+			}
+
+		case 6: // SOA
+			// Return SOA record for zone apex
+			if soa, ok := zoneSOA[qname]; ok {
+				// Encode SOA RDATA: MNAME + RNAME + 5x32-bit values
+				var soaData []byte
+				soaData = appendName(soaData, soa.MNAME)
+				soaData = appendName(soaData, soa.RNAME)
+				soaData = append(soaData,
+					byte(soa.Serial>>24), byte(soa.Serial>>16), byte(soa.Serial>>8), byte(soa.Serial),
+					byte(soa.Refresh>>24), byte(soa.Refresh>>16), byte(soa.Refresh>>8), byte(soa.Refresh),
+					byte(soa.Retry>>24), byte(soa.Retry>>16), byte(soa.Retry>>8), byte(soa.Retry),
+					byte(soa.Expire>>24), byte(soa.Expire>>16), byte(soa.Expire>>8), byte(soa.Expire),
+					byte(soa.Minimum>>24), byte(soa.Minimum>>16), byte(soa.Minimum>>8), byte(soa.Minimum),
+				)
+				answers = append(answers, DNSResourceRecord{
+					Name:  q.Name,
+					Type:  6,
+					Class: 1,
+					TTL:   300,
+					RData: soaData,
+				})
 			}
 		}
 	}
