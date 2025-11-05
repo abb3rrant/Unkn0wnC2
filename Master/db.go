@@ -975,23 +975,27 @@ func (d *MasterDatabase) CreateStagerSession(id, stagerIP, os, arch, clientBinar
 }
 
 // UpsertClientBinary inserts or updates a client binary record (for filesystem-loaded beacons)
-func (d *MasterDatabase) UpsertClientBinary(id, filename, os, arch string, originalSize, compressedSize, base64Size int) error {
+func (d *MasterDatabase) UpsertClientBinary(id, filename, os, arch string, originalSize, compressedSize, base64Size, totalChunks int, base64Data, dnsDomains string) error {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 
 	now := time.Now().Unix()
 
 	_, err := d.db.Exec(`
-		INSERT INTO client_binaries (id, filename, os, arch, original_size, compressed_size, base64_size, created_at, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO client_binaries (id, filename, os, arch, original_size, compressed_size, base64_size, 
+			chunk_size, total_chunks, base64_data, dns_domains, created_at, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 403, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			filename = excluded.filename,
 			os = excluded.os,
 			arch = excluded.arch,
 			original_size = excluded.original_size,
 			compressed_size = excluded.compressed_size,
-			base64_size = excluded.base64_size
-	`, id, filename, os, arch, originalSize, compressedSize, base64Size, now, "filesystem")
+			base64_size = excluded.base64_size,
+			total_chunks = excluded.total_chunks,
+			base64_data = excluded.base64_data,
+			dns_domains = excluded.dns_domains
+	`, id, filename, os, arch, originalSize, compressedSize, base64Size, totalChunks, base64Data, dnsDomains, now, "filesystem")
 
 	return err
 }
