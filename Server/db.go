@@ -192,6 +192,17 @@ func (d *Database) migration1InitialSchema() error {
 	CREATE INDEX IF NOT EXISTS idx_task_results_beacon_id ON task_results(beacon_id);
 	CREATE INDEX IF NOT EXISTS idx_task_results_received_at ON task_results(received_at);
 	CREATE INDEX IF NOT EXISTS idx_task_results_complete ON task_results(task_id, is_complete);
+
+	-- Stager chunk cache (pre-loaded from Master for instant responses)
+	CREATE TABLE IF NOT EXISTS stager_chunk_cache (
+		client_binary_id TEXT NOT NULL,
+		chunk_index INTEGER NOT NULL,
+		chunk_data TEXT NOT NULL,
+		cached_at INTEGER NOT NULL,
+		PRIMARY KEY (client_binary_id, chunk_index)
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_stager_cache_binary ON stager_chunk_cache(client_binary_id);
 	`
 
 	_, err := d.db.Exec(schema)
@@ -863,4 +874,108 @@ func (d *Database) ExportBeaconData(beaconID string) ([]byte, error) {
 	}
 
 	return json.MarshalIndent(export, "", "  ")
+}
+
+// Stager Chunk Cache Operations
+
+// CacheChunk stores a single chunk in local cache for instant retrieval
+func (d *Database) CacheChunk(sessionID string, chunkIndex int, chunkData string) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	_, err := d.db.Exec(`
+		INSERT OR REPLACE INTO stager_chunk_cache (client_binary_id, chunk_index, chunk_data, cached_at)
+		VALUES (?, ?, ?, ?)
+	`, sessionID, chunkIndex, chunkData, time.Now().Unix())
+
+	return err
+}
+
+// GetCachedChunk retrieves a chunk from local cache
+func (d *Database) GetCachedChunk(sessionID string, chunkIndex int) (string, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	var chunkData string
+	err := d.db.QueryRow(`
+		SELECT chunk_data FROM stager_chunk_cache
+		WHERE client_binary_id = ? AND chunk_index = ?
+	`, sessionID, chunkIndex).Scan(&chunkData)
+
+	if err == sql.ErrNoRows {
+		return "", fmt.Errorf("chunk not found in cache")
+	}
+
+	return chunkData, err
+}
+
+// CacheStagerChunks stores chunks in local cache for instant retrieval (batch operation)
+func (d *Database) CacheStagerChunks(clientBinaryID string, chunks []string) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Clear existing cache for this binary
+	_, err = tx.Exec(`DELETE FROM stager_chunk_cache WHERE client_binary_id = ?`, clientBinaryID)
+	if err != nil {
+		return fmt.Errorf("failed to clear old cache: %w", err)
+	}
+
+	// Insert all chunks
+	stmt, err := tx.Prepare(`
+		INSERT INTO stager_chunk_cache (client_binary_id, chunk_index, chunk_data, cached_at)
+		VALUES (?, ?, ?, ?)
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare statement: %w", err)
+	}
+	defer stmt.Close()
+
+	now := time.Now().Unix()
+	for i, chunkData := range chunks {
+		_, err = stmt.Exec(clientBinaryID, i, chunkData, now)
+		if err != nil {
+			return fmt.Errorf("failed to cache chunk %d: %w", i, err)
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	logf("[DB] Cached %d chunks for client binary: %s", len(chunks), clientBinaryID)
+	return nil
+}
+
+// GetCachedChunkCount returns the number of cached chunks for a binary
+func (d *Database) GetCachedChunkCount(clientBinaryID string) (int, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	var count int
+	err := d.db.QueryRow(`
+		SELECT COUNT(*) FROM stager_chunk_cache WHERE client_binary_id = ?
+	`, clientBinaryID).Scan(&count)
+
+	return count, err
+}
+
+// ClearStagerCache removes all cached chunks (for cleanup/maintenance)
+func (d *Database) ClearStagerCache() error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	result, err := d.db.Exec(`DELETE FROM stager_chunk_cache`)
+	if err != nil {
+		return err
+	}
+
+	deleted, _ := result.RowsAffected()
+	logf("[DB] Cleared %d cached chunks", deleted)
+	return nil
 }

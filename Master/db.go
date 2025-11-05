@@ -341,6 +341,21 @@ func (d *MasterDatabase) migration1InitialSchema() error {
 	CREATE INDEX IF NOT EXISTS idx_stager_chunks_dns_server ON stager_chunk_assignments(dns_server_id);
 	CREATE INDEX IF NOT EXISTS idx_stager_chunks_delivered ON stager_chunk_assignments(delivered);
 
+	-- Pending stager cache tasks (sent to DNS servers on next checkin)
+	CREATE TABLE IF NOT EXISTS pending_stager_caches (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		dns_server_id TEXT NOT NULL,
+		client_binary_id TEXT NOT NULL,
+		created_at INTEGER NOT NULL,
+		delivered INTEGER DEFAULT 0,
+		delivered_at INTEGER,
+		FOREIGN KEY (dns_server_id) REFERENCES dns_servers(id) ON DELETE CASCADE,
+		FOREIGN KEY (client_binary_id) REFERENCES client_binaries(id) ON DELETE CASCADE
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_pending_caches_dns_server ON pending_stager_caches(dns_server_id);
+	CREATE INDEX IF NOT EXISTS idx_pending_caches_delivered ON pending_stager_caches(delivered);
+
 	-- Sessions table (JWT session tracking)
 	CREATE TABLE IF NOT EXISTS sessions (
 		id TEXT PRIMARY KEY,
@@ -2042,4 +2057,108 @@ func (d *MasterDatabase) GetDatabaseStats() (map[string]interface{}, error) {
 	stats["recent_audit_events"] = auditEventCount
 
 	return stats, nil
+}
+
+// Stager Cache Management
+
+// QueueStagerCacheForDNSServers queues a client binary to be cached by all active DNS servers
+func (d *MasterDatabase) QueueStagerCacheForDNSServers(clientBinaryID string, dnsServerIDs []string) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	now := time.Now().Unix()
+
+	for _, serverID := range dnsServerIDs {
+		_, err := d.db.Exec(`
+			INSERT INTO pending_stager_caches (dns_server_id, client_binary_id, created_at, delivered)
+			VALUES (?, ?, ?, 0)
+		`, serverID, clientBinaryID, now)
+
+		if err != nil {
+			return fmt.Errorf("failed to queue cache for server %s: %w", serverID, err)
+		}
+	}
+
+	return nil
+}
+
+// GetPendingStagerCaches retrieves all pending cache tasks for a DNS server
+func (d *MasterDatabase) GetPendingStagerCaches(dnsServerID string) ([]map[string]interface{}, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	rows, err := d.db.Query(`
+		SELECT psc.id, psc.client_binary_id, cb.base64_data, cb.total_chunks
+		FROM pending_stager_caches psc
+		JOIN client_binaries cb ON psc.client_binary_id = cb.id
+		WHERE psc.dns_server_id = ? AND psc.delivered = 0
+		ORDER BY psc.created_at ASC
+	`, dnsServerID)
+
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var caches []map[string]interface{}
+	for rows.Next() {
+		var id int
+		var clientBinaryID, base64Data string
+		var totalChunks int
+
+		if err := rows.Scan(&id, &clientBinaryID, &base64Data, &totalChunks); err != nil {
+			return nil, err
+		}
+
+		// Split base64 data into chunks
+		const chunkSize = 403
+		var chunks []string
+		for i := 0; i < len(base64Data); i += chunkSize {
+			end := i + chunkSize
+			if end > len(base64Data) {
+				end = len(base64Data)
+			}
+			chunks = append(chunks, base64Data[i:end])
+		}
+
+		caches = append(caches, map[string]interface{}{
+			"id":               id,
+			"client_binary_id": clientBinaryID,
+			"total_chunks":     totalChunks,
+			"chunks":           chunks,
+		})
+	}
+
+	return caches, rows.Err()
+}
+
+// MarkStagerCacheDelivered marks cache tasks as delivered
+func (d *MasterDatabase) MarkStagerCacheDelivered(cacheIDs []int) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	if len(cacheIDs) == 0 {
+		return nil
+	}
+
+	now := time.Now().Unix()
+
+	// Build placeholders for IN clause
+	placeholders := make([]string, len(cacheIDs))
+	args := make([]interface{}, len(cacheIDs)+1)
+	args[0] = now
+
+	for i, id := range cacheIDs {
+		placeholders[i] = "?"
+		args[i+1] = id
+	}
+
+	query := fmt.Sprintf(`
+		UPDATE pending_stager_caches
+		SET delivered = 1, delivered_at = ?
+		WHERE id IN (%s)
+	`, strings.Join(placeholders, ","))
+
+	_, err := d.db.Exec(query, args...)
+	return err
 }

