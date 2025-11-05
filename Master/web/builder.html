@@ -422,11 +422,11 @@
                 </div>
 
                 <div class="form-group">
-                    <label class="form-label">Stager Domain *</label>
-                    <select id="stagerDomain" class="form-select">
-                        <option value="" disabled selected>Select a DNS server</option>
+                    <label class="form-label">Client Binary *</label>
+                    <select id="stagerClientBinary" class="form-select">
+                        <option value="" disabled selected>Select a client binary</option>
                     </select>
-                    <div class="help-text">DNS server to fetch payload from</div>
+                    <div class="help-text">Pre-built beacon to deploy via stager</div>
                 </div>
 
                 <div class="form-group">
@@ -556,7 +556,6 @@
 
                 // Update client DNS servers display
                 const clientList = document.getElementById('clientDNSServersList');
-                const stagerSelect = document.getElementById('stagerDomain');
 
                 if (servers.length === 0) {
                     clientList.innerHTML = '<span style="color: #888;">No DNS servers registered yet. Build a DNS server first.</span>';
@@ -565,17 +564,35 @@
                         `<div style="padding: 5px; color: #4CAF50;">✓ ${server.domain} (${server.id})</div>`
                     ).join('');
                 }
-
-                // Update stager dropdown
-                stagerSelect.innerHTML = '<option value="">Select a DNS server</option>';
-                servers.forEach(server => {
-                    const stagerOption = document.createElement('option');
-                    stagerOption.value = server.domain;
-                    stagerOption.textContent = `${server.domain} (${server.id})`;
-                    stagerSelect.appendChild(stagerOption);
-                });
             } catch (error) {
                 console.error('Failed to load DNS servers:', error);
+            }
+        }
+
+        async function loadClientBinaries() {
+            try {
+                const response = await authFetch('/api/builder/client-binaries');
+                if (!response) return;
+
+                const binaries = await response.json();
+                const stagerSelect = document.getElementById('stagerClientBinary');
+
+                stagerSelect.innerHTML = '<option value="">Select a client binary</option>';
+                
+                if (binaries.length === 0) {
+                    stagerSelect.innerHTML = '<option value="" disabled>No client binaries available - build a client first</option>';
+                    return;
+                }
+
+                binaries.forEach(binary => {
+                    const option = document.createElement('option');
+                    option.value = binary.id;
+                    const sizeMB = (binary.compressed_size / 1024 / 1024).toFixed(2);
+                    option.textContent = `${binary.os}/${binary.arch} - ${sizeMB}MB (${binary.total_chunks} chunks) - ${new Date(binary.created_at).toLocaleDateString()}`;
+                    stagerSelect.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Failed to load client binaries:', error);
             }
         }
 
@@ -706,7 +723,7 @@
         }
 
         async function buildStager() {
-            const domain = document.getElementById('stagerDomain').value;
+            const clientBinaryID = document.getElementById('stagerClientBinary').value;
             const platform = document.getElementById('stagerPlatform').value;
             const payloadURL = document.getElementById('stagerPayloadURL').value.trim();
             const jitterMin = parseInt(document.getElementById('stagerJitterMin').value);
@@ -714,8 +731,8 @@
             const chunksPerBurst = parseInt(document.getElementById('stagerChunksPerBurst').value);
             const burstPause = parseInt(document.getElementById('stagerBurstPause').value);
 
-            if (!domain) {
-                showAlert('Please select a DNS server domain', 'error');
+            if (!clientBinaryID) {
+                showAlert('Please select a client binary', 'error');
                 return;
             }
 
@@ -725,7 +742,7 @@
                 const response = await authFetch('/api/builder/stager', {
                     method: 'POST',
                     body: JSON.stringify({
-                        domain,
+                        client_binary_id: clientBinaryID,
                         platform,
                         payload_url: payloadURL,
                         jitter_min_ms: jitterMin,
@@ -769,6 +786,7 @@
 
         // Initialize
         loadDNSServers();
+        loadClientBinaries();
         loadBuilds();
 
         async function loadBuilds() {

