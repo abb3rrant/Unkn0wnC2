@@ -174,6 +174,7 @@ cd Master
 # Generate secure credentials
 JWT_SECRET=$(openssl rand -hex 32)
 ADMIN_PASSWORD=$(openssl rand -base64 16 | tr -d '/+=' | cut -c1-16)
+ENCRYPTION_KEY=$(openssl rand -hex 16)  # 32 character hex string for AES-256
 
 # Create default config if it doesn't exist
 if [ ! -f /opt/unkn0wnc2/master_config.json ]; then
@@ -186,6 +187,7 @@ if [ ! -f /opt/unkn0wnc2/master_config.json ]; then
   "database_path": "/opt/unkn0wnc2/master.db",
   "web_root": "/opt/unkn0wnc2/web",
   "source_dir": "/opt/unkn0wnc2/src",
+  "encryption_key": "${ENCRYPTION_KEY}",
   "jwt_secret": "${JWT_SECRET}",
   "session_timeout": 480,
   "admin_credentials": {
@@ -269,11 +271,14 @@ echo ""
 # Display generated credentials if new install
 if [ -f /tmp/unkn0wnc2_admin_pass ]; then
     ADMIN_PASSWORD=$(cat /tmp/unkn0wnc2_admin_pass)
+    ENCRYPTION_KEY=$(grep '"encryption_key"' /opt/unkn0wnc2/master_config.json | cut -d'"' -f4)
     echo -e "${CYAN}╔════════════════════════════════════════╗${NC}"
     echo -e "${CYAN}║     ADMIN CREDENTIALS (SAVE THESE!)    ║${NC}"
     echo -e "${CYAN}╠════════════════════════════════════════╣${NC}"
     echo -e "${CYAN}║${NC} Username: ${GREEN}admin${NC}                          ${CYAN}║${NC}"
     echo -e "${CYAN}║${NC} Password: ${GREEN}${ADMIN_PASSWORD}${NC}                  ${CYAN}║${NC}"
+    echo -e "${CYAN}╠════════════════════════════════════════╣${NC}"
+    echo -e "${CYAN}║${NC} Encryption Key: ${GREEN}${ENCRYPTION_KEY}${NC}  ${CYAN}║${NC}"
     echo -e "${CYAN}╚════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "${YELLOW}⚠  These credentials will NOT be shown again!${NC}"

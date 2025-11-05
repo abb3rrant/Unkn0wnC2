@@ -19,6 +19,7 @@ type Config struct {
 	DatabasePath     string           `json:"database_path"`     // Path to master SQLite database
 	WebRoot          string           `json:"web_root"`          // Path to web UI files directory
 	SourceDir        string           `json:"source_dir"`        // Path to source code directory for building
+	EncryptionKey    string           `json:"encryption_key"`    // Global encryption key for all C2 communications
 	Debug            bool             `json:"debug"`             // Enable debug logging
 	JWTSecret        string           `json:"jwt_secret"`        // Secret for JWT token signing
 	SessionTimeout   int              `json:"session_timeout"`   // Session timeout in minutes (default: 60)
