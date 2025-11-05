@@ -277,6 +277,16 @@
             color: #87ceeb;
         }
 
+        .task-status.exfiltrating {
+            background: rgba(255, 140, 0, 0.2);
+            color: #ff8c00;
+        }
+
+        .task-status.assembling {
+            background: rgba(255, 215, 0, 0.2);
+            color: #ffd700;
+        }
+
         .task-status.completed {
             background: rgba(0, 255, 0, 0.2);
             color: #00ff00;
@@ -589,6 +599,7 @@
         let currentBeaconHostname = '';
         let selectedTaskId = null;
         let autoRefreshInterval = null;
+        let isCreatingTask = false; // Prevent multiple simultaneous task creations
 
         // Get URL parameters
         function getUrlParams() {
@@ -727,6 +738,20 @@
                     // Enhanced status display for better clarity
                     if (task.status === 'pending') {
                         displayStatus = 'QUEUED';
+                    } else if (task.status === 'exfiltrating') {
+                        displayStatus = 'EXFILTRATING';
+                        statusClass = 'exfiltrating';
+                        // Show progress if available
+                        if (task.progress) {
+                            const prog = task.progress;
+                            progressHtml = `
+                                <div class="task-progress-inline">
+                                    <div class="progress-bar-container-small">
+                                        <div class="progress-bar-small" style="width: ${prog.progress}%"></div>
+                                    </div>
+                                    <div class="progress-text-small">${prog.received_chunks}/${prog.total_chunks} chunks (${prog.progress}%)</div>
+                                </div>`;
+                        }
                     } else if (task.status === 'sent' && task.progress) {
                         // Task is being executed and data is being exfiltrated
                         const prog = task.progress;
@@ -791,15 +816,15 @@
                 if (task.status === 'completed' && task.result) {
                     resultContent.textContent = task.result;
                     resultSection.style.display = 'block';
-                } else if (task.status === 'sent' && task.progress) {
+                } else if (task.status === 'exfiltrating' || (task.status === 'sent' && task.progress)) {
                     // Show progress bar for tasks in progress
                     const progress = task.progress;
                     let statusMessage = '';
                     let statusIcon = '';
 
-                    if (progress.received_chunks === 0) {
-                        statusIcon = '⚡';
-                        statusMessage = 'Command sent to beacon, waiting for execution...';
+                    if (!progress || progress.received_chunks === 0) {
+                        statusIcon = '📤';
+                        statusMessage = 'Beacon is sending results back...';
                     } else if (progress.received_chunks < progress.total_chunks) {
                         statusIcon = '📥';
                         statusMessage = `Exfiltrating results via Shadow Mesh (distributed across ${task.dns_servers || 'multiple'} DNS servers)`;
@@ -808,18 +833,26 @@
                         statusMessage = 'All chunks received, assembling final result...';
                     }
 
-                    resultContent.innerHTML = `
-                        <div class="no-result">
-                            <div style="font-size: 32px; margin-bottom: 10px;">${statusIcon}</div>
-                            <div style="font-size: 14px; margin-bottom: 20px;">${statusMessage}</div>
-                            <div class="progress-bar-container">
-                                <div class="progress-bar" style="width: ${progress.progress}%"></div>
-                            </div>
-                            <div class="progress-text" style="margin-top: 10px; font-size: 13px;">
-                                <strong>${progress.received_chunks} / ${progress.total_chunks} chunks</strong> (${progress.progress}%)
-                            </div>
-                            ${progress.status ? `<div style="color: #888; font-size: 11px; margin-top: 5px;">Status: ${progress.status}</div>` : ''}
-                        </div>`;
+                    if (progress) {
+                        resultContent.innerHTML = `
+                            <div class="no-result">
+                                <div style="font-size: 32px; margin-bottom: 10px;">${statusIcon}</div>
+                                <div style="font-size: 14px; margin-bottom: 20px;">${statusMessage}</div>
+                                <div class="progress-bar-container">
+                                    <div class="progress-bar" style="width: ${progress.progress}%"></div>
+                                </div>
+                                <div class="progress-text" style="margin-top: 10px; font-size: 13px;">
+                                    <strong>${progress.received_chunks} / ${progress.total_chunks} chunks</strong> (${progress.progress}%)
+                                </div>
+                                ${progress.status ? `<div style="color: #888; font-size: 11px; margin-top: 5px;">Status: ${progress.status}</div>` : ''}
+                            </div>`;
+                    } else {
+                        resultContent.innerHTML = `
+                            <div class="no-result">
+                                <div style="font-size: 32px; margin-bottom: 10px;">${statusIcon}</div>
+                                <div style="font-size: 14px;">${statusMessage}</div>
+                            </div>`;
+                    }
                     resultSection.style.display = 'block';
                 } else if (task.status === 'pending') {
                     resultContent.innerHTML = '<div class="no-result">⏳ Task queued, waiting for beacon check-in...</div>';
@@ -842,6 +875,12 @@
 
         // Create a new task
         async function createTask() {
+            // Prevent multiple simultaneous task submissions
+            if (isCreatingTask) {
+                console.log('Task creation already in progress, ignoring...');
+                return;
+            }
+
             const commandInput = document.getElementById('commandInput');
             const command = commandInput.value.trim();
 
@@ -851,7 +890,14 @@
             }
 
             try {
+                isCreatingTask = true;
                 document.getElementById('loadingOverlay').classList.add('show');
+
+                // Pause auto-refresh during task creation
+                if (autoRefreshInterval) {
+                    clearInterval(autoRefreshInterval);
+                    autoRefreshInterval = null;
+                }
 
                 const response = await authFetch(`/api/beacons/${currentBeaconId}/task`, {
                     method: 'POST',
@@ -871,10 +917,8 @@
                     showAlert(`Task created successfully: ${result.data.task_id}`, 'success');
                     commandInput.value = '';
                     
-                    // Reload tasks after a short delay
-                    setTimeout(() => {
-                        loadTasks();
-                    }, 500);
+                    // Reload tasks immediately
+                    await loadTasks();
                 } else {
                     showAlert(result.message || 'Failed to create task', 'error');
                 }
@@ -882,7 +926,18 @@
                 console.error('Error creating task:', error);
                 showAlert('Failed to create task', 'error');
             } finally {
+                isCreatingTask = false;
                 document.getElementById('loadingOverlay').classList.remove('show');
+                
+                // Resume auto-refresh after task creation
+                if (!autoRefreshInterval) {
+                    autoRefreshInterval = setInterval(() => {
+                        loadTasks();
+                        if (selectedTaskId) {
+                            selectTask(selectedTaskId);
+                        }
+                    }, 5000);
+                }
             }
         }
 

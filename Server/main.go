@@ -9,11 +9,15 @@ C2 beacon traffic using AES-GCM encryption and Base36 encoding for stealth.
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"math/rand"
 	"net"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -617,73 +621,118 @@ func main() {
 	fmt.Println("Console disabled (distributed mode - use Master server web UI)")
 	fmt.Println()
 
-	// Increase read buffer if needed for performance
-	_ = pc.SetReadDeadline(time.Time{})
+	// Setup graceful shutdown
+	shutdownChan := make(chan os.Signal, 1)
+	signal.Notify(shutdownChan, os.Interrupt, syscall.SIGTERM)
 
-	buf := make([]byte, 512) // typical DNS UDP packet size
-	for {
-		n, raddr, err := pc.ReadFrom(buf)
-		if err != nil {
-			logf("read error: %v", err)
-			continue
-		}
-		pkt := make([]byte, n)
-		copy(pkt, buf[:n])
+	// Context for shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-		// Log incoming queries (debug mode only)
-		if debugMode {
-			if msg, _, err := parseMessage(pkt); err == nil {
-				for _, q := range msg.Questions {
-					qname := strings.TrimSuffix(strings.ToLower(q.Name), ".")
-					logf("client=%s id=0x%04X q=%s type=%d class=%d",
-						raddr.String(), msg.Header.ID, q.Name, q.Type, q.Class)
+	// Start DNS server in goroutine
+	go func() {
+		// Increase read buffer if needed for performance
+		_ = pc.SetReadDeadline(time.Time{})
 
-					// Check if this looks like C2 traffic
-					if strings.Contains(qname, cfg.Domain) {
-						parts := strings.SplitN(qname, ".", 2)
-						if len(parts) > 0 && len(parts[0]) > 20 {
-							logf("Possible C2 traffic detected from %s", raddr.String())
+		buf := make([]byte, 512) // typical DNS UDP packet size
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				// Set read timeout to allow checking ctx.Done periodically
+				pc.SetReadDeadline(time.Now().Add(1 * time.Second))
+
+				n, raddr, err := pc.ReadFrom(buf)
+				if err != nil {
+					// Check if it's a timeout, if so continue to check ctx
+					if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+						continue
+					}
+					if ctx.Err() != nil {
+						return
+					}
+					logf("read error: %v", err)
+					continue
+				}
+				pkt := make([]byte, n)
+				copy(pkt, buf[:n])
+
+				// Log incoming queries (debug mode only)
+				if debugMode {
+					if msg, _, err := parseMessage(pkt); err == nil {
+						for _, q := range msg.Questions {
+							qname := strings.TrimSuffix(strings.ToLower(q.Name), ".")
+							logf("client=%s id=0x%04X q=%s type=%d class=%d",
+								raddr.String(), msg.Header.ID, q.Name, q.Type, q.Class)
+
+							// Check if this looks like C2 traffic
+							if strings.Contains(qname, cfg.Domain) {
+								parts := strings.SplitN(qname, ".", 2)
+								if len(parts) > 0 && len(parts[0]) > 20 {
+									logf("Possible C2 traffic detected from %s", raddr.String())
+								}
+							}
 						}
+					} else {
+						logf("client=%s parse_error=%v", raddr.String(), err)
 					}
 				}
-			} else {
-				logf("client=%s parse_error=%v", raddr.String(), err)
+
+				// Handle the query
+				clientIP := raddr.String()
+				if host, _, err := net.SplitHostPort(clientIP); err == nil {
+					clientIP = host
+				}
+
+				resp, err := handleQuery(pkt, cfg, clientIP)
+
+				if err != nil {
+					logf("ERROR handling query: %v", err)
+					continue
+				}
+
+				if len(resp) == 0 {
+					if debugMode {
+						logf("WARNING: empty response generated")
+					}
+					continue
+				}
+
+				// Send the response back to the same address
+				bytesWritten, writeErr := pc.WriteTo(resp, raddr)
+				if writeErr != nil {
+					logf("ERROR writing response: %v", writeErr)
+					continue
+				}
+
+				// Log only in debug mode
+				if debugMode {
+					if validateMsg, _, parseErr := parseMessage(resp); parseErr == nil {
+						logf("→ Sent %d bytes, ID=0x%04X, answers=%d to %s",
+							bytesWritten, validateMsg.Header.ID, validateMsg.Header.ANCount, raddr.String())
+					}
+				}
 			}
 		}
+	}()
 
-		// Handle the query
-		clientIP := raddr.String()
-		if host, _, err := net.SplitHostPort(clientIP); err == nil {
-			clientIP = host
-		}
+	// Wait for shutdown signal
+	<-shutdownChan
+	fmt.Println("\n🛑 Shutting down DNS C2 Server...")
 
-		resp, err := handleQuery(pkt, cfg, clientIP)
+	// Cancel context to stop DNS server
+	cancel()
 
-		if err != nil {
-			logf("ERROR handling query: %v", err)
-			continue
-		}
-
-		if len(resp) == 0 {
-			if debugMode {
-				logf("WARNING: empty response generated")
-			}
-			continue
-		}
-
-		// Send the response back to the same address
-		bytesWritten, writeErr := pc.WriteTo(resp, raddr)
-		if writeErr != nil {
-			logf("ERROR writing response: %v", writeErr)
-			continue
-		}
-
-		// Log only in debug mode
-		if debugMode {
-			if validateMsg, _, parseErr := parseMessage(resp); parseErr == nil {
-				logf("→ Sent %d bytes, ID=0x%04X, answers=%d to %s",
-					bytesWritten, validateMsg.Header.ID, validateMsg.Header.ANCount, raddr.String())
-			}
+	// Close database
+	if c2Manager != nil && c2Manager.db != nil {
+		if err := c2Manager.db.Close(); err != nil {
+			fmt.Printf("Warning: Error closing database: %v\n", err)
 		}
 	}
+
+	// Give goroutines time to finish
+	time.Sleep(500 * time.Millisecond)
+
+	fmt.Println("✓ DNS C2 Server stopped gracefully")
 }

