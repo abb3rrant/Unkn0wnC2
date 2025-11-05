@@ -825,6 +825,9 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	operatorRouter.HandleFunc("/builder/dns-server", api.handleBuildDNSServer).Methods("POST")
 	operatorRouter.HandleFunc("/builder/client", api.handleBuildClient).Methods("POST")
 	operatorRouter.HandleFunc("/builder/stager", api.handleBuildStager).Methods("POST")
+	operatorRouter.HandleFunc("/builder/builds", api.handleListBuilds).Methods("GET")
+	operatorRouter.HandleFunc("/builder/builds/download", api.handleDownloadBuild).Methods("GET")
+	operatorRouter.HandleFunc("/builder/builds/delete", api.handleDeleteBuild).Methods("DELETE")
 
 	// DNS server endpoints (API key auth required)
 	dnsRouter := router.PathPrefix("/api/dns-server").Subrouter()

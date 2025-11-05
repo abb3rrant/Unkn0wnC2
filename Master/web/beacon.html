@@ -58,6 +58,42 @@
             background: rgba(255, 51, 51, 0.2);
         }
 
+        .nav-menu {
+            background: rgba(25, 25, 25, 0.95);
+            border-bottom: 1px solid #333;
+            padding: 12px 30px;
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .nav-btn {
+            padding: 10px 24px;
+            background: rgba(255, 50, 50, 0.1);
+            border: 1px solid rgba(255, 50, 50, 0.3);
+            border-radius: 6px;
+            color: #e0e0e0;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .nav-btn:hover {
+            background: rgba(255, 50, 50, 0.2);
+            border-color: rgba(255, 50, 50, 0.5);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(255, 50, 50, 0.2);
+        }
+
+        .nav-btn.active {
+            background: rgba(255, 50, 50, 0.3);
+            border-color: #ff3333;
+            color: #ff3333;
+        }
+
         .container {
             max-width: 1400px;
             margin: 0 auto;
@@ -427,6 +463,13 @@
             <a href="/dashboard" class="btn-back">← Back to Dashboard</a>
         </div>
     </nav>
+
+    <!-- Navigation Menu -->
+    <div class="nav-menu">
+        <a href="/dashboard" class="nav-btn">Dashboard</a>
+        <a href="/beacon" class="nav-btn active">Beacons</a>
+        <a href="/builder" class="nav-btn">Builder</a>
+    </div>
 
     <div class="container">
         <!-- Beacon Info Header -->

@@ -59,6 +59,42 @@
             background: rgba(255, 51, 51, 0.2);
         }
 
+        .nav-menu {
+            background: rgba(25, 25, 25, 0.95);
+            border-bottom: 1px solid #333;
+            padding: 12px 30px;
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .nav-btn {
+            padding: 10px 24px;
+            background: rgba(255, 50, 50, 0.1);
+            border: 1px solid rgba(255, 50, 50, 0.3);
+            border-radius: 6px;
+            color: #e0e0e0;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .nav-btn:hover {
+            background: rgba(255, 50, 50, 0.2);
+            border-color: rgba(255, 50, 50, 0.5);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(255, 50, 50, 0.2);
+        }
+
+        .nav-btn.active {
+            background: rgba(255, 50, 50, 0.3);
+            border-color: #ff3333;
+            color: #ff3333;
+        }
+
         .container {
             max-width: 1200px;
             margin: 0 auto;
@@ -260,11 +296,16 @@
     <nav class="navbar">
         <div class="navbar-brand">Unkn0wnC2</div>
         <div class="navbar-menu">
-            <a href="/dashboard" class="nav-link">Dashboard</a>
-            <a href="/builder" class="nav-link active">Builder</a>
             <a href="#" class="nav-link" onclick="logout()">Logout</a>
         </div>
     </nav>
+
+    <!-- Navigation Menu -->
+    <div class="nav-menu">
+        <a href="/dashboard" class="nav-btn">Dashboard</a>
+        <a href="/beacon" class="nav-btn">Beacons</a>
+        <a href="/builder" class="nav-btn active">Builder</a>
+    </div>
 
     <div class="container">
         <h1 class="section-title">Component Builder</h1>
@@ -429,6 +470,17 @@
                 <button class="btn-build" onclick="buildStager()">🔨 Build Stager</button>
             </div>
         </div>
+
+        <!-- Saved Builds Section -->
+        <h1 class="section-title" style="margin-top: 40px;">📦 Saved Builds</h1>
+        <div class="builder-card" style="max-width: 100%;">
+            <div class="builder-description">
+                Download or delete previously built binaries
+            </div>
+            <div id="buildsContainer" style="margin-top: 20px;">
+                <div style="text-align: center; color: #666; padding: 20px;">Loading builds...</div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -566,6 +618,7 @@
 
                     showAlert('DNS server built successfully!', 'success');
                     await loadDNSServers(); // Refresh server list
+                    await loadBuilds(); // Refresh builds list
                 } else {
                     const error = await response.json();
                     throw new Error(error.message || 'Build failed');
@@ -624,6 +677,7 @@
                     window.URL.revokeObjectURL(url);
 
                     showAlert('Client built successfully!', 'success');
+                    await loadBuilds(); // Refresh builds list
                 } else {
                     const error = await response.json();
                     throw new Error(error.message || 'Build failed');
@@ -680,6 +734,7 @@
                     window.URL.revokeObjectURL(url);
 
                     showAlert('Stager built successfully!', 'success');
+                    await loadBuilds(); // Refresh builds list
                 } else {
                     const error = await response.json();
                     throw new Error(error.message || 'Build failed');
@@ -698,6 +753,118 @@
 
         // Initialize
         loadDNSServers();
+        loadBuilds();
+
+        async function loadBuilds() {
+            try {
+                const response = await authFetch('/api/builder/builds');
+                if (!response) return;
+
+                const builds = await response.json();
+                const container = document.getElementById('buildsContainer');
+
+                if (builds.length === 0) {
+                    container.innerHTML = '<div style="text-align: center; color: #666; padding: 20px;">No saved builds yet</div>';
+                    return;
+                }
+
+                // Group builds by type
+                const grouped = {};
+                builds.forEach(build => {
+                    if (!grouped[build.type]) {
+                        grouped[build.type] = [];
+                    }
+                    grouped[build.type].push(build);
+                });
+
+                let html = '';
+                const typeNames = {
+                    'dns-server': '🌐 DNS Servers',
+                    'client': '💻 Clients',
+                    'stager': '🚀 Stagers'
+                };
+
+                for (const [type, items] of Object.entries(grouped)) {
+                    html += `<div style="margin-bottom: 30px;">
+                        <h3 style="color: #ff3333; font-size: 18px; margin-bottom: 10px;">${typeNames[type] || type}</h3>
+                        <table style="width: 100%; border-collapse: collapse;">
+                            <thead>
+                                <tr style="background: rgba(255, 51, 51, 0.1); text-align: left;">
+                                    <th style="padding: 10px;">Name</th>
+                                    <th style="padding: 10px;">Size</th>
+                                    <th style="padding: 10px;">Date</th>
+                                    <th style="padding: 10px; text-align: right;">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>`;
+
+                    items.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+                    
+                    items.forEach(build => {
+                        const sizeKB = (build.size / 1024).toFixed(1);
+                        const sizeMB = (build.size / 1024 / 1024).toFixed(2);
+                        const sizeStr = build.size > 1024 * 1024 ? `${sizeMB} MB` : `${sizeKB} KB`;
+                        const date = new Date(build.timestamp).toLocaleString();
+
+                        html += `<tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.05);">
+                            <td style="padding: 10px; color: #ccc;">${build.name}</td>
+                            <td style="padding: 10px; color: #888;">${sizeStr}</td>
+                            <td style="padding: 10px; color: #888;">${date}</td>
+                            <td style="padding: 10px; text-align: right;">
+                                <button onclick="downloadBuild('${build.path.replace(/\\/g, '\\\\')}')" 
+                                    style="background: #28a745; color: white; border: none; padding: 5px 10px; 
+                                    border-radius: 4px; cursor: pointer; margin-right: 5px; font-size: 11px;">
+                                    📥 Download
+                                </button>
+                                <button onclick="deleteBuild('${build.path.replace(/\\/g, '\\\\')}', '${build.name}')" 
+                                    style="background: #dc3545; color: white; border: none; padding: 5px 10px; 
+                                    border-radius: 4px; cursor: pointer; font-size: 11px;">
+                                    🗑️ Delete
+                                </button>
+                            </td>
+                        </tr>`;
+                    });
+
+                    html += `</tbody></table></div>`;
+                }
+
+                container.innerHTML = html;
+            } catch (error) {
+                console.error('Failed to load builds:', error);
+                document.getElementById('buildsContainer').innerHTML = 
+                    '<div style="text-align: center; color: #dc3545; padding: 20px;">Failed to load builds</div>';
+            }
+        }
+
+        async function downloadBuild(path) {
+            try {
+                const token = localStorage.getItem('token');
+                window.location.href = `${API_BASE}/api/builder/builds/download?path=${encodeURIComponent(path)}&token=${token}`;
+            } catch (error) {
+                console.error('Download failed:', error);
+                showAlert('Failed to download build', 'error');
+            }
+        }
+
+        async function deleteBuild(path, name) {
+            if (!confirm(`Delete build "${name}"?`)) {
+                return;
+            }
+
+            try {
+                const response = await authFetch(`/api/builder/builds/delete?path=${encodeURIComponent(path)}`, {
+                    method: 'DELETE'
+                });
+
+                if (!response) return;
+
+                showAlert('Build deleted successfully', 'success');
+                await loadBuilds(); // Reload builds list
+            } catch (error) {
+                console.error('Delete failed:', error);
+                showAlert('Failed to delete build', 'error');
+            }
+        }
     </script>
 </body>
 </html>

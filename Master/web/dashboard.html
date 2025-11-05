@@ -68,6 +68,44 @@
             transform: translateY(-2px);
         }
 
+        .nav-menu {
+            background: rgba(25, 25, 25, 0.95);
+            border-bottom: 1px solid #333;
+            padding: 12px 30px;
+            display: flex;
+            gap: 15px;
+            position: sticky;
+            top: 61px;
+            z-index: 999;
+        }
+
+        .nav-btn {
+            padding: 10px 24px;
+            background: rgba(255, 50, 50, 0.1);
+            border: 1px solid rgba(255, 50, 50, 0.3);
+            border-radius: 6px;
+            color: #e0e0e0;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .nav-btn:hover {
+            background: rgba(255, 50, 50, 0.2);
+            border-color: rgba(255, 50, 50, 0.5);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(255, 50, 50, 0.2);
+        }
+
+        .nav-btn.active {
+            background: rgba(255, 50, 50, 0.3);
+            border-color: #ff3333;
+            color: #ff3333;
+        }
+
         .container {
             max-width: 1400px;
             margin: 0 auto;
@@ -277,6 +315,13 @@
             <button class="btn-logout" onclick="logout()">Logout</button>
         </div>
     </nav>
+
+    <!-- Navigation Menu -->
+    <div class="nav-menu">
+        <a href="/dashboard" class="nav-btn active">Dashboard</a>
+        <a href="/beacon" class="nav-btn">Beacons</a>
+        <a href="/builder" class="nav-btn">Builder</a>
+    </div>
 
     <div class="container">
         <!-- Statistics -->

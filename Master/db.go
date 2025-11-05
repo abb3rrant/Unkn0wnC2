@@ -315,12 +315,14 @@ func (d *MasterDatabase) RegisterDNSServer(id, domain, address, apiKey string) e
 
 	now := time.Now().Unix()
 
+	// Use INSERT OR REPLACE to handle domain uniqueness constraint
 	_, err = d.db.Exec(`
 		INSERT INTO dns_servers (id, domain, address, api_key_hash, status, first_seen, last_checkin, created_at, updated_at)
 		VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET
-			domain = excluded.domain,
+		ON CONFLICT(domain) DO UPDATE SET
+			id = excluded.id,
 			address = excluded.address,
+			api_key_hash = excluded.api_key_hash,
 			last_checkin = excluded.last_checkin,
 			updated_at = excluded.updated_at
 	`, id, domain, address, string(apiKeyHash), now, now, now, now)

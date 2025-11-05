@@ -16,6 +16,10 @@ import (
 	"time"
 )
 
+const (
+	buildsDir = "builds" // Directory to store compiled binaries
+)
+
 // Builder request structures
 type DNSServerBuildRequest struct {
 	Domain        string `json:"domain"`
@@ -97,6 +101,16 @@ func (api *APIServer) handleBuildDNSServer(w http.ResponseWriter, r *http.Reques
 	}
 	defer os.Remove(binaryPath)
 
+	// Save binary to builds directory
+	filename := fmt.Sprintf("dns-server-%s-%d", req.Domain, time.Now().Unix())
+	savedPath, err := api.saveBuild(binaryPath, filename, "dns-server")
+	if err != nil {
+		// Log but don't fail - still send the binary
+		fmt.Printf("Warning: failed to save build: %v\n", err)
+	} else {
+		fmt.Printf("Build saved to: %s\n", savedPath)
+	}
+
 	// Send binary as download
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"dns-server-%s\"", req.Domain))
@@ -133,12 +147,20 @@ func (api *APIServer) handleBuildClient(w http.ResponseWriter, r *http.Request) 
 	}
 	defer os.Remove(binaryPath)
 
-	// Send binary as download
+	// Save binary to builds directory
 	ext := ""
 	if req.Platform == "windows" {
 		ext = ".exe"
 	}
+	filename := fmt.Sprintf("beacon-%s-%d%s", req.Platform, time.Now().Unix(), ext)
+	savedPath, err := api.saveBuild(binaryPath, filename, "client")
+	if err != nil {
+		fmt.Printf("Warning: failed to save build: %v\n", err)
+	} else {
+		fmt.Printf("Build saved to: %s\n", savedPath)
+	}
 
+	// Send binary as download
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"beacon-%s%s\"", req.Platform, ext))
 
@@ -174,12 +196,20 @@ func (api *APIServer) handleBuildStager(w http.ResponseWriter, r *http.Request) 
 	}
 	defer os.Remove(binaryPath)
 
-	// Send binary as download
+	// Save binary to builds directory
 	ext := ""
 	if req.Platform == "windows" {
 		ext = ".exe"
 	}
+	filename := fmt.Sprintf("stager-%s-%d%s", req.Platform, time.Now().Unix(), ext)
+	savedPath, err := api.saveBuild(binaryPath, filename, "stager")
+	if err != nil {
+		fmt.Printf("Warning: failed to save build: %v\n", err)
+	} else {
+		fmt.Printf("Build saved to: %s\n", savedPath)
+	}
 
+	// Send binary as download
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"stager-%s%s\"", req.Platform, ext))
 
@@ -415,4 +445,145 @@ func copyFile(src, dst string) error {
 
 	_, err = io.Copy(destFile, sourceFile)
 	return err
+}
+
+// saveBuild saves a compiled binary to the builds directory
+func (api *APIServer) saveBuild(sourcePath, filename, buildType string) (string, error) {
+	// Ensure builds directory exists
+	typeDir := filepath.Join(buildsDir, buildType)
+	if err := os.MkdirAll(typeDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create builds directory: %w", err)
+	}
+
+	// Copy binary to builds directory
+	destPath := filepath.Join(typeDir, filename)
+	if err := copyFile(sourcePath, destPath); err != nil {
+		return "", fmt.Errorf("failed to copy binary: %w", err)
+	}
+
+	return destPath, nil
+}
+
+// Build represents a saved build
+type Build struct {
+	Name      string    `json:"name"`
+	Type      string    `json:"type"`
+	Size      int64     `json:"size"`
+	Timestamp time.Time `json:"timestamp"`
+	Path      string    `json:"path"`
+}
+
+// handleListBuilds returns a list of all saved builds
+func (api *APIServer) handleListBuilds(w http.ResponseWriter, r *http.Request) {
+	builds := []Build{}
+
+	// Walk through builds directory
+	buildTypes := []string{"dns-server", "client", "stager"}
+	for _, buildType := range buildTypes {
+		typeDir := filepath.Join(buildsDir, buildType)
+
+		entries, err := os.ReadDir(typeDir)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				fmt.Printf("Warning: failed to read %s directory: %v\n", buildType, err)
+			}
+			continue
+		}
+
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+
+			builds = append(builds, Build{
+				Name:      entry.Name(),
+				Type:      buildType,
+				Size:      info.Size(),
+				Timestamp: info.ModTime(),
+				Path:      filepath.Join(buildType, entry.Name()),
+			})
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(builds)
+}
+
+// handleDownloadBuild downloads a previously saved build
+func (api *APIServer) handleDownloadBuild(w http.ResponseWriter, r *http.Request) {
+	// Get build path from query parameter
+	buildPath := r.URL.Query().Get("path")
+	if buildPath == "" {
+		api.sendError(w, http.StatusBadRequest, "path parameter is required")
+		return
+	}
+
+	// Sanitize path to prevent directory traversal
+	buildPath = filepath.Clean(buildPath)
+	if strings.Contains(buildPath, "..") {
+		api.sendError(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+
+	// Construct full path
+	fullPath := filepath.Join(buildsDir, buildPath)
+
+	// Check if file exists
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			api.sendError(w, http.StatusNotFound, "build not found")
+			return
+		}
+		api.sendError(w, http.StatusInternalServerError, "failed to access build")
+		return
+	}
+
+	if info.IsDir() {
+		api.sendError(w, http.StatusBadRequest, "path is a directory")
+		return
+	}
+
+	// Send file
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(buildPath)))
+	http.ServeFile(w, r, fullPath)
+}
+
+// handleDeleteBuild deletes a saved build
+func (api *APIServer) handleDeleteBuild(w http.ResponseWriter, r *http.Request) {
+	// Get build path from query parameter
+	buildPath := r.URL.Query().Get("path")
+	if buildPath == "" {
+		api.sendError(w, http.StatusBadRequest, "path parameter is required")
+		return
+	}
+
+	// Sanitize path to prevent directory traversal
+	buildPath = filepath.Clean(buildPath)
+	if strings.Contains(buildPath, "..") {
+		api.sendError(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+
+	// Construct full path
+	fullPath := filepath.Join(buildsDir, buildPath)
+
+	// Delete file
+	if err := os.Remove(fullPath); err != nil {
+		if os.IsNotExist(err) {
+			api.sendError(w, http.StatusNotFound, "build not found")
+			return
+		}
+		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to delete build: %v", err))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
 }
