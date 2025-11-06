@@ -1537,6 +1537,7 @@ func (api *APIServer) handleStagerChunk(w http.ResponseWriter, r *http.Request) 
 // StagerContactRequest represents a stager making first contact with DNS server
 type StagerContactRequest struct {
 	DNSServerID    string `json:"dns_server_id"`
+	ApiKey         string `json:"api_key"`
 	ClientBinaryID string `json:"client_binary_id"`
 	StagerIP       string `json:"stager_ip"`
 	OS             string `json:"os"`
