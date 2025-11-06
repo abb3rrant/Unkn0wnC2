@@ -204,6 +204,22 @@ func main() {
 				fmt.Printf("[Cleanup] Warning: Failed to cleanup stager sessions: %v\n", err)
 			}
 
+			// Expire stale pending tasks (pending for 48+ hours)
+			// For long-term engagements (30min+ callbacks), this prevents queue buildup
+			if count, err := db.CleanupStalePendingTasks(48); err == nil && count > 0 {
+				fmt.Printf("[Cleanup] ✓ Expired %d stale pending tasks (pending >48hrs)\n", count)
+			} else if err != nil && cfg.Debug {
+				fmt.Printf("[Cleanup] Warning: Failed to cleanup stale pending tasks: %v\n", err)
+			}
+
+			// Detect partial results (sent tasks with incomplete chunks after 6 hours)
+			// Alerts operators to beacons that died mid-exfiltration
+			if count, err := db.DetectPartialResults(6); err == nil && count > 0 {
+				fmt.Printf("[Cleanup] ⚠️  Detected %d tasks with partial results (incomplete chunks >6hrs)\n", count)
+			} else if err != nil && cfg.Debug {
+				fmt.Printf("[Cleanup] Warning: Failed to detect partial results: %v\n", err)
+			}
+
 			// Wait for next tick
 			<-ticker.C
 		}

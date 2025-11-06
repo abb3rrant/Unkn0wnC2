@@ -531,10 +531,29 @@
 
         // Load statistics
         async function loadStats() {
-            // Task and result counts would come from separate endpoints
-            // For now, just display 0
-            document.getElementById('taskCount').textContent = '0';
-            document.getElementById('resultCount').textContent = '0';
+            try {
+                const response = await authFetch('/api/stats');
+                if (!response) return;
+                
+                const stats = await response.json();
+                
+                // Update task counts
+                document.getElementById('taskCount').textContent = stats.tasks || '0';
+                
+                // Calculate result count (completed tasks)
+                const tasksByStatus = stats.tasks_by_status || {};
+                const completedTasks = tasksByStatus['completed'] || 0;
+                document.getElementById('resultCount').textContent = completedTasks;
+                
+                // Log task status breakdown for operators to see in browser console
+                if (tasksByStatus && Object.keys(tasksByStatus).length > 0) {
+                    console.log('📊 Task Status Breakdown:', tasksByStatus);
+                }
+            } catch (error) {
+                console.error('Error loading stats:', error);
+                document.getElementById('taskCount').textContent = 'N/A';
+                document.getElementById('resultCount').textContent = 'N/A';
+            }
         }
 
         // Helper functions
@@ -575,6 +594,7 @@
         setInterval(() => {
             loadBeacons();
             loadServers();
+            loadStats();
         }, 10000);
     </script>
 </body>
