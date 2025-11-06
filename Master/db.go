@@ -1162,7 +1162,8 @@ func (d *MasterDatabase) GetClientBinaries() ([]map[string]interface{}, error) {
 	rowCount := 0
 	for rows.Next() {
 		rowCount++
-		var id, filename, os, arch, version, dnsDomains, createdBy string
+		var id, filename, os, arch, version, dnsDomains string
+		var createdBy sql.NullString // Use sql.NullString for nullable column
 		var originalSize, compressedSize, base64Size, chunkSize, totalChunks int
 		var createdAt int64
 
@@ -1174,6 +1175,12 @@ func (d *MasterDatabase) GetClientBinaries() ([]map[string]interface{}, error) {
 		}
 
 		fmt.Printf("[DB] Found binary: id=%s, os=%s, arch=%s, chunks=%d\n", id, os, arch, totalChunks)
+
+		// Convert sql.NullString to string (empty string if NULL)
+		createdByStr := ""
+		if createdBy.Valid {
+			createdByStr = createdBy.String
+		}
 
 		binaries = append(binaries, map[string]interface{}{
 			"id":              id,
@@ -1188,7 +1195,7 @@ func (d *MasterDatabase) GetClientBinaries() ([]map[string]interface{}, error) {
 			"total_chunks":    totalChunks,
 			"dns_domains":     dnsDomains,
 			"created_at":      createdAt,
-			"created_by":      createdBy,
+			"created_by":      createdByStr,
 		})
 	}
 
