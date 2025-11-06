@@ -170,6 +170,45 @@ func main() {
 		}
 	}()
 
+	// Start periodic database cleanup (runs every 6 hours)
+	go func() {
+		ticker := time.NewTicker(6 * time.Hour)
+		defer ticker.Stop()
+
+		// Run initial cleanup after 1 hour
+		time.Sleep(1 * time.Hour)
+
+		for {
+			if cfg.Debug {
+				fmt.Println("[Cleanup] Running database maintenance...")
+			}
+
+			// Cleanup completed tasks older than 30 days
+			if count, err := db.CleanupOldTasks(30); err == nil && count > 0 {
+				fmt.Printf("[Cleanup] ✓ Removed %d old completed tasks\n", count)
+			} else if err != nil && cfg.Debug {
+				fmt.Printf("[Cleanup] Warning: Failed to cleanup old tasks: %v\n", err)
+			}
+
+			// Cleanup inactive beacons older than 60 days
+			if count, err := db.CleanupInactiveBeacons(60); err == nil && count > 0 {
+				fmt.Printf("[Cleanup] ✓ Removed %d inactive beacons\n", count)
+			} else if err != nil && cfg.Debug {
+				fmt.Printf("[Cleanup] Warning: Failed to cleanup inactive beacons: %v\n", err)
+			}
+
+			// Cleanup completed stager sessions older than 7 days
+			if count, err := db.CleanupCompletedStagerSessions(7); err == nil && count > 0 {
+				fmt.Printf("[Cleanup] ✓ Removed %d old stager sessions\n", count)
+			} else if err != nil && cfg.Debug {
+				fmt.Printf("[Cleanup] Warning: Failed to cleanup stager sessions: %v\n", err)
+			}
+
+			// Wait for next tick
+			<-ticker.C
+		}
+	}()
+
 	// Wait for interrupt signal for graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)

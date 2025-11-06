@@ -4,21 +4,21 @@
   "tls_cert": "certs/master.crt",
   "tls_key": "certs/master.key",
   "database_path": "master.db",
-  "jwt_secret": "!QAZ78fobh$*NC",
+  "jwt_secret": "CHANGE_THIS_SECRET_IN_PRODUCTION",
   "session_timeout": 60,
   "debug": false,
   "dns_servers": [
     {
       "id": "dns1",
       "domain": "secwolf.net",
-      "api_key": "!QAZ78fobh$*NC",
+      "api_key": "GENERATE_SECURE_API_KEY_HERE",
       "address": "98.90.218.70",
       "enabled": true
     },
     {
       "id": "dns2",
       "domain": "example.com",
-      "api_key": "!QAZ78fobh$*NC2",
+      "api_key": "GENERATE_SECURE_API_KEY_HERE",
       "address": "",
       "enabled": false
     }

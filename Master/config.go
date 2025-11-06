@@ -4,6 +4,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -152,8 +154,34 @@ func ValidateConfig(cfg Config) error {
 		return errors.New("⚠️  SECURITY WARNING: Using default JWT secret! Set jwt_secret in config or MASTER_JWT_SECRET environment variable")
 	}
 
+	// Check for weak JWT secrets
+	if len(cfg.JWTSecret) < 32 {
+		return fmt.Errorf("⚠️  SECURITY ERROR: JWT secret too short (%d bytes). Minimum 32 bytes required. Generate a secure secret with: openssl rand -base64 32", len(cfg.JWTSecret))
+	}
+
+	// Check for example JWT secrets from the example config
+	weakSecrets := []string{"!QAZ78fobh$*NC", "your-secret-key", "changeme", "secret", "password"}
+	for _, weak := range weakSecrets {
+		if cfg.JWTSecret == weak {
+			return fmt.Errorf("⚠️  SECURITY ERROR: Using example/weak JWT secret! Generate a secure secret with: openssl rand -base64 32")
+		}
+	}
+
 	if cfg.AdminCredentials.Password == "Unkn0wnC2@2025" {
 		fmt.Println("⚠️  WARNING: Using default admin password! Change this immediately in production")
+	}
+
+	// Validate DNS server API keys
+	for i, server := range cfg.DNSServers {
+		if server.APIKey == "" {
+			return fmt.Errorf("⚠️  SECURITY ERROR: DNS server #%d (%s) has empty API key", i+1, server.ID)
+		}
+		if server.APIKey == "GENERATE_SECURE_API_KEY_HERE" || server.APIKey == "example-api-key-dns1-CHANGE-ME" || server.APIKey == "example-api-key-dns2-CHANGE-ME" {
+			return fmt.Errorf("⚠️  SECURITY ERROR: DNS server #%d (%s) using example API key. Generate a secure key with: openssl rand -base64 32", i+1, server.ID)
+		}
+		if len(server.APIKey) < 16 {
+			return fmt.Errorf("⚠️  SECURITY ERROR: DNS server #%d (%s) API key too short (%d bytes). Minimum 16 bytes required", i+1, server.ID, len(server.APIKey))
+		}
 	}
 
 	// Validate TLS certificate paths exist
@@ -184,6 +212,21 @@ func SaveConfig(cfg Config, path string) error {
 	}
 
 	return nil
+}
+
+// GenerateSecureSecret generates a cryptographically secure random string
+// suitable for use as JWT secret or API keys. Returns a base64-encoded string.
+func GenerateSecureSecret(length int) (string, error) {
+	if length < 32 {
+		return "", fmt.Errorf("secret length must be at least 32 bytes")
+	}
+
+	bytes := make([]byte, length)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", fmt.Errorf("failed to generate random bytes: %w", err)
+	}
+
+	return base64.StdEncoding.EncodeToString(bytes), nil
 }
 
 // GenerateExampleConfig creates an example configuration file

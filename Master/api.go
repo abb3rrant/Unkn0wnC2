@@ -11,11 +11,13 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -24,17 +26,23 @@ import (
 
 // APIServer wraps the HTTP server and provides API functionality
 type APIServer struct {
-	db        *MasterDatabase
-	config    Config
-	jwtSecret []byte
+	db          *MasterDatabase
+	config      Config
+	jwtSecret   []byte
+	authLimiter *RateLimiter // Rate limiter for auth endpoints
+	apiLimiter  *RateLimiter // Rate limiter for API endpoints
+	dnsLimiter  *RateLimiter // Rate limiter for DNS server endpoints
 }
 
 // NewAPIServer creates a new API server instance
 func NewAPIServer(db *MasterDatabase, config Config) *APIServer {
 	return &APIServer{
-		db:        db,
-		config:    config,
-		jwtSecret: []byte(config.JWTSecret),
+		db:          db,
+		config:      config,
+		jwtSecret:   []byte(config.JWTSecret),
+		authLimiter: NewRateLimiter(5, time.Minute),    // 5 login attempts per minute
+		apiLimiter:  NewRateLimiter(100, time.Minute),  // 100 API requests per minute
+		dnsLimiter:  NewRateLimiter(1000, time.Minute), // 1000 DNS server API calls per minute
 	}
 }
 
@@ -44,6 +52,98 @@ type Claims struct {
 	Username   string `json:"username"`
 	Role       string `json:"role"`
 	jwt.RegisteredClaims
+}
+
+// RateLimiter implements a token bucket rate limiter per IP address
+type RateLimiter struct {
+	visitors map[string]*Visitor
+	mu       sync.RWMutex
+	rate     int           // requests per window
+	window   time.Duration // time window
+}
+
+// Visitor tracks rate limit state for a single IP
+type Visitor struct {
+	tokens     int
+	lastUpdate time.Time
+	mu         sync.Mutex
+}
+
+// NewRateLimiter creates a new rate limiter
+// rate: maximum requests per window
+// window: time window duration (e.g., 1 minute)
+func NewRateLimiter(rate int, window time.Duration) *RateLimiter {
+	rl := &RateLimiter{
+		visitors: make(map[string]*Visitor),
+		rate:     rate,
+		window:   window,
+	}
+
+	// Cleanup old visitors every 5 minutes
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			rl.cleanup()
+		}
+	}()
+
+	return rl
+}
+
+// getVisitor returns the visitor for an IP, creating if needed
+func (rl *RateLimiter) getVisitor(ip string) *Visitor {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	visitor, exists := rl.visitors[ip]
+	if !exists {
+		visitor = &Visitor{
+			tokens:     rl.rate,
+			lastUpdate: time.Now(),
+		}
+		rl.visitors[ip] = visitor
+	}
+
+	return visitor
+}
+
+// Allow checks if a request from the IP should be allowed
+func (rl *RateLimiter) Allow(ip string) bool {
+	visitor := rl.getVisitor(ip)
+	visitor.mu.Lock()
+	defer visitor.mu.Unlock()
+
+	now := time.Now()
+	elapsed := now.Sub(visitor.lastUpdate)
+
+	// Refill tokens based on elapsed time
+	if elapsed >= rl.window {
+		visitor.tokens = rl.rate
+		visitor.lastUpdate = now
+	}
+
+	if visitor.tokens > 0 {
+		visitor.tokens--
+		return true
+	}
+
+	return false
+}
+
+// cleanup removes old visitors to prevent memory leak
+func (rl *RateLimiter) cleanup() {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	cutoff := time.Now().Add(-10 * time.Minute)
+	for ip, visitor := range rl.visitors {
+		visitor.mu.Lock()
+		if visitor.lastUpdate.Before(cutoff) {
+			delete(rl.visitors, ip)
+		}
+		visitor.mu.Unlock()
+	}
 }
 
 // Response structures
@@ -140,6 +240,42 @@ func (api *APIServer) loggingMiddleware(next http.Handler) http.Handler {
 				time.Since(start))
 		}
 	})
+}
+
+// rateLimitMiddleware provides rate limiting based on IP address
+func (api *APIServer) rateLimitMiddleware(limiter *RateLimiter) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Extract IP address
+			ip := r.RemoteAddr
+			if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+				// Use first IP in X-Forwarded-For chain
+				ip = strings.Split(forwarded, ",")[0]
+				ip = strings.TrimSpace(ip)
+			} else if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
+				ip = realIP
+			}
+
+			// Strip port if present
+			if host, _, err := net.SplitHostPort(ip); err == nil {
+				ip = host
+			}
+
+			// Check rate limit
+			if !limiter.Allow(ip) {
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("Retry-After", "60") // Suggest retry after 60 seconds
+				w.WriteHeader(http.StatusTooManyRequests)
+				json.NewEncoder(w).Encode(ErrorResponse{
+					Error:   "rate_limit_exceeded",
+					Message: "Too many requests. Please try again later.",
+				})
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // authMiddleware validates JWT tokens for operator endpoints
@@ -835,15 +971,46 @@ func (api *APIServer) handleBeaconReport(w http.ResponseWriter, r *http.Request)
 
 // handleListBeacons returns all beacons across all DNS servers
 func (api *APIServer) handleListBeacons(w http.ResponseWriter, r *http.Request) {
-	// Get all active beacons (active within last 30 minutes)
-	beacons, err := api.db.GetActiveBeacons(30)
+	// Parse pagination parameters
+	limit := 50 // default page size
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 500 {
+			limit = l
+		}
+	}
+
+	offset := 0
+	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
+		if o, err := strconv.Atoi(offsetStr); err == nil && o >= 0 {
+			offset = o
+		}
+	}
+
+	// Get paginated beacons (active within last 30 minutes)
+	beacons, err := api.db.GetActiveBeaconsPaginated(30, limit, offset)
 	if err != nil {
 		api.sendError(w, http.StatusInternalServerError, "failed to retrieve beacons")
 		return
 	}
 
+	// Get total count for pagination metadata
+	total, err := api.db.CountActiveBeacons(30)
+	if err != nil {
+		// Log error but continue with partial response
+		if api.config.Debug {
+			fmt.Printf("[API] Warning: Failed to count beacons: %v\n", err)
+		}
+		total = len(beacons) // fallback to current page size
+	}
+
 	api.sendJSON(w, map[string]interface{}{
 		"beacons": beacons,
+		"pagination": map[string]interface{}{
+			"total":  total,
+			"limit":  limit,
+			"offset": offset,
+			"count":  len(beacons),
+		},
 	})
 }
 
@@ -912,23 +1079,46 @@ func (api *APIServer) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 
 // handleListTasks returns all tasks
 func (api *APIServer) handleListTasks(w http.ResponseWriter, r *http.Request) {
-	// Get optional limit parameter
-	limitStr := r.URL.Query().Get("limit")
-	limit := 100 // default
-	if limitStr != "" {
-		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
+	// Parse pagination parameters
+	limit := 100 // default page size
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 1000 {
 			limit = l
 		}
 	}
 
-	tasks, err := api.db.GetAllTasks(limit)
+	offset := 0
+	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
+		if o, err := strconv.Atoi(offsetStr); err == nil && o >= 0 {
+			offset = o
+		}
+	}
+
+	// Get paginated tasks
+	tasks, err := api.db.GetAllTasksPaginated(limit, offset)
 	if err != nil {
 		api.sendError(w, http.StatusInternalServerError, "failed to retrieve tasks")
 		return
 	}
 
+	// Get total count for pagination metadata
+	total, err := api.db.CountAllTasks()
+	if err != nil {
+		// Log error but continue with partial response
+		if api.config.Debug {
+			fmt.Printf("[API] Warning: Failed to count tasks: %v\n", err)
+		}
+		total = len(tasks) // fallback to current page size
+	}
+
 	api.sendJSON(w, map[string]interface{}{
 		"tasks": tasks,
+		"pagination": map[string]interface{}{
+			"total":  total,
+			"limit":  limit,
+			"offset": offset,
+			"count":  len(tasks),
+		},
 	})
 }
 
@@ -1145,6 +1335,74 @@ func (api *APIServer) handleGetTaskProgress(w http.ResponseWriter, r *http.Reque
 	}
 
 	api.sendJSON(w, progress)
+}
+
+// handleDeleteTask deletes a task (for canceling pending tasks or cleanup)
+func (api *APIServer) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	taskID := vars["id"]
+
+	operatorID := r.Header.Get("X-Operator-ID")
+	username := r.Header.Get("X-Operator-Username")
+
+	// Delete the task
+	if err := api.db.DeleteTask(taskID); err != nil {
+		if err.Error() == "task not found" {
+			api.sendError(w, http.StatusNotFound, "task not found")
+		} else {
+			if api.config.Debug {
+				fmt.Printf("[API] ❌ Failed to delete task %s: %v\n", taskID, err)
+			}
+			api.sendError(w, http.StatusInternalServerError, "failed to delete task")
+		}
+		return
+	}
+
+	if api.config.Debug {
+		fmt.Printf("[API] ✅ Task %s deleted by %s\n", taskID, username)
+	}
+
+	// Log audit event
+	api.db.LogAuditEvent(operatorID, "task_delete", "task", taskID,
+		fmt.Sprintf("Deleted task %s", taskID), r.RemoteAddr)
+
+	api.sendSuccess(w, "task deleted", map[string]interface{}{
+		"task_id": taskID,
+	})
+}
+
+// handleDeleteBeacon deletes a beacon and all its associated tasks/results
+func (api *APIServer) handleDeleteBeacon(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	beaconID := vars["id"]
+
+	operatorID := r.Header.Get("X-Operator-ID")
+	username := r.Header.Get("X-Operator-Username")
+
+	// Delete the beacon
+	if err := api.db.DeleteBeacon(beaconID); err != nil {
+		if err.Error() == "beacon not found" {
+			api.sendError(w, http.StatusNotFound, "beacon not found")
+		} else {
+			if api.config.Debug {
+				fmt.Printf("[API] ❌ Failed to delete beacon %s: %v\n", beaconID, err)
+			}
+			api.sendError(w, http.StatusInternalServerError, "failed to delete beacon")
+		}
+		return
+	}
+
+	if api.config.Debug {
+		fmt.Printf("[API] ✅ Beacon %s deleted by %s\n", beaconID, username)
+	}
+
+	// Log audit event
+	api.db.LogAuditEvent(operatorID, "beacon_delete", "beacon", beaconID,
+		fmt.Sprintf("Deleted beacon %s and all associated tasks", beaconID), r.RemoteAddr)
+
+	api.sendSuccess(w, "beacon deleted", map[string]interface{}{
+		"beacon_id": beaconID,
+	})
 }
 
 // handleStats returns master server statistics
@@ -1670,11 +1928,14 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 		http.StripPrefix("/web/static/", http.FileServer(http.Dir(filepath.Join(api.config.WebRoot, "static")))),
 	)
 
-	// Public API endpoints (no auth required)
-	router.HandleFunc("/api/auth/login", api.handleLogin).Methods("POST")
+	// Public API endpoints (no auth required) - with strict rate limiting
+	authRouter := router.PathPrefix("/api/auth").Subrouter()
+	authRouter.Use(api.rateLimitMiddleware(api.authLimiter))
+	authRouter.HandleFunc("/login", api.handleLogin).Methods("POST")
 
-	// Operator endpoints (JWT auth required)
+	// Operator endpoints (JWT auth required) - with standard rate limiting
 	operatorRouter := router.PathPrefix("/api").Subrouter()
+	operatorRouter.Use(api.rateLimitMiddleware(api.apiLimiter))
 	operatorRouter.Use(api.authMiddleware)
 
 	operatorRouter.HandleFunc("/auth/logout", api.handleLogout).Methods("POST")
@@ -1691,9 +1952,11 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	operatorRouter.HandleFunc("/dns-servers", api.handleListDNSServers).Methods("GET")
 	operatorRouter.HandleFunc("/beacons", api.handleListBeacons).Methods("GET")
 	operatorRouter.HandleFunc("/beacons/{id}", api.handleGetBeacon).Methods("GET")
+	operatorRouter.HandleFunc("/beacons/{id}", api.handleDeleteBeacon).Methods("DELETE")
 	operatorRouter.HandleFunc("/beacons/{id}/task", api.handleCreateTask).Methods("POST")
 	operatorRouter.HandleFunc("/tasks", api.handleListTasks).Methods("GET")
 	operatorRouter.HandleFunc("/tasks/{id}", api.handleGetTask).Methods("GET")
+	operatorRouter.HandleFunc("/tasks/{id}", api.handleDeleteTask).Methods("DELETE")
 	operatorRouter.HandleFunc("/tasks/{id}/result", api.handleGetTaskResult).Methods("GET")
 	operatorRouter.HandleFunc("/tasks/{id}/progress", api.handleGetTaskProgress).Methods("GET")
 	operatorRouter.HandleFunc("/stats", api.handleStats).Methods("GET")
@@ -1711,8 +1974,9 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	operatorRouter.HandleFunc("/stager/sessions", api.handleListStagerSessions).Methods("GET")
 	operatorRouter.HandleFunc("/stager/sessions/{id}", api.handleGetStagerSession).Methods("GET")
 
-	// DNS server endpoints (API key auth required)
+	// DNS server endpoints (API key auth required) - with high rate limits
 	dnsRouter := router.PathPrefix("/api/dns-server").Subrouter()
+	dnsRouter.Use(api.rateLimitMiddleware(api.dnsLimiter))
 	dnsRouter.Use(api.dnsServerAuthMiddleware)
 
 	dnsRouter.HandleFunc("/checkin", api.handleDNSServerCheckin).Methods("POST")

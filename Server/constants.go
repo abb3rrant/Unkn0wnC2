@@ -68,27 +68,6 @@ const (
 	UnixTimestampMaxLength = 11
 )
 
-// Console Display Constants
-const (
-	// BeaconListSeparatorLength is the width of beacon list separators
-	BeaconListSeparatorLength = 95
-
-	// TaskListSeparatorLength is the width of task list separators
-	TaskListSeparatorLength = 85
-
-	// ResultSeparatorLength is the width of result separators
-	ResultSeparatorLength = 50
-
-	// BeaconHostnameWidth is the display width for hostnames
-	BeaconHostnameWidth = 20
-
-	// BeaconUsernameWidth is the display width for usernames
-	BeaconUsernameWidth = 15
-
-	// TaskCommandWidth is the display width for commands
-	TaskCommandWidth = 40
-)
-
 // Time Format Constants
 const (
 	// TimeFormatShort is the short time format for display
@@ -96,31 +75,4 @@ const (
 
 	// TimeFormatLong is the long time format for display
 	TimeFormatLong = "2006-01-02 15:04:05"
-)
-
-// ANSI Color Constants
-const (
-	// ANSIClearScreen clears the terminal screen
-	ANSIClearScreen = "\033[2J\033[H"
-
-	// ColorReset resets terminal color
-	ColorReset = "\033[0m"
-
-	// ColorRed sets terminal color to red
-	ColorRed = "\033[0;31m"
-
-	// ColorGreen sets terminal color to green
-	ColorGreen = "\033[0;32m"
-
-	// ColorYellow sets terminal color to yellow
-	ColorYellow = "\033[0;33m"
-)
-
-// Progress Bar Constants
-const (
-	// ProgressBarWidth is the width of progress bars in characters
-	ProgressBarWidth = 40
-
-	// ProgressUpdateInterval is how often progress bars update
-	ProgressUpdateInterval = 1 * time.Second
 )

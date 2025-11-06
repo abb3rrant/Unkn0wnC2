@@ -439,6 +439,19 @@ func (c2 *C2Manager) cleanupExpiredSessions() {
 		c2.mutex.Lock()
 		now := time.Now()
 
+		// Clean up old message hashes (keep only last 5 minutes)
+		expiredCount := 0
+		for msgHash, timestamp := range c2.recentMessages {
+			if now.Sub(timestamp) > 5*time.Minute {
+				delete(c2.recentMessages, msgHash)
+				delete(c2.cachedResponses, msgHash) // Also clean cached responses
+				expiredCount++
+			}
+		}
+		if c2.debug && expiredCount > 0 {
+			logf("[C2] Cleaned up %d expired message hashes", expiredCount)
+		}
+
 		// Clean up expired stager sessions (collect IPs first to avoid iteration issues)
 		var expiredSessionIPs []string
 		for ip, session := range c2.stagerSessions {
@@ -1954,45 +1967,4 @@ func (c2 *C2Manager) GetTaskWithResult(taskID string) (*Task, error) {
 	}
 
 	return task, nil
-}
-
-// GetExpectedResults returns a copy of expected results for console display
-func (c2 *C2Manager) GetExpectedResults() map[string]*ExpectedResult {
-	c2.mutex.RLock()
-	defer c2.mutex.RUnlock()
-
-	result := make(map[string]*ExpectedResult)
-	for id, expected := range c2.expectedResults {
-		result[id] = expected
-	}
-	return result
-}
-
-// PrintStatus prints the current C2 status
-func (c2 *C2Manager) PrintStatus() {
-	c2.mutex.RLock()
-	defer c2.mutex.RUnlock()
-
-	fmt.Printf("\n=== C2 Status ===\n")
-	fmt.Printf("Active Beacons: %d\n", len(c2.beacons))
-
-	for _, beacon := range c2.beacons {
-		fmt.Printf("  [%s] %s@%s (%s/%s) - Last seen: %s - Queue: %d tasks\n",
-			beacon.ID, beacon.Username, beacon.Hostname, beacon.OS, beacon.Arch,
-			beacon.LastSeen.Format("15:04:05"), len(beacon.TaskQueue))
-	}
-
-	pendingTasks := 0
-	completedTasks := 0
-	for _, task := range c2.tasks {
-		switch task.Status {
-		case "pending", "sent":
-			pendingTasks++
-		case "completed":
-			completedTasks++
-		}
-	}
-
-	fmt.Printf("Tasks - Pending: %d, Completed: %d\n", pendingTasks, completedTasks)
-	fmt.Printf("==================\n")
 }

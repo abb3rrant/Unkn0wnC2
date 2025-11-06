@@ -540,17 +540,31 @@ func (d *MasterDatabase) UpsertBeacon(beaconID, hostname, username, os, arch, ip
 
 // GetActiveBeacons retrieves beacons active within the last N minutes
 func (d *MasterDatabase) GetActiveBeacons(minutesThreshold int) ([]map[string]interface{}, error) {
+	return d.GetActiveBeaconsPaginated(minutesThreshold, 0, 0)
+}
+
+// GetActiveBeaconsPaginated retrieves active beacons with pagination support
+func (d *MasterDatabase) GetActiveBeaconsPaginated(minutesThreshold, limit, offset int) ([]map[string]interface{}, error) {
 	d.mutex.RLock()
 	defer d.mutex.RUnlock()
 
 	threshold := time.Now().Add(-time.Duration(minutesThreshold) * time.Minute).Unix()
 
-	rows, err := d.db.Query(`
+	query := `
 		SELECT id, hostname, username, os, arch, ip_address, dns_server_id, first_seen, last_seen, status
 		FROM beacons
 		WHERE last_seen >= ? AND status = 'active'
 		ORDER BY last_seen DESC
-	`, threshold)
+	`
+
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+	if offset > 0 {
+		query += fmt.Sprintf(" OFFSET %d", offset)
+	}
+
+	rows, err := d.db.Query(query, threshold)
 	if err != nil {
 		return nil, err
 	}
@@ -1679,6 +1693,11 @@ func (d *MasterDatabase) GetTasksForDNSServer(dnsServerID string) ([]map[string]
 
 // GetAllTasks retrieves all tasks with their status
 func (d *MasterDatabase) GetAllTasks(limit int) ([]map[string]interface{}, error) {
+	return d.GetAllTasksPaginated(limit, 0)
+}
+
+// GetAllTasksPaginated retrieves tasks with pagination support
+func (d *MasterDatabase) GetAllTasksPaginated(limit, offset int) ([]map[string]interface{}, error) {
 	d.mutex.RLock()
 	defer d.mutex.RUnlock()
 
@@ -1692,6 +1711,9 @@ func (d *MasterDatabase) GetAllTasks(limit int) ([]map[string]interface{}, error
 
 	if limit > 0 {
 		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+	if offset > 0 {
+		query += fmt.Sprintf(" OFFSET %d", offset)
 	}
 
 	rows, err := d.db.Query(query)
@@ -1738,6 +1760,33 @@ func (d *MasterDatabase) GetAllTasks(limit int) ([]map[string]interface{}, error
 	}
 
 	return tasks, rows.Err()
+}
+
+// CountActiveBeacons returns the total count of active beacons
+func (d *MasterDatabase) CountActiveBeacons(minutesThreshold int) (int, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	threshold := time.Now().Add(-time.Duration(minutesThreshold) * time.Minute).Unix()
+
+	var count int
+	err := d.db.QueryRow(`
+		SELECT COUNT(*) 
+		FROM beacons 
+		WHERE last_seen >= ? AND status = 'active'
+	`, threshold).Scan(&count)
+
+	return count, err
+}
+
+// CountAllTasks returns the total count of tasks
+func (d *MasterDatabase) CountAllTasks() (int, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	var count int
+	err := d.db.QueryRow("SELECT COUNT(*) FROM tasks").Scan(&count)
+	return count, err
 }
 
 // GetTaskWithResult retrieves a task and its result if completed
@@ -2325,4 +2374,285 @@ WHERE status = 'active'
 	}
 
 	return servers, rows.Err()
+}
+
+// DeleteTask removes a task and its associated data (results, progress)
+// This allows operators to cancel pending tasks or clean up completed/failed tasks
+func (d *MasterDatabase) DeleteTask(taskID string) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Delete task results
+	if _, err := tx.Exec("DELETE FROM task_results WHERE task_id = ?", taskID); err != nil {
+		return fmt.Errorf("failed to delete task results: %w", err)
+	}
+
+	// Delete task progress
+	if _, err := tx.Exec("DELETE FROM task_progress WHERE task_id = ?", taskID); err != nil {
+		return fmt.Errorf("failed to delete task progress: %w", err)
+	}
+
+	// Delete the task itself
+	result, err := tx.Exec("DELETE FROM tasks WHERE id = ?", taskID)
+	if err != nil {
+		return fmt.Errorf("failed to delete task: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rows == 0 {
+		return fmt.Errorf("task not found")
+	}
+
+	return tx.Commit()
+}
+
+// DeleteBeacon removes a beacon and its associated tasks/results
+// This allows operators to clean up inactive or compromised beacons
+func (d *MasterDatabase) DeleteBeacon(beaconID string) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Get all task IDs for this beacon
+	rows, err := tx.Query("SELECT id FROM tasks WHERE beacon_id = ?", beaconID)
+	if err != nil {
+		return fmt.Errorf("failed to query tasks: %w", err)
+	}
+
+	var taskIDs []string
+	for rows.Next() {
+		var taskID string
+		if err := rows.Scan(&taskID); err != nil {
+			rows.Close()
+			return fmt.Errorf("failed to scan task ID: %w", err)
+		}
+		taskIDs = append(taskIDs, taskID)
+	}
+	rows.Close()
+
+	// Delete task results and progress for each task
+	for _, taskID := range taskIDs {
+		if _, err := tx.Exec("DELETE FROM task_results WHERE task_id = ?", taskID); err != nil {
+			return fmt.Errorf("failed to delete task results: %w", err)
+		}
+		if _, err := tx.Exec("DELETE FROM task_progress WHERE task_id = ?", taskID); err != nil {
+			return fmt.Errorf("failed to delete task progress: %w", err)
+		}
+	}
+
+	// Delete all tasks for this beacon
+	if _, err := tx.Exec("DELETE FROM tasks WHERE beacon_id = ?", beaconID); err != nil {
+		return fmt.Errorf("failed to delete tasks: %w", err)
+	}
+
+	// Delete the beacon itself
+	result, err := tx.Exec("DELETE FROM beacons WHERE id = ?", beaconID)
+	if err != nil {
+		return fmt.Errorf("failed to delete beacon: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("beacon not found")
+	}
+
+	return tx.Commit()
+}
+
+// CleanupOldTasks removes completed/failed tasks older than the specified days
+// This helps maintain database performance and reduces disk usage
+func (d *MasterDatabase) CleanupOldTasks(olderThanDays int) (int, error) {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	cutoff := time.Now().AddDate(0, 0, -olderThanDays).Unix()
+
+	// Get task IDs to delete
+	rows, err := d.db.Query(`
+		SELECT id FROM tasks 
+		WHERE (status = 'complete' OR status = 'failed' OR status = 'timeout')
+		AND completed_at < ?
+	`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("failed to query old tasks: %w", err)
+	}
+
+	var taskIDs []string
+	for rows.Next() {
+		var taskID string
+		if err := rows.Scan(&taskID); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("failed to scan task ID: %w", err)
+		}
+		taskIDs = append(taskIDs, taskID)
+	}
+	rows.Close()
+
+	if len(taskIDs) == 0 {
+		return 0, nil
+	}
+
+	// Delete in transaction
+	tx, err := d.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	count := 0
+	for _, taskID := range taskIDs {
+		// Delete task results
+		if _, err := tx.Exec("DELETE FROM task_results WHERE task_id = ?", taskID); err != nil {
+			return count, fmt.Errorf("failed to delete task results: %w", err)
+		}
+
+		// Delete task progress
+		if _, err := tx.Exec("DELETE FROM task_progress WHERE task_id = ?", taskID); err != nil {
+			return count, fmt.Errorf("failed to delete task progress: %w", err)
+		}
+
+		// Delete the task
+		result, err := tx.Exec("DELETE FROM tasks WHERE id = ?", taskID)
+		if err != nil {
+			return count, fmt.Errorf("failed to delete task: %w", err)
+		}
+
+		rows, _ := result.RowsAffected()
+		count += int(rows)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return count, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return count, nil
+}
+
+// CleanupInactiveBeacons removes beacons that haven't checked in for the specified days
+// This helps clean up orphaned beacons from compromised/decommissioned systems
+func (d *MasterDatabase) CleanupInactiveBeacons(inactiveDays int) (int, error) {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	cutoff := time.Now().AddDate(0, 0, -inactiveDays).Unix()
+
+	// Get beacon IDs to delete (only inactive status)
+	rows, err := d.db.Query(`
+		SELECT id FROM beacons 
+		WHERE last_seen < ? AND status != 'active'
+	`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("failed to query inactive beacons: %w", err)
+	}
+
+	var beaconIDs []string
+	for rows.Next() {
+		var beaconID string
+		if err := rows.Scan(&beaconID); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("failed to scan beacon ID: %w", err)
+		}
+		beaconIDs = append(beaconIDs, beaconID)
+	}
+	rows.Close()
+
+	if len(beaconIDs) == 0 {
+		return 0, nil
+	}
+
+	// Delete in transaction
+	tx, err := d.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	count := 0
+	for _, beaconID := range beaconIDs {
+		// Get task IDs for cleanup
+		taskRows, err := tx.Query("SELECT id FROM tasks WHERE beacon_id = ?", beaconID)
+		if err != nil {
+			return count, fmt.Errorf("failed to query tasks: %w", err)
+		}
+
+		var taskIDs []string
+		for taskRows.Next() {
+			var taskID string
+			if err := taskRows.Scan(&taskID); err != nil {
+				taskRows.Close()
+				return count, fmt.Errorf("failed to scan task ID: %w", err)
+			}
+			taskIDs = append(taskIDs, taskID)
+		}
+		taskRows.Close()
+
+		// Delete task data
+		for _, taskID := range taskIDs {
+			if _, err := tx.Exec("DELETE FROM task_results WHERE task_id = ?", taskID); err != nil {
+				return count, fmt.Errorf("failed to delete task results: %w", err)
+			}
+			if _, err := tx.Exec("DELETE FROM task_progress WHERE task_id = ?", taskID); err != nil {
+				return count, fmt.Errorf("failed to delete task progress: %w", err)
+			}
+		}
+
+		// Delete tasks
+		if _, err := tx.Exec("DELETE FROM tasks WHERE beacon_id = ?", beaconID); err != nil {
+			return count, fmt.Errorf("failed to delete tasks: %w", err)
+		}
+
+		// Delete beacon
+		result, err := tx.Exec("DELETE FROM beacons WHERE id = ?", beaconID)
+		if err != nil {
+			return count, fmt.Errorf("failed to delete beacon: %w", err)
+		}
+
+		rows, _ := result.RowsAffected()
+		count += int(rows)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return count, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return count, nil
+}
+
+// CleanupCompletedStagerSessions removes completed stager sessions older than specified days
+func (d *MasterDatabase) CleanupCompletedStagerSessions(olderThanDays int) (int, error) {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	cutoff := time.Now().AddDate(0, 0, -olderThanDays).Unix()
+
+	// Delete completed stager sessions (cascades to chunk_assignments)
+	result, err := d.db.Exec(`
+		DELETE FROM stager_sessions
+		WHERE completed = 1 AND completed_at < ?
+	`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete stager sessions: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	return int(rows), err
 }

