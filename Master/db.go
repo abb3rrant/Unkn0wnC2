@@ -189,6 +189,7 @@ func (d *MasterDatabase) migration1InitialSchema() error {
 		created_at INTEGER NOT NULL,
 		sent_at INTEGER,
 		completed_at INTEGER,
+		synced_at INTEGER,
 		result_size INTEGER DEFAULT 0,
 		chunk_count INTEGER DEFAULT 0,
 		metadata TEXT,
@@ -203,6 +204,7 @@ func (d *MasterDatabase) migration1InitialSchema() error {
 	CREATE INDEX IF NOT EXISTS idx_tasks_assigned_dns ON tasks(assigned_dns_server);
 	CREATE INDEX IF NOT EXISTS idx_tasks_created_by ON tasks(created_by);
 	CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON tasks(status, created_at DESC);
+	CREATE INDEX IF NOT EXISTS idx_tasks_sync ON tasks(status, synced_at, completed_at);
 
 	-- Task results table (aggregated from DNS servers)
 	CREATE TABLE IF NOT EXISTS task_results (
@@ -1689,6 +1691,75 @@ func (d *MasterDatabase) GetTasksForDNSServer(dnsServerID string) ([]map[string]
 	}
 
 	return tasks, rows.Err()
+}
+
+// GetCompletedTasksForSync retrieves completed/failed/partial tasks for DNS server sync
+// This allows DNS servers to clear beacon.CurrentTask when Master completes task reassembly
+func (d *MasterDatabase) GetCompletedTasksForSync(dnsServerID string) ([]map[string]interface{}, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	// Get tasks that are completed/failed/partial and haven't been synced to this DNS server yet
+	rows, err := d.db.Query(`
+		SELECT id, beacon_id, status
+		FROM tasks
+		WHERE assigned_dns_server = ? 
+		  AND (status = 'completed' OR status = 'failed' OR status = 'partial')
+		  AND (synced_at IS NULL OR synced_at < completed_at)
+		ORDER BY completed_at ASC
+		LIMIT 50
+	`, dnsServerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tasks []map[string]interface{}
+	for rows.Next() {
+		var id, beaconID, status string
+
+		if err := rows.Scan(&id, &beaconID, &status); err != nil {
+			continue
+		}
+
+		tasks = append(tasks, map[string]interface{}{
+			"id":        id,
+			"beacon_id": beaconID,
+			"status":    status,
+		})
+	}
+
+	return tasks, rows.Err()
+}
+
+// MarkTasksAsSynced marks tasks as synced to DNS servers (so we don't send them again)
+func (d *MasterDatabase) MarkTasksAsSynced(taskIDs []string) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	if len(taskIDs) == 0 {
+		return nil
+	}
+
+	// Build placeholders for SQL IN clause
+	placeholders := make([]string, len(taskIDs))
+	args := make([]interface{}, len(taskIDs))
+	for i, id := range taskIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+
+	query := fmt.Sprintf(`
+		UPDATE tasks 
+		SET synced_at = ?
+		WHERE id IN (%s)
+	`, strings.Join(placeholders, ","))
+
+	// Prepend the timestamp to args
+	args = append([]interface{}{time.Now().Unix()}, args...)
+
+	_, err := d.db.Exec(query, args...)
+	return err
 }
 
 // GetAllTasks retrieves all tasks with their status
