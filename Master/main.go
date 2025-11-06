@@ -123,9 +123,9 @@ func main() {
 	srv := &http.Server{
 		Addr:         addr,
 		Handler:      router,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		ReadTimeout:  30 * time.Second,  // Increased from 15s
+		WriteTimeout: 60 * time.Second,  // Increased from 15s for large transfers
+		IdleTimeout:  120 * time.Second, // Increased from 60s
 	}
 
 	// Start server in a goroutine

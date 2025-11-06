@@ -137,12 +137,20 @@ func (rl *RateLimiter) cleanup() {
 	defer rl.mu.Unlock()
 
 	cutoff := time.Now().Add(-10 * time.Minute)
+	toDelete := []string{}
+
+	// First pass: identify visitors to delete (without holding individual locks)
 	for ip, visitor := range rl.visitors {
 		visitor.mu.Lock()
 		if visitor.lastUpdate.Before(cutoff) {
-			delete(rl.visitors, ip)
+			toDelete = append(toDelete, ip)
 		}
 		visitor.mu.Unlock()
+	}
+
+	// Second pass: delete identified visitors
+	for _, ip := range toDelete {
+		delete(rl.visitors, ip)
 	}
 }
 

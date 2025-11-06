@@ -74,7 +74,7 @@ func (d *MasterDatabase) initSchema() error {
 		"PRAGMA synchronous = NORMAL",
 		"PRAGMA cache_size = -64000",
 		"PRAGMA auto_vacuum = INCREMENTAL",
-		"PRAGMA busy_timeout = 5000", // 5 second timeout for busy database
+		"PRAGMA busy_timeout = 30000", // 30 second timeout for busy database (increased from 5s)
 	}
 
 	for _, pragma := range pragmas {
@@ -625,6 +625,7 @@ func (d *MasterDatabase) GetBeaconDNSContacts(beaconID string) ([]map[string]int
 	d.mutex.RLock()
 	defer d.mutex.RUnlock()
 
+	// Updated query to determine status based on last_contact time (active if contacted within last 30 minutes)
 	query := `
 		SELECT 
 			bdc.dns_server_id,
@@ -632,14 +633,19 @@ func (d *MasterDatabase) GetBeaconDNSContacts(beaconID string) ([]map[string]int
 			bdc.first_contact,
 			bdc.last_contact,
 			bdc.contact_count,
-			ds.status as dns_status
+			CASE 
+				WHEN bdc.last_contact >= ? THEN 'active'
+				ELSE 'inactive'
+			END as dns_status
 		FROM beacon_dns_contacts bdc
-		LEFT JOIN dns_servers ds ON bdc.dns_server_id = ds.id
 		WHERE bdc.beacon_id = ?
 		ORDER BY bdc.last_contact DESC
 	`
 
-	rows, err := d.db.Query(query, beaconID)
+	// Calculate threshold for active status (30 minutes ago)
+	activeThreshold := time.Now().Add(-30 * time.Minute).Unix()
+
+	rows, err := d.db.Query(query, activeThreshold, beaconID)
 	if err != nil {
 		return nil, err
 	}
@@ -1073,12 +1079,20 @@ func (d *MasterDatabase) SaveClientBinary(id, filename, os, arch, version, base6
 
 	now := time.Now().Unix()
 
+	// Convert empty string to NULL for created_by to avoid foreign key constraint issues
+	var createdByVal interface{}
+	if createdBy == "" {
+		createdByVal = nil
+	} else {
+		createdByVal = createdBy
+	}
+
 	_, err := d.db.Exec(`
 		INSERT INTO client_binaries (id, filename, os, arch, version, original_size, compressed_size, 
 			base64_size, chunk_size, total_chunks, base64_data, dns_domains, created_at, created_by)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, id, filename, os, arch, version, originalSize, compressedSize, base64Size, chunkSize,
-		totalChunks, base64Data, dnsDomains, now, createdBy)
+		totalChunks, base64Data, dnsDomains, now, createdByVal)
 
 	return err
 }

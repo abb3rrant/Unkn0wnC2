@@ -393,14 +393,14 @@ func (api *APIServer) handleBuildStager(w http.ResponseWriter, r *http.Request) 
 
 	if clientBinaryID != "" {
 		fmt.Printf("[Builder] Attempting to queue stager cache for client binary: %s\n", clientBinaryID)
-		
+
 		// Get all active DNS server IDs
 		dnsServers, err := api.db.GetDNSServers()
 		if err != nil {
 			fmt.Printf("[Builder] ⚠️  Failed to get DNS servers: %v\n", err)
 		} else {
 			fmt.Printf("[Builder] Found %d DNS servers\n", len(dnsServers))
-			
+
 			var dnsServerIDs []string
 			for _, server := range dnsServers {
 				if status, ok := server["status"].(string); ok && status == "active" {
@@ -857,14 +857,10 @@ func (api *APIServer) storeClientBinaryForStager(binaryPath, filename string, re
 	// Join DNS domains
 	dnsDomains := strings.Join(req.DNSDomains, ",")
 
-	// Get operator ID from JWT (if available)
-	createdBy := "system"
-	// TODO: Extract from JWT if needed
-
 	// Generate ID
 	binaryID := fmt.Sprintf("client_%d", time.Now().UnixNano())
 
-	// Store in database
+	// Store in database (use empty string for created_by to allow NULL - no foreign key constraint)
 	err = api.db.SaveClientBinary(
 		binaryID,
 		filename,
@@ -878,7 +874,7 @@ func (api *APIServer) storeClientBinaryForStager(binaryPath, filename string, re
 		base64Size,
 		chunkSize,
 		totalChunks,
-		createdBy,
+		"", // Empty string for created_by (will be stored as NULL in database)
 	)
 
 	if err != nil {

