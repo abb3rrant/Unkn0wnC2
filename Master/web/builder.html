@@ -604,7 +604,9 @@
                     const option = document.createElement('option');
                     option.value = binary.id;
                     const sizeMB = (binary.compressed_size / 1024 / 1024).toFixed(2);
-                    option.textContent = `${binary.os}/${binary.arch} - ${sizeMB}MB (${binary.total_chunks} chunks) - ${new Date(binary.created_at).toLocaleDateString()}`;
+                    // created_at is Unix timestamp in seconds, multiply by 1000 for JavaScript Date
+                    const createdDate = new Date(binary.created_at * 1000).toLocaleDateString();
+                    option.textContent = `${binary.os}/${binary.arch} - ${sizeMB}MB (${binary.total_chunks} chunks) - ${createdDate}`;
                     stagerSelect.appendChild(option);
                     console.log(`[DEBUG] Added binary ${index + 1}:`, option.textContent);
                 });
