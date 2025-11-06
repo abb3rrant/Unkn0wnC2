@@ -409,16 +409,16 @@ func (d *MasterDatabase) RegisterDNSServer(id, domain, address, apiKey string) e
 	now := time.Now().Unix()
 
 	// Use INSERT OR REPLACE to handle domain uniqueness constraint
+	// Note: Set last_checkin to 0 initially so first checkin can be detected
 	_, err = d.db.Exec(`
 		INSERT INTO dns_servers (id, domain, address, api_key_hash, status, first_seen, last_checkin, created_at, updated_at)
-		VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, 'active', ?, 0, ?, ?)
 		ON CONFLICT(domain) DO UPDATE SET
 			id = excluded.id,
 			address = excluded.address,
 			api_key_hash = excluded.api_key_hash,
-			last_checkin = excluded.last_checkin,
 			updated_at = excluded.updated_at
-	`, id, domain, address, string(apiKeyHash), now, now, now, now)
+	`, id, domain, address, string(apiKeyHash), now, now, now)
 
 	return err
 }
@@ -1072,29 +1072,16 @@ func (d *MasterDatabase) GetCachedChunkCount(clientBinaryID string) (int, error)
 	defer d.mutex.RUnlock()
 
 	var count int
-	// Check if this is in the stager_chunks table (Master's chunk storage)
+	// Query client_binaries table for total_chunks metadata
 	err := d.db.QueryRow(`
-		SELECT COUNT(*) FROM stager_chunks WHERE session_id = ? OR session_id = ?
-	`, clientBinaryID, clientBinaryID).Scan(&count)
+		SELECT total_chunks FROM client_binaries WHERE id = ?
+	`, clientBinaryID).Scan(&count)
 
-	// If not found in stager_chunks, check client_binaries metadata
-	if err != nil || count == 0 {
-		// Try to calculate from client binary file size
-		// This is an approximation but better than nothing
-		var fileSize int
-		err = d.db.QueryRow(`
-			SELECT COALESCE(LENGTH(data), 0) FROM client_binaries WHERE id = ?
-		`, clientBinaryID).Scan(&fileSize)
-
-		if err == nil && fileSize > 0 {
-			// Estimate chunks: gzip typically reduces by ~70%, base64 expands by ~33%, chunk size 370
-			estimatedCompressed := int(float64(fileSize) * 0.3)
-			estimatedBase64 := int(float64(estimatedCompressed) * 1.33)
-			count = (estimatedBase64 + 369) / 370 // Round up
-		}
+	if err != nil {
+		return 0, fmt.Errorf("client binary %s not found in database", clientBinaryID)
 	}
 
-	return count, err
+	return count, nil
 }
 
 // UpdateStagerSessionActivity updates the last activity timestamp

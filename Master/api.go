@@ -1594,7 +1594,7 @@ func (api *APIServer) handleStagerContact(w http.ResponseWriter, r *http.Request
 		fmt.Printf("[API] ⚠️  Warning: Failed to create stager session for tracking: %v\n", err)
 	} else {
 		fmt.Printf("[API] 🚀 Stager session created from cache contact: %s | Stager: %s (%s/%s) | Binary: %s | Chunks: %d\n",
-			sessionID[:16], req.StagerIP, req.OS, req.Arch, req.ClientBinaryID, chunkCount)
+			sessionID, req.StagerIP, req.OS, req.Arch, req.ClientBinaryID, chunkCount)
 	}
 
 	// Log the contact
