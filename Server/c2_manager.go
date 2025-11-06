@@ -1006,7 +1006,17 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 		}
 		c2.mutex.Unlock()
 
-		// Update task status in database (async, outside lock)
+		// CRITICAL: Notify Master that THIS DNS server delivered the task
+		// This prevents other DNS servers from delivering it (Shadow Mesh coordination)
+		if masterClient != nil {
+			go func(tid string) {
+				if err := masterClient.MarkTaskDelivered(tid); err != nil && c2.debug {
+					logf("[C2] Warning: Failed to notify Master of task delivery: %v", err)
+				}
+			}(task.ID)
+		}
+
+		// Update task status in local database (async, outside lock)
 		if c2.db != nil {
 			go func(tid string) {
 				if err := c2.db.UpdateTaskStatus(tid, "sent"); err != nil && c2.debug {

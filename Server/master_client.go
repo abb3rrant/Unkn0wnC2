@@ -117,13 +117,14 @@ type APIResponse struct {
 func (mc *MasterClient) doRequest(method, endpoint string, body interface{}) ([]byte, error) {
 	url := mc.masterURL + endpoint
 
-	var reqBody io.Reader
+	// Marshal body once (reuse the JSON bytes for retries)
+	var jsonData []byte
+	var err error
 	if body != nil {
-		jsonData, err := json.Marshal(body)
+		jsonData, err = json.Marshal(body)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal request: %w", err)
 		}
-		reqBody = bytes.NewBuffer(jsonData)
 	}
 
 	// Retry logic with exponential backoff
@@ -131,6 +132,12 @@ func (mc *MasterClient) doRequest(method, endpoint string, body interface{}) ([]
 	var lastErr error
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// Create a new reader for each attempt (body can only be read once)
+		var reqBody io.Reader
+		if jsonData != nil {
+			reqBody = bytes.NewBuffer(jsonData)
+		}
+
 		req, err := http.NewRequest(method, url, reqBody)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
@@ -361,6 +368,36 @@ func (mc *MasterClient) SubmitResult(taskID, beaconID string, chunkIndex, totalC
 
 	if mc.debug {
 		logf("[Master Client] Result submitted: Task %s, chunk %d/%d", taskID, chunkIndex, totalChunks)
+	}
+
+	return nil
+}
+
+// MarkTaskDelivered notifies the Master that this DNS server delivered a task to a beacon
+// This prevents other DNS servers from delivering the same task (Shadow Mesh coordination)
+func (mc *MasterClient) MarkTaskDelivered(taskID string) error {
+	req := struct {
+		TaskID string `json:"task_id"`
+	}{
+		TaskID: taskID,
+	}
+
+	respData, err := mc.doRequest("POST", "/api/dns-server/tasks/delivered", req)
+	if err != nil {
+		return fmt.Errorf("failed to mark task as delivered: %w", err)
+	}
+
+	var resp APIResponse
+	if err := json.Unmarshal(respData, &resp); err != nil {
+		return fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if !resp.Success {
+		return fmt.Errorf("request rejected: %s", resp.Message)
+	}
+
+	if mc.debug {
+		logf("[Master Client] Task %s marked as delivered", taskID)
 	}
 
 	return nil
