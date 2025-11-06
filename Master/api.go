@@ -372,6 +372,15 @@ func (api *APIServer) dnsServerAuthMiddleware(next http.Handler) http.Handler {
 			apiKey = r.URL.Query().Get("api_key")
 		}
 
+		// Special handling for registration endpoint - allow with missing or unverified credentials
+		if strings.HasSuffix(r.URL.Path, "/register") {
+			// Store the extracted IDs for handler use (even if empty, handler will validate)
+			r.Header.Set("X-DNS-Server-ID", dnsServerID)
+			r.Header.Set("X-DNS-Server-APIKey", apiKey)
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		if dnsServerID == "" || apiKey == "" {
 			api.sendError(w, http.StatusUnauthorized, "missing dns_server_id or api_key")
 			return
@@ -380,29 +389,11 @@ func (api *APIServer) dnsServerAuthMiddleware(next http.Handler) http.Handler {
 		// Verify API key
 		valid, err := api.db.VerifyDNSServerAPIKey(dnsServerID, apiKey)
 		if err != nil {
-			// Special handling for registration endpoint - allow first-time registration
-			if strings.HasSuffix(r.URL.Path, "/register") {
-				// For registration, we'll validate in the handler itself
-				// Store the extracted IDs for handler use
-				r.Header.Set("X-DNS-Server-ID", dnsServerID)
-				r.Header.Set("X-DNS-Server-APIKey", apiKey)
-				next.ServeHTTP(w, r)
-				return
-			}
 			api.sendError(w, http.StatusInternalServerError, "authentication error")
 			return
 		}
 
 		if !valid {
-			// Special handling for registration endpoint - allow first-time registration
-			if strings.HasSuffix(r.URL.Path, "/register") {
-				// For registration, we'll validate in the handler itself
-				// Store the extracted IDs for handler use
-				r.Header.Set("X-DNS-Server-ID", dnsServerID)
-				r.Header.Set("X-DNS-Server-APIKey", apiKey)
-				next.ServeHTTP(w, r)
-				return
-			}
 			api.sendError(w, http.StatusUnauthorized, "invalid credentials")
 			return
 		}
