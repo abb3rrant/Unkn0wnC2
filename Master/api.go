@@ -707,27 +707,42 @@ func (api *APIServer) handleDNSServerCheckin(w http.ResponseWriter, r *http.Requ
 				return
 			}
 
-			// Queue domain updates for ALL DNS servers (not just new one)
-			// This ensures all beacons get the updated domain list
-			allServers, err := api.db.GetAllDNSServers()
+			// Get all active beacons to determine which DNS servers they're using
+			activeBeacons, err := api.db.GetActiveBeacons(30)
 			if err != nil {
 				if api.config.Debug {
-					fmt.Printf("[Master] Failed to get DNS servers: %v\n", err)
+					fmt.Printf("[Master] Failed to get active beacons: %v\n", err)
 				}
 				return
 			}
 
-			for _, server := range allServers {
-				serverID := server["id"].(string)
+			// Build a map of DNS server IDs that have active beacons
+			dnsServersWithBeacons := make(map[string]bool)
+			for _, beacon := range activeBeacons {
+				if serverID, ok := beacon["dns_server_id"].(string); ok && serverID != "" {
+					dnsServersWithBeacons[serverID] = true
+				}
+			}
+
+			// Queue domain updates ONLY for DNS servers with active beacons
+			// This ensures beacons get updates from the servers they're actually using
+			updateCount := 0
+			for serverID := range dnsServersWithBeacons {
 				if err := api.db.QueueDomainUpdate(serverID, domains); err != nil {
 					if api.config.Debug {
 						fmt.Printf("[Master] ⚠️  Failed to queue domain update for %s: %v\n", serverID, err)
 					}
+				} else {
+					updateCount++
 				}
 			}
 
-			fmt.Printf("[Master] 🔄 Queued domain updates for %d DNS servers (new server joined: %s)\n", len(allServers), dnsServerID)
-			fmt.Printf("[Master] Updated domain list: %v\n", domains)
+			if updateCount > 0 {
+				fmt.Printf("[Master] 🔄 Queued domain updates for %d DNS server(s) with active beacons (new server joined: %s)\n", updateCount, dnsServerID)
+				fmt.Printf("[Master] Updated domain list: %v\n", domains)
+			} else {
+				fmt.Printf("[Master] ℹ️  No active beacons found, no domain updates queued (new server: %s)\n", dnsServerID)
+			}
 		}()
 	}
 
