@@ -1258,9 +1258,11 @@ func (d *MasterDatabase) GetStagerSessions(limit int) ([]map[string]interface{},
 
 	var sessions []map[string]interface{}
 	for rows.Next() {
-		var id, stagerIP, os, arch, initiatedByDNS, filename, version string
+		var id, stagerIP, os, arch string
 		var totalChunks, chunksDelivered, completed int
-		var createdAt, lastActivity, completedAt int64
+		var createdAt, lastActivity int64
+		var initiatedByDNS, filename, version sql.NullString
+		var completedAt sql.NullInt64
 
 		err := rows.Scan(&id, &stagerIP, &os, &arch, &totalChunks, &chunksDelivered,
 			&initiatedByDNS, &createdAt, &lastActivity, &completed, &completedAt,
@@ -1270,21 +1272,32 @@ func (d *MasterDatabase) GetStagerSessions(limit int) ([]map[string]interface{},
 			continue
 		}
 
-		sessions = append(sessions, map[string]interface{}{
+		session := map[string]interface{}{
 			"id":               id,
 			"stager_ip":        stagerIP,
 			"os":               os,
 			"arch":             arch,
 			"total_chunks":     totalChunks,
 			"chunks_delivered": chunksDelivered,
-			"initiated_by_dns": initiatedByDNS,
 			"created_at":       createdAt,
 			"last_activity":    lastActivity,
-			"completed":        completed,
-			"completed_at":     completedAt,
-			"client_filename":  filename,
-			"client_version":   version,
-		})
+			"completed":        completed == 1,
+		}
+
+		if initiatedByDNS.Valid {
+			session["initiated_by_dns"] = initiatedByDNS.String
+		}
+		if completedAt.Valid {
+			session["completed_at"] = completedAt.Int64
+		}
+		if filename.Valid {
+			session["client_filename"] = filename.String
+		}
+		if version.Valid {
+			session["client_version"] = version.String
+		}
+
+		sessions = append(sessions, session)
 	}
 
 	return sessions, rows.Err()
