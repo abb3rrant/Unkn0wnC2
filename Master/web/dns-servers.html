@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DNS Servers - Unkn0wnC2 Master</title>
+    <link rel="stylesheet" href="/web/static/style.css">
+    <style>
+        .dns-server-card {
+            background: #2a2a2a;
+            border: 1px solid #444;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 15px;
+            transition: all 0.3s ease;
+        }
+        
+        .dns-server-card:hover {
+            border-color: #00ff00;
+            box-shadow: 0 0 10px rgba(0, 255, 0, 0.3);
+        }
+        
+        .server-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        
+        .server-title {
+            font-size: 1.3em;
+            color: #00ff00;
+            font-weight: bold;
+        }
+        
+        .status-badge {
+            padding: 5px 15px;
+            border-radius: 15px;
+            font-size: 0.9em;
+            font-weight: bold;
+        }
+        
+        .status-active {
+            background: #00ff0033;
+            color: #00ff00;
+            border: 1px solid #00ff00;
+        }
+        
+        .status-inactive {
+            background: #ff000033;
+            color: #ff4444;
+            border: 1px solid #ff4444;
+        }
+        
+        .status-offline {
+            background: #ffaa0033;
+            color: #ffaa00;
+            border: 1px solid #ffaa00;
+        }
+        
+        .server-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+        
+        .info-item {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .info-label {
+            color: #888;
+            font-size: 0.85em;
+            margin-bottom: 5px;
+        }
+        
+        .info-value {
+            color: #fff;
+            font-size: 1.1em;
+        }
+        
+        .server-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+        
+        .btn-view {
+            background: #0066cc;
+            color: white;
+            padding: 8px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .btn-view:hover {
+            background: #0088ff;
+        }
+        
+        .btn-remove {
+            background: #cc0000;
+            color: white;
+            padding: 8px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .btn-remove:hover {
+            background: #ff0000;
+        }
+        
+        .stats-summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .stat-card {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 20px;
+            text-align: center;
+        }
+        
+        .stat-value {
+            font-size: 2.5em;
+            color: #00ff00;
+            font-weight: bold;
+        }
+        
+        .stat-label {
+            color: #888;
+            margin-top: 5px;
+            font-size: 0.9em;
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #888;
+        }
+        
+        .empty-state-icon {
+            font-size: 4em;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">Unkn0wnC2 Master</div>
+        <ul class="nav-menu">
+            <li><a href="/dashboard">Dashboard</a></li>
+            <li><a href="/beacon">Beacons</a></li>
+            <li><a href="/dns-servers" class="active">DNS Servers</a></li>
+            <li><a href="/builder">Builder</a></li>
+            <li><a href="/stager">Stager</a></li>
+            <li><a href="/users">Users</a></li>
+            <li><a href="#" onclick="logout()">Logout</a></li>
+        </ul>
+    </nav>
+
+    <div class="container">
+        <div class="page-header">
+            <h1>🌐 DNS Servers</h1>
+            <p>Manage distributed DNS C2 infrastructure</p>
+        </div>
+
+        <!-- Statistics Summary -->
+        <div class="stats-summary">
+            <div class="stat-card">
+                <div class="stat-value" id="totalServers">-</div>
+                <div class="stat-label">Total Servers</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="activeServers">-</div>
+                <div class="stat-label">Active Servers</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="totalBeacons">-</div>
+                <div class="stat-label">Total Beacons</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="totalTasks">-</div>
+                <div class="stat-label">Total Tasks</div>
+            </div>
+        </div>
+
+        <!-- DNS Servers List -->
+        <div id="serversContainer">
+            <div class="empty-state">
+                <div class="empty-state-icon">⏳</div>
+                <h3>Loading DNS servers...</h3>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Authentication check
+        const token = localStorage.getItem('token');
+        if (!token) {
+            window.location.href = '/login';
+        }
+
+        function logout() {
+            localStorage.removeItem('token');
+            window.location.href = '/login';
+        }
+
+        // Format timestamp
+        function formatTime(timestamp) {
+            const date = new Date(timestamp);
+            const now = new Date();
+            const diff = Math.floor((now - date) / 1000); // seconds
+
+            if (diff < 60) return `${diff}s ago`;
+            if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+            if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+            return `${Math.floor(diff / 86400)}d ago`;
+        }
+
+        // Determine server status based on last check-in
+        function getServerStatus(lastCheckin) {
+            const now = new Date();
+            const checkinDate = new Date(lastCheckin);
+            const diffMinutes = Math.floor((now - checkinDate) / 1000 / 60);
+
+            if (diffMinutes < 2) return { status: 'active', label: 'Online' };
+            if (diffMinutes < 10) return { status: 'offline', label: 'Delayed' };
+            return { status: 'inactive', label: 'Offline' };
+        }
+
+        // Load DNS servers
+        async function loadDNSServers() {
+            try {
+                const response = await fetch('/api/dns-servers', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+
+                if (response.status === 401) {
+                    window.location.href = '/login';
+                    return;
+                }
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const result = await response.json();
+                const servers = result.data || [];
+
+                // Update statistics
+                let activeCount = 0;
+                let totalBeacons = 0;
+                let totalTasks = 0;
+
+                servers.forEach(server => {
+                    const status = getServerStatus(server.last_checkin);
+                    if (status.status === 'active') activeCount++;
+                    totalBeacons += server.beacon_count || 0;
+                    totalTasks += server.task_count || 0;
+                });
+
+                document.getElementById('totalServers').textContent = servers.length;
+                document.getElementById('activeServers').textContent = activeCount;
+                document.getElementById('totalBeacons').textContent = totalBeacons;
+                document.getElementById('totalTasks').textContent = totalTasks;
+
+                // Render servers
+                renderServers(servers);
+
+            } catch (error) {
+                console.error('Error loading DNS servers:', error);
+                document.getElementById('serversContainer').innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">⚠️</div>
+                        <h3>Failed to load DNS servers</h3>
+                        <p>${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        function renderServers(servers) {
+            const container = document.getElementById('serversContainer');
+
+            if (servers.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📡</div>
+                        <h3>No DNS servers registered</h3>
+                        <p>DNS servers will appear here once they register with the Master</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = servers.map(server => {
+                const status = getServerStatus(server.last_checkin);
+                const firstSeen = new Date(server.first_seen);
+                const lastCheckin = new Date(server.last_checkin);
+
+                return `
+                    <div class="dns-server-card">
+                        <div class="server-header">
+                            <div class="server-title">🌐 ${server.domain}</div>
+                            <div class="status-badge status-${status.status}">${status.label}</div>
+                        </div>
+                        
+                        <div class="server-info">
+                            <div class="info-item">
+                                <div class="info-label">Server ID</div>
+                                <div class="info-value">${server.id}</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">Address</div>
+                                <div class="info-value">${server.address || 'N/A'}</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">Beacons</div>
+                                <div class="info-value">${server.beacon_count || 0}</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">Tasks</div>
+                                <div class="info-value">${server.task_count || 0}</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">First Seen</div>
+                                <div class="info-value">${formatTime(firstSeen)}</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">Last Check-in</div>
+                                <div class="info-value">${formatTime(lastCheckin)}</div>
+                            </div>
+                        </div>
+                        
+                        <div class="server-actions">
+                            <button class="btn-view" onclick="viewServerBeacons('${server.id}', '${server.domain}')">
+                                View Beacons
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function viewServerBeacons(serverId, domain) {
+            // Redirect to beacon page filtered by DNS server
+            window.location.href = `/beacon?dns_server=${serverId}&domain=${encodeURIComponent(domain)}`;
+        }
+
+        // Auto-refresh every 10 seconds
+        setInterval(loadDNSServers, 10000);
+
+        // Initial load
+        loadDNSServers();
+    </script>
+</body>
+</html>

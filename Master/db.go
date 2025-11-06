@@ -178,6 +178,24 @@ func (d *MasterDatabase) migration1InitialSchema() error {
 	CREATE INDEX IF NOT EXISTS idx_beacons_status ON beacons(status);
 	CREATE INDEX IF NOT EXISTS idx_beacons_hostname ON beacons(hostname);
 
+	-- Beacon DNS contacts table (track all DNS servers each beacon has contacted)
+	CREATE TABLE IF NOT EXISTS beacon_dns_contacts (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		beacon_id TEXT NOT NULL,
+		dns_server_id TEXT NOT NULL,
+		dns_domain TEXT NOT NULL,
+		first_contact INTEGER NOT NULL,
+		last_contact INTEGER NOT NULL,
+		contact_count INTEGER DEFAULT 1,
+		FOREIGN KEY (beacon_id) REFERENCES beacons(id) ON DELETE CASCADE,
+		FOREIGN KEY (dns_server_id) REFERENCES dns_servers(id) ON DELETE CASCADE,
+		UNIQUE(beacon_id, dns_server_id)
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_beacon_dns_contacts_beacon ON beacon_dns_contacts(beacon_id);
+	CREATE INDEX IF NOT EXISTS idx_beacon_dns_contacts_dns_server ON beacon_dns_contacts(dns_server_id);
+	CREATE INDEX IF NOT EXISTS idx_beacon_dns_contacts_last_contact ON beacon_dns_contacts(last_contact);
+
 	-- Tasks table (centralized task management)
 	CREATE TABLE IF NOT EXISTS tasks (
 		id TEXT PRIMARY KEY,
@@ -510,6 +528,48 @@ func (d *MasterDatabase) GetDNSServers() ([]map[string]interface{}, error) {
 	return servers, rows.Err()
 }
 
+// GetActiveDNSServers retrieves only active DNS servers
+func (d *MasterDatabase) GetActiveDNSServers() ([]map[string]interface{}, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	rows, err := d.db.Query(`
+		SELECT id, domain, address, status, first_seen, last_checkin, beacon_count, task_count
+		FROM dns_servers
+		WHERE status = 'active'
+		ORDER BY domain ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var servers []map[string]interface{}
+	for rows.Next() {
+		var id, domain, address, status string
+		var firstSeen, lastCheckin int64
+		var beaconCount, taskCount int
+
+		err := rows.Scan(&id, &domain, &address, &status, &firstSeen, &lastCheckin, &beaconCount, &taskCount)
+		if err != nil {
+			return nil, err
+		}
+
+		servers = append(servers, map[string]interface{}{
+			"id":           id,
+			"domain":       domain,
+			"address":      address,
+			"status":       status,
+			"first_seen":   time.Unix(firstSeen, 0),
+			"last_checkin": time.Unix(lastCheckin, 0),
+			"beacon_count": beaconCount,
+			"task_count":   taskCount,
+		})
+	}
+
+	return servers, rows.Err()
+}
+
 // Beacon operations
 
 // UpsertBeacon inserts or updates a beacon (from DNS server reports)
@@ -538,6 +598,124 @@ func (d *MasterDatabase) UpsertBeacon(beaconID, hostname, username, os, arch, ip
 	`, beaconID, hostname, username, os, arch, ipAddress, dnsServerID, firstSeenUnix, lastSeenUnix, now, now)
 
 	return err
+}
+
+// RecordBeaconDNSContact tracks that a beacon contacted a specific DNS server
+// This is called whenever a beacon checks in to a DNS server
+func (d *MasterDatabase) RecordBeaconDNSContact(beaconID, dnsServerID, dnsDomain string) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	now := time.Now().Unix()
+
+	// Upsert the contact record
+	_, err := d.db.Exec(`
+		INSERT INTO beacon_dns_contacts (beacon_id, dns_server_id, dns_domain, first_contact, last_contact, contact_count)
+		VALUES (?, ?, ?, ?, ?, 1)
+		ON CONFLICT(beacon_id, dns_server_id) DO UPDATE SET
+			last_contact = excluded.last_contact,
+			contact_count = contact_count + 1
+	`, beaconID, dnsServerID, dnsDomain, now, now)
+
+	return err
+}
+
+// GetBeaconDNSContacts retrieves all DNS servers a beacon has contacted
+func (d *MasterDatabase) GetBeaconDNSContacts(beaconID string) ([]map[string]interface{}, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	query := `
+		SELECT 
+			bdc.dns_server_id,
+			bdc.dns_domain,
+			bdc.first_contact,
+			bdc.last_contact,
+			bdc.contact_count,
+			ds.status as dns_status
+		FROM beacon_dns_contacts bdc
+		LEFT JOIN dns_servers ds ON bdc.dns_server_id = ds.id
+		WHERE bdc.beacon_id = ?
+		ORDER BY bdc.last_contact DESC
+	`
+
+	rows, err := d.db.Query(query, beaconID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var contacts []map[string]interface{}
+	for rows.Next() {
+		var dnsServerID, dnsDomain, dnsStatus sql.NullString
+		var firstContact, lastContact, contactCount int64
+
+		err := rows.Scan(&dnsServerID, &dnsDomain, &firstContact, &lastContact, &contactCount, &dnsStatus)
+		if err != nil {
+			return nil, err
+		}
+
+		contacts = append(contacts, map[string]interface{}{
+			"dns_server_id": dnsServerID.String,
+			"dns_domain":    dnsDomain.String,
+			"first_contact": time.Unix(firstContact, 0).Format(time.RFC3339),
+			"last_contact":  time.Unix(lastContact, 0).Format(time.RFC3339),
+			"contact_count": contactCount,
+			"dns_status":    dnsStatus.String,
+		})
+	}
+
+	return contacts, nil
+}
+
+// GetDNSServerBeacons retrieves all beacons that have contacted a specific DNS server
+func (d *MasterDatabase) GetDNSServerBeacons(dnsServerID string, minutesThreshold int) ([]map[string]interface{}, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	threshold := time.Now().Add(-time.Duration(minutesThreshold) * time.Minute).Unix()
+
+	query := `
+		SELECT 
+			bdc.beacon_id,
+			b.hostname,
+			b.username,
+			b.os,
+			bdc.last_contact,
+			bdc.contact_count
+		FROM beacon_dns_contacts bdc
+		JOIN beacons b ON bdc.beacon_id = b.id
+		WHERE bdc.dns_server_id = ? AND bdc.last_contact >= ?
+		ORDER BY bdc.last_contact DESC
+	`
+
+	rows, err := d.db.Query(query, dnsServerID, threshold)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var beacons []map[string]interface{}
+	for rows.Next() {
+		var beaconID, hostname, username, os string
+		var lastContact, contactCount int64
+
+		err := rows.Scan(&beaconID, &hostname, &username, &os, &lastContact, &contactCount)
+		if err != nil {
+			return nil, err
+		}
+
+		beacons = append(beacons, map[string]interface{}{
+			"beacon_id":     beaconID,
+			"hostname":      hostname,
+			"username":      username,
+			"os":            os,
+			"last_contact":  time.Unix(lastContact, 0).Format(time.RFC3339),
+			"contact_count": contactCount,
+		})
+	}
+
+	return beacons, nil
 }
 
 // GetActiveBeacons retrieves beacons active within the last N minutes

