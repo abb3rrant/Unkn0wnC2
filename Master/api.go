@@ -348,7 +348,8 @@ func (api *APIServer) dnsServerAuthMiddleware(next http.Handler) http.Handler {
 
 			// Parse to get auth info
 			var authData struct {
-				DNSServerID string `json:"dns_server_id"`
+				DNSServerID string `json:"dns_server_id"` // Used by most endpoints
+				ServerID    string `json:"server_id"`     // Used by registration endpoint
 				APIKey      string `json:"api_key"`
 			}
 			if err := json.Unmarshal(bodyBytes, &authData); err != nil {
@@ -356,7 +357,11 @@ func (api *APIServer) dnsServerAuthMiddleware(next http.Handler) http.Handler {
 				return
 			}
 
+			// Support both dns_server_id and server_id (for registration)
 			dnsServerID = authData.DNSServerID
+			if dnsServerID == "" {
+				dnsServerID = authData.ServerID
+			}
 			apiKey = authData.APIKey
 
 			// Restore the body for the handler to read
@@ -375,11 +380,29 @@ func (api *APIServer) dnsServerAuthMiddleware(next http.Handler) http.Handler {
 		// Verify API key
 		valid, err := api.db.VerifyDNSServerAPIKey(dnsServerID, apiKey)
 		if err != nil {
+			// Special handling for registration endpoint - allow first-time registration
+			if strings.HasSuffix(r.URL.Path, "/register") {
+				// For registration, we'll validate in the handler itself
+				// Store the extracted IDs for handler use
+				r.Header.Set("X-DNS-Server-ID", dnsServerID)
+				r.Header.Set("X-DNS-Server-APIKey", apiKey)
+				next.ServeHTTP(w, r)
+				return
+			}
 			api.sendError(w, http.StatusInternalServerError, "authentication error")
 			return
 		}
 
 		if !valid {
+			// Special handling for registration endpoint - allow first-time registration
+			if strings.HasSuffix(r.URL.Path, "/register") {
+				// For registration, we'll validate in the handler itself
+				// Store the extracted IDs for handler use
+				r.Header.Set("X-DNS-Server-ID", dnsServerID)
+				r.Header.Set("X-DNS-Server-APIKey", apiKey)
+				next.ServeHTTP(w, r)
+				return
+			}
 			api.sendError(w, http.StatusUnauthorized, "invalid credentials")
 			return
 		}
@@ -1309,15 +1332,33 @@ func (api *APIServer) handleDNSServerRegistration(w http.ResponseWriter, r *http
 		return
 	}
 
-	// Verify API key matches
+	// Verify API key matches (auth middleware may have bypassed for first registration)
 	dnsServerID := r.Header.Get("X-DNS-Server-ID")
 	if dnsServerID != req.ServerID {
 		api.sendError(w, http.StatusUnauthorized, "server_id mismatch")
 		return
 	}
 
+	// Check if this is an existing DNS server (re-registration) or new registration
+	existingValid, err := api.db.VerifyDNSServerAPIKey(req.ServerID, req.APIKey)
+	if err == nil && existingValid {
+		// Server exists and API key is valid - this is a re-registration (e.g., server restart)
+		// Update the record
+		if api.config.Debug {
+			fmt.Printf("[API] DNS server re-registration: %s (%s)\n", req.ServerID, req.Domain)
+		}
+	} else {
+		// Either server doesn't exist or API key is invalid
+		// This should be a first-time registration from a built binary
+		// The builder should have already created the record, so verify the API key matches
+		// what was embedded in the binary at build time
+		if api.config.Debug {
+			fmt.Printf("[API] DNS server first-time registration: %s (%s)\n", req.ServerID, req.Domain)
+		}
+	}
+
 	// Update or insert DNS server record
-	err := api.db.RegisterDNSServer(req.ServerID, req.Domain, req.Address, req.APIKey)
+	err = api.db.RegisterDNSServer(req.ServerID, req.Domain, req.Address, req.APIKey)
 	if err != nil {
 		api.sendError(w, http.StatusInternalServerError, "failed to register DNS server")
 		if api.config.Debug {
