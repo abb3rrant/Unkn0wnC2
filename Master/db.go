@@ -1120,6 +1120,9 @@ func (d *MasterDatabase) SaveClientBinary(id, filename, os, arch, version, base6
 		createdByVal = createdBy
 	}
 
+	fmt.Printf("[DB] Saving client binary: id=%s, filename=%s, os=%s, arch=%s, chunks=%d\n",
+		id, filename, os, arch, totalChunks)
+
 	_, err := d.db.Exec(`
 		INSERT INTO client_binaries (id, filename, os, arch, version, original_size, compressed_size, 
 			base64_size, chunk_size, total_chunks, base64_data, dns_domains, created_at, created_by)
@@ -1127,13 +1130,21 @@ func (d *MasterDatabase) SaveClientBinary(id, filename, os, arch, version, base6
 	`, id, filename, os, arch, version, originalSize, compressedSize, base64Size, chunkSize,
 		totalChunks, base64Data, dnsDomains, now, createdByVal)
 
-	return err
+	if err != nil {
+		fmt.Printf("[DB] ⚠️  ERROR saving client binary: %v\n", err)
+		return err
+	}
+
+	fmt.Printf("[DB] ✓ Client binary saved successfully: %s\n", id)
+	return nil
 }
 
 // GetClientBinaries retrieves all stored client binaries
 func (d *MasterDatabase) GetClientBinaries() ([]map[string]interface{}, error) {
 	d.mutex.RLock()
 	defer d.mutex.RUnlock()
+
+	fmt.Printf("[DB] Querying client_binaries table...\n")
 
 	rows, err := d.db.Query(`
 		SELECT id, filename, os, arch, version, original_size, compressed_size, 
@@ -1142,12 +1153,15 @@ func (d *MasterDatabase) GetClientBinaries() ([]map[string]interface{}, error) {
 		ORDER BY created_at DESC
 	`)
 	if err != nil {
+		fmt.Printf("[DB] ⚠️  ERROR querying client_binaries: %v\n", err)
 		return nil, err
 	}
 	defer rows.Close()
 
 	var binaries []map[string]interface{}
+	rowCount := 0
 	for rows.Next() {
+		rowCount++
 		var id, filename, os, arch, version, dnsDomains, createdBy string
 		var originalSize, compressedSize, base64Size, chunkSize, totalChunks int
 		var createdAt int64
@@ -1155,8 +1169,11 @@ func (d *MasterDatabase) GetClientBinaries() ([]map[string]interface{}, error) {
 		err := rows.Scan(&id, &filename, &os, &arch, &version, &originalSize, &compressedSize,
 			&base64Size, &chunkSize, &totalChunks, &dnsDomains, &createdAt, &createdBy)
 		if err != nil {
+			fmt.Printf("[DB] ⚠️  ERROR scanning row %d: %v\n", rowCount, err)
 			continue
 		}
+
+		fmt.Printf("[DB] Found binary: id=%s, os=%s, arch=%s, chunks=%d\n", id, os, arch, totalChunks)
 
 		binaries = append(binaries, map[string]interface{}{
 			"id":              id,
@@ -1175,6 +1192,7 @@ func (d *MasterDatabase) GetClientBinaries() ([]map[string]interface{}, error) {
 		})
 	}
 
+	fmt.Printf("[DB] Query complete: found %d binaries\n", len(binaries))
 	return binaries, rows.Err()
 }
 

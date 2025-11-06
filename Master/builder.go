@@ -236,7 +236,8 @@ func (api *APIServer) handleBuildClient(w http.ResponseWriter, r *http.Request) 
 
 	// Store client binary in database for stager use
 	if err := api.storeClientBinaryForStager(binaryPath, filename, req, savedPath); err != nil {
-		fmt.Printf("Warning: failed to store client binary in database: %v\n", err)
+		fmt.Printf("[Builder] ⚠️  ERROR: Failed to store client binary in database: %v\n", err)
+		// Continue anyway - binary is still saved to disk
 	}
 
 	// Send binary as download
