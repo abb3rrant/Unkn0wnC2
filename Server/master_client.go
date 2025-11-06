@@ -375,7 +375,8 @@ func (mc *MasterClient) SubmitProgress(taskID, beaconID string, receivedChunks, 
 }
 
 // ReportStagerContact reports that a stager made first contact with this DNS server (from cache)
-func (mc *MasterClient) ReportStagerContact(clientBinaryID, stagerIP, os, arch string) error {
+// Returns the Master-assigned session ID for progress tracking
+func (mc *MasterClient) ReportStagerContact(clientBinaryID, stagerIP, os, arch string) (string, error) {
 	req := map[string]interface{}{
 		"dns_server_id":    mc.serverID,
 		"api_key":          mc.apiKey,
@@ -385,12 +386,27 @@ func (mc *MasterClient) ReportStagerContact(clientBinaryID, stagerIP, os, arch s
 		"arch":             arch,
 	}
 
-	_, err := mc.doRequest("POST", "/api/dns-server/stager/contact", req)
+	respData, err := mc.doRequest("POST", "/api/dns-server/stager/contact", req)
 	if err != nil {
-		return fmt.Errorf("stager contact report failed: %w", err)
+		return "", fmt.Errorf("stager contact report failed: %w", err)
 	}
 
-	return nil
+	// Parse JSON response to extract session_id
+	var resp map[string]interface{}
+	if err := json.Unmarshal(respData, &resp); err != nil {
+		// If we can't parse, just return empty session_id (backward compatibility)
+		return "", nil
+	}
+
+	// Extract session_id from response data
+	if data, ok := resp["data"].(map[string]interface{}); ok {
+		if sessionID, ok := data["session_id"].(string); ok {
+			return sessionID, nil
+		}
+	}
+
+	// Fallback if Master doesn't return session_id (backward compatibility)
+	return "", nil
 }
 
 // ReportStagerProgress reports chunk delivery progress for a stager session

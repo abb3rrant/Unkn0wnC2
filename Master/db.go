@@ -1066,6 +1066,37 @@ func (d *MasterDatabase) GetStagerSession(sessionID string) (map[string]interfac
 	}, nil
 }
 
+// GetCachedChunkCount returns the number of cached chunks for a client binary
+func (d *MasterDatabase) GetCachedChunkCount(clientBinaryID string) (int, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	var count int
+	// Check if this is in the stager_chunks table (Master's chunk storage)
+	err := d.db.QueryRow(`
+		SELECT COUNT(*) FROM stager_chunks WHERE session_id = ? OR session_id = ?
+	`, clientBinaryID, clientBinaryID).Scan(&count)
+
+	// If not found in stager_chunks, check client_binaries metadata
+	if err != nil || count == 0 {
+		// Try to calculate from client binary file size
+		// This is an approximation but better than nothing
+		var fileSize int
+		err = d.db.QueryRow(`
+			SELECT COALESCE(LENGTH(data), 0) FROM client_binaries WHERE id = ?
+		`, clientBinaryID).Scan(&fileSize)
+
+		if err == nil && fileSize > 0 {
+			// Estimate chunks: gzip typically reduces by ~70%, base64 expands by ~33%, chunk size 370
+			estimatedCompressed := int(float64(fileSize) * 0.3)
+			estimatedBase64 := int(float64(estimatedCompressed) * 1.33)
+			count = (estimatedBase64 + 369) / 370 // Round up
+		}
+	}
+
+	return count, err
+}
+
 // UpdateStagerSessionActivity updates the last activity timestamp
 func (d *MasterDatabase) UpdateStagerSessionActivity(sessionID string) error {
 	d.mutex.Lock()

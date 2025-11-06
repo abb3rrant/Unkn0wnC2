@@ -451,19 +451,22 @@
                 </div>
                 <div id="stagerAdvanced" class="advanced-section">
                     <div class="form-group">
-                        <label class="form-label">Jitter (ms)</label>
+                        <label class="form-label">Jitter Between Bursts (ms)</label>
                         <div class="form-row">
-                            <input type="number" id="stagerJitterMin" class="form-input" placeholder="Min" value="100">
-                            <input type="number" id="stagerJitterMax" class="form-input" placeholder="Max" value="500">
+                            <input type="number" id="stagerJitterMin" class="form-input" placeholder="Min (ms)" value="60000">
+                            <input type="number" id="stagerJitterMax" class="form-input" placeholder="Max (ms)" value="120000">
                         </div>
+                        <div class="help-text">Random delay between bursts (60-120s default for stealth)</div>
                     </div>
                     <div class="form-group">
                         <label class="form-label">Chunks Per Burst</label>
-                        <input type="number" id="stagerChunksPerBurst" class="form-input" value="10">
+                        <input type="number" id="stagerChunksPerBurst" class="form-input" value="5">
+                        <div class="help-text">Number of chunks to request rapidly before pausing (5 default)</div>
                     </div>
                     <div class="form-group">
                         <label class="form-label">Burst Pause (ms)</label>
-                        <input type="number" id="stagerBurstPause" class="form-input" value="2000">
+                        <input type="number" id="stagerBurstPause" class="form-input" value="120000">
+                        <div class="help-text">Additional fixed pause between bursts (120s default)</div>
                     </div>
                 </div>
 

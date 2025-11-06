@@ -1565,14 +1565,45 @@ func (api *APIServer) handleStagerContact(w http.ResponseWriter, r *http.Request
 		dnsServerID = req.DNSServerID
 	}
 
-	// Just log the contact - no new session creation needed
+	// Create a stager session when contact is made from cache
+	// Generate session ID matching the format used in cached sessions
+	sessionID := fmt.Sprintf("stg_%04x", rand.Intn(65536))
+
+	// Get total chunks from the cached binary
+	chunkCount, err := api.db.GetCachedChunkCount(req.ClientBinaryID)
+	if err != nil {
+		// If we can't get chunk count, log warning but continue
+		fmt.Printf("[API] ⚠️  Warning: Could not get chunk count for cached binary %s: %v\n", req.ClientBinaryID, err)
+		chunkCount = 0 // Will be updated as chunks are served
+	}
+
+	// Create stager session in database for UI tracking
+	err = api.db.CreateStagerSession(
+		sessionID,
+		req.StagerIP,
+		req.OS,
+		req.Arch,
+		req.ClientBinaryID,
+		dnsServerID,
+		chunkCount,
+	)
+
+	if err != nil {
+		// Log error but don't fail - DNS server already serving from cache
+		fmt.Printf("[API] ⚠️  Warning: Failed to create stager session for tracking: %v\n", err)
+	} else {
+		fmt.Printf("[API] 🚀 Stager session created from cache contact: %s | Stager: %s (%s/%s) | Binary: %s | Chunks: %d\n",
+			sessionID[:16], req.StagerIP, req.OS, req.Arch, req.ClientBinaryID, chunkCount)
+	}
+
+	// Log the contact
 	fmt.Printf("[API] 📞 Stager contact: %s (%s/%s) contacted DNS server %s using cached binary %s\n",
 		req.StagerIP, req.OS, req.Arch, dnsServerID, req.ClientBinaryID)
 
-	// Optionally: Store this contact event in a tracking table for analytics
-	// For now, just acknowledge the report
-
-	api.sendSuccess(w, "contact recorded", nil)
+	// Return success with session ID for DNS server to use in progress reports
+	api.sendSuccess(w, "contact recorded", map[string]interface{}{
+		"session_id": sessionID,
+	})
 }
 
 // handleStagerProgress processes stager chunk delivery progress reports from DNS servers
