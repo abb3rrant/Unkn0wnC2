@@ -341,7 +341,8 @@ func (mc *MasterClient) PollTasks() ([]TaskResponse, error) {
 }
 
 // SubmitResult sends a task result (or result chunk) to the Master Server
-func (mc *MasterClient) SubmitResult(taskID, beaconID string, chunkIndex, totalChunks int, data string) error {
+// Returns (taskComplete, error) - taskComplete is true if this was the final chunk
+func (mc *MasterClient) SubmitResult(taskID, beaconID string, chunkIndex, totalChunks int, data string) (bool, error) {
 	req := ResultSubmitRequest{
 		DNSServerID: mc.serverID,
 		APIKey:      mc.apiKey,
@@ -354,23 +355,37 @@ func (mc *MasterClient) SubmitResult(taskID, beaconID string, chunkIndex, totalC
 
 	respData, err := mc.doRequest("POST", "/api/dns-server/result", req)
 	if err != nil {
-		return fmt.Errorf("result submit failed: %w", err)
+		return false, fmt.Errorf("result submit failed: %w", err)
 	}
 
 	var resp APIResponse
 	if err := json.Unmarshal(respData, &resp); err != nil {
-		return fmt.Errorf("failed to parse result response: %w", err)
+		return false, fmt.Errorf("failed to parse result response: %w", err)
 	}
 
 	if !resp.Success {
-		return fmt.Errorf("result submit rejected: %s", resp.Message)
+		return false, fmt.Errorf("result submit rejected: %s", resp.Message)
+	}
+
+	// Check if task is complete (Master signals this after receiving all chunks)
+	taskComplete := false
+	if dataMap, ok := resp.Data.(map[string]interface{}); ok {
+		if complete, exists := dataMap["task_complete"]; exists {
+			if completeBool, ok := complete.(bool); ok {
+				taskComplete = completeBool
+			}
+		}
 	}
 
 	if mc.debug {
-		logf("[Master Client] Result submitted: Task %s, chunk %d/%d", taskID, chunkIndex, totalChunks)
+		if taskComplete {
+			logf("[Master Client] Result submitted: Task %s COMPLETE (chunk %d/%d)", taskID, chunkIndex, totalChunks)
+		} else {
+			logf("[Master Client] Result submitted: Task %s, chunk %d/%d", taskID, chunkIndex, totalChunks)
+		}
 	}
 
-	return nil
+	return taskComplete, nil
 }
 
 // MarkTaskDelivered notifies the Master that this DNS server delivered a task to a beacon

