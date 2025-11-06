@@ -799,6 +799,18 @@ func main() {
 		}
 	})
 
+	// Start periodic task status sync (every 5 seconds)
+	// This clears beacon.CurrentTask when Master completes task reassembly
+	masterClient.StartPeriodicTaskStatusSync(5*time.Second, func(tasks []TaskResponse) {
+		for _, task := range tasks {
+			// Update local task status and clear beacon.CurrentTask if needed
+			c2Manager.UpdateTaskStatusFromMaster(task.ID, task.Status)
+		}
+		if debugMode && len(tasks) > 0 {
+			logf("[Distributed] Synced %d task status update(s) from master", len(tasks))
+		}
+	})
+
 	// Setup graceful shutdown
 	shutdownChan := make(chan os.Signal, 1)
 	signal.Notify(shutdownChan, os.Interrupt, syscall.SIGTERM)

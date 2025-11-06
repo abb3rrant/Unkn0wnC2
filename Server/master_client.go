@@ -513,6 +513,50 @@ func (mc *MasterClient) StartPeriodicBeaconSync(interval time.Duration, beaconHa
 	}()
 }
 
+// SyncTaskStatuses fetches completed/failed task statuses from Master
+// This allows DNS servers to clear beacon.CurrentTask when tasks complete
+func (mc *MasterClient) SyncTaskStatuses() ([]TaskResponse, error) {
+	// Build query string with authentication - only get completed/failed tasks
+	endpoint := fmt.Sprintf("/api/dns-server/task-statuses?dns_server_id=%s&api_key=%s", mc.serverID, mc.apiKey)
+
+	respData, err := mc.doRequest("GET", endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("task status sync failed: %w", err)
+	}
+
+	// Parse response as task array
+	var tasks []TaskResponse
+	if err := json.Unmarshal(respData, &tasks); err != nil {
+		return nil, fmt.Errorf("failed to parse task statuses response: %w", err)
+	}
+
+	if mc.debug && len(tasks) > 0 {
+		logf("[Master Client] Synced %d task status update(s) from master", len(tasks))
+	}
+
+	return tasks, nil
+}
+
+// StartPeriodicTaskStatusSync starts a background goroutine for syncing completed task statuses
+func (mc *MasterClient) StartPeriodicTaskStatusSync(interval time.Duration, statusHandler func([]TaskResponse)) {
+	ticker := time.NewTicker(interval)
+	go func() {
+		for range ticker.C {
+			tasks, err := mc.SyncTaskStatuses()
+			if err != nil {
+				if mc.debug {
+					logf("[Master Client] Task status sync error: %v", err)
+				}
+				continue
+			}
+
+			if len(tasks) > 0 {
+				statusHandler(tasks)
+			}
+		}
+	}()
+}
+
 // GetLastCheckin returns the timestamp of the last successful check-in
 func (mc *MasterClient) GetLastCheckin() time.Time {
 	mc.checkinMutex.RLock()
