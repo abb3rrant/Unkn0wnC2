@@ -2083,6 +2083,14 @@ func (d *MasterDatabase) GetAllTasksPaginated(limit, offset int) ([]map[string]i
 			task["os"] = os.String
 		}
 
+		// Add progress for exfiltrating tasks
+		if status == "exfiltrating" {
+			progress, err := d.GetTaskProgressFromResults(id)
+			if err == nil && progress != nil {
+				task["progress"] = progress
+			}
+		}
+
 		tasks = append(tasks, task)
 	}
 
