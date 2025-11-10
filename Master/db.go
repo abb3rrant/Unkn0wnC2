@@ -934,6 +934,7 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 
 		if err != sql.ErrNoRows {
 			// Already have complete result (probably from DNS server that assembled it)
+			fmt.Printf("[Master DB] Task %s already has complete result (id=%d), skipping reassembly\n", taskID, existingID)
 			return nil
 		}
 
@@ -945,10 +946,21 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 			WHERE task_id = ? AND chunk_index > 0
 		`, taskID).Scan(&chunkCount)
 
-		if err == nil && chunkCount == totalChunks {
+		if err != nil {
+			fmt.Printf("[Master DB] Error counting chunks for task %s: %v\n", taskID, err)
+			return err
+		}
+
+		fmt.Printf("[Master DB] Task %s progress: %d/%d chunks received\n", taskID, chunkCount, totalChunks)
+
+		if chunkCount == totalChunks {
 			// We have all chunks! Reassemble them (call directly, we already hold the lock)
-			fmt.Printf("[Master DB] All %d chunks received for task %s, reassembling...\n", totalChunks, taskID)
+			fmt.Printf("[Master DB] ✓ All %d chunks received for task %s, triggering reassembly...\n", totalChunks, taskID)
 			d.reassembleChunkedResultLocked(taskID, beaconID, totalChunks)
+		} else if chunkCount > totalChunks {
+			// This shouldn't happen but log if it does
+			fmt.Printf("[Master DB] ⚠️  Warning: Task %s has %d chunks but expected %d (duplicate chunks from load balancing?)\n",
+				taskID, chunkCount, totalChunks)
 		}
 	}
 
@@ -1037,8 +1049,17 @@ func (d *MasterDatabase) reassembleChunkedResultLocked(taskID, beaconID string, 
 	// Mark task as completed
 	d.markTaskCompleted(taskID)
 
-	fmt.Printf("[Master DB] ✓ Reassembled result for task %s: %d chunks, %d bytes\n",
+	fmt.Printf("[Master DB] ✅ Reassembly complete for task %s: %d chunks combined → %d bytes total\n",
 		taskID, totalChunks, completeResult.Len())
+
+	// Verify task status was updated
+	var taskStatus string
+	if err := d.db.QueryRow("SELECT status FROM tasks WHERE id = ?", taskID).Scan(&taskStatus); err == nil {
+		fmt.Printf("[Master DB] Task %s status is now: %s\n", taskID, taskStatus)
+		if taskStatus != "completed" {
+			fmt.Printf("[Master DB] ⚠️  WARNING: Task %s status is '%s' instead of 'completed'!\n", taskID, taskStatus)
+		}
+	}
 }
 
 // GetTaskResult retrieves the complete result for a task
@@ -2447,14 +2468,22 @@ func (d *MasterDatabase) GetTaskProgressFromResults(taskID string) (map[string]i
 // This is called internally (mutex already held by caller)
 func (d *MasterDatabase) markTaskCompleted(taskID string) {
 	now := time.Now().Unix()
-	_, err := d.db.Exec(`
+	result, err := d.db.Exec(`
 		UPDATE tasks 
 		SET status = 'completed', completed_at = ?
 		WHERE id = ? AND status != 'completed'
 	`, now, taskID)
 
 	if err != nil {
-		fmt.Printf("[Master DB] Error marking task %s as completed: %v\n", taskID, err)
+		fmt.Printf("[Master DB] ❌ Error marking task %s as completed: %v\n", taskID, err)
+		return
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		fmt.Printf("[Master DB] ⚠️  Task %s was already completed or doesn't exist\n", taskID)
+	} else {
+		fmt.Printf("[Master DB] ✓ Task %s marked as completed\n", taskID)
 	}
 }
 
