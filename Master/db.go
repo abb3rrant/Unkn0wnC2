@@ -72,9 +72,11 @@ func (d *MasterDatabase) Close() error {
 
 // initSchema creates the database schema if it doesn't exist
 func (d *MasterDatabase) initSchema() error {
-	// Enable foreign keys and WAL mode
+	// CRITICAL: Foreign keys DISABLED for task_results table
+	// dns_server_id is metadata only and should not block result storage
+	// We keep foreign keys ON for other tables (tasks, beacons)
 	pragmas := []string{
-		"PRAGMA foreign_keys = ON",
+		"PRAGMA foreign_keys = OFF", // Disabled to allow result storage without DNS server registration
 		"PRAGMA journal_mode = WAL",
 		"PRAGMA synchronous = NORMAL",
 		"PRAGMA cache_size = -64000",
@@ -244,8 +246,9 @@ func (d *MasterDatabase) migration1InitialSchema() error {
 		total_chunks INTEGER DEFAULT 1,
 		is_complete INTEGER DEFAULT 1,
 		FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
-		FOREIGN KEY (beacon_id) REFERENCES beacons(id) ON DELETE CASCADE,
-		FOREIGN KEY (dns_server_id) REFERENCES dns_servers(id) ON DELETE CASCADE
+		FOREIGN KEY (beacon_id) REFERENCES beacons(id) ON DELETE CASCADE
+		-- REMOVED: FOREIGN KEY (dns_server_id) REFERENCES dns_servers(id) ON DELETE CASCADE
+		-- dns_server_id is metadata only, should not block result storage
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_task_results_task_id ON task_results(task_id);
@@ -836,19 +839,11 @@ func (d *MasterDatabase) GetBeacon(beaconID string) (map[string]interface{}, err
 func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, chunkIndex, totalChunks int, data string) error {
 	now := time.Now().Unix()
 
-	// CRITICAL FIX: Ensure DNS server exists before saving result (handles race condition)
-	// DNS server might submit results before first checkin completes
-	// Insert a placeholder entry if it doesn't exist (will be updated on checkin)
-	// Use dns_server_id as domain placeholder since domain is NOT NULL UNIQUE
-	// No lock needed - database handles concurrency for INSERT OR IGNORE
-	_, err := d.db.Exec(`
-		INSERT OR IGNORE INTO dns_servers (id, domain, address, api_key_hash, status, first_seen, last_checkin, created_at, updated_at)
-		VALUES (?, ?, '', 'placeholder', 'active', ?, 0, ?, ?)
-	`, dnsServerID, dnsServerID, now, now, now)
-	if err != nil {
-		fmt.Printf("[Master DB] ❌ Failed to auto-register DNS server %s: %v\n", dnsServerID, err)
-		return fmt.Errorf("failed to ensure DNS server exists: %w", err)
-	}
+	// Note: dns_server_id FK constraint removed from task_results table
+	// This allows result storage even if DNS server not yet registered
+	// DNS server will be registered on first check-in or can be added manually
+
+	var err error
 
 	// Determine if this is a complete result
 	isComplete := 0
@@ -879,9 +874,8 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 						dnsServerID, taskID, totalChunks, len(data))
 					// Mark task as completed
 					d.markTaskCompleted(taskID)
-				} else if strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
-					fmt.Printf("[Master DB] Warning: Failed to save assembled result (DNS server %s not registered?)\n", dnsServerID)
-					return nil // Don't crash
+				} else {
+					fmt.Printf("[Master DB] Error saving assembled result: %v\n", err)
 				}
 				return err
 			}
@@ -898,11 +892,7 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 	`, taskID, beaconID, dnsServerID, data, now, chunkIndex, totalChunks, isComplete)
 
 	if err != nil {
-		// Log but don't crash on foreign key constraint errors (DNS server might not be registered yet)
-		if strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
-			fmt.Printf("[Master DB] Warning: Failed to save result chunk (DNS server %s not registered?): %v\n", dnsServerID, err)
-			return nil // Don't crash, just skip this chunk
-		}
+		fmt.Printf("[Master DB] Error saving result chunk: %v\n", err)
 		return err
 	}
 
