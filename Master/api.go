@@ -2104,8 +2104,29 @@ func (api *APIServer) handleStagerProgress(w http.ResponseWriter, r *http.Reques
 	api.sendSuccess(w, "progress recorded", nil)
 }
 
+// panicRecoveryMiddleware catches panics and prevents server crashes
+func (api *APIServer) panicRecoveryMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if err := recover(); err != nil {
+				fmt.Printf("[API] ⚠️  PANIC RECOVERED: %v\nPath: %s %s\n", err, r.Method, r.URL.Path)
+				// Try to send error response (might fail if headers already sent)
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": false,
+					"message": "internal server error",
+				})
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
 // SetupRoutes configures all API routes
 func (api *APIServer) SetupRoutes(router *mux.Router) {
+	// Add panic recovery middleware to all routes
+	router.Use(api.panicRecoveryMiddleware)
+
 	// Web UI endpoints (serve HTML)
 	router.HandleFunc("/", api.handleRoot).Methods("GET")
 	router.HandleFunc("/login", api.handleLoginPage).Methods("GET")

