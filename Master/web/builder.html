@@ -322,9 +322,9 @@
         <div class="builder-grid">
             <!-- DNS Server Builder -->
             <div class="builder-card">
-                <div class="builder-title">🌐 DNS Server</div>
+                <div class="builder-title">Prefect Server</div>
                 <div class="builder-description">
-                    Build a new DNS C2 server for a specific domain. The server will connect to this Master and handle beacon communications.
+                    Build a new DNS C2 server for a specific domain. The server will connect to this Archon and handle beacon communications. Ensure you configure glue records.
                 </div>
 
                 <div class="form-group">
@@ -335,7 +335,7 @@
 
                 <div class="form-group">
                     <label class="form-label">Server Address *</label>
-                    <input type="text" id="dnsServerAddress" class="form-input" placeholder="98.90.218.70" required>
+                    <input type="text" id="dnsServerAddress" class="form-input" placeholder="1.2.3.4" required>
                     <div class="help-text">Public IP address for A record responses (REQUIRED)</div>
                 </div>
 
@@ -352,16 +352,16 @@
                     <div class="form-group">
                         <label class="form-label">Encryption Key</label>
                         <input type="text" id="dnsServerEncKey" class="form-input" placeholder="Auto-generated">
-                        <div class="help-text">Leave empty to auto-generate</div>
+                        <div class="help-text">Leave empty to auto-generate(recommended)</div>
                     </div>
                 </div>
 
-                <button class="btn-build" onclick="buildDNSServer()">🔨 Build DNS Server</button>
+                <button class="btn-build" onclick="buildDNSServer()">Build Prefect Server</button>
             </div>
 
             <!-- Client Builder -->
             <div class="builder-card">
-                <div class="builder-title">💻 Client</div>
+                <div class="builder-title">Vessel</div>
                 <div class="builder-description">
                     Build a beacon client that will connect to your registered DNS servers. Clients will automatically rotate through available domains.
                 </div>
@@ -412,12 +412,12 @@
                     </div>
                 </div>
 
-                <button class="btn-build" onclick="buildClient()">🔨 Build Client</button>
+                <button class="btn-build" onclick="buildClient()">Build Vessel</button>
             </div>
 
             <!-- Stager Builder -->
             <div class="builder-card">
-                <div class="builder-title">🚀 Stager</div>
+                <div class="builder-title">Herald</div>
                 <div class="builder-description">
                     Build a DNS-based stager that downloads and executes the full beacon. Used for initial access with minimal footprint.
                 </div>
@@ -428,7 +428,7 @@
                         <option value="" disabled selected>Loading...</option>
                     </select>
                     <div class="help-text">Pre-built beacon to deploy via stager 
-                        <button onclick="loadClientBinaries(); return false;" style="background: none; border: none; color: #ff3333; cursor: pointer; padding: 0 5px;">🔄 Refresh</button>
+                        <button onclick="loadClientBinaries(); return false;" style="background: none; border: none; color: #ff3333; cursor: pointer; padding: 0 5px;">Refresh</button>
                     </div>
                 </div>
 
@@ -470,12 +470,12 @@
                     </div>
                 </div>
 
-                <button class="btn-build" onclick="buildStager()">🔨 Build Stager</button>
+                <button class="btn-build" onclick="buildStager()">Build Herald</button>
             </div>
         </div>
 
         <!-- Saved Builds Section -->
-        <h1 class="section-title" style="margin-top: 40px;">📦 Saved Builds</h1>
+        <h1 class="section-title" style="margin-top: 40px;">Saved Builds</h1>
         <div class="builder-card" style="max-width: 100%;">
             <div class="builder-description">
                 Download or delete previously built binaries

