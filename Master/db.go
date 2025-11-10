@@ -1421,15 +1421,36 @@ func (d *MasterDatabase) GetStagerChunk(sessionID string, chunkIndex int) (strin
 	return chunkData, dnsServerID, nil
 }
 
-// MarkStagerChunkDelivered marks a chunk as delivered
+// MarkStagerChunkDelivered marks a chunk as delivered (idempotent)
 func (d *MasterDatabase) MarkStagerChunkDelivered(sessionID string, chunkIndex int) error {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 
 	now := time.Now().Unix()
 
-	// Mark chunk as delivered
-	_, err := d.db.Exec(`
+	// Check if chunk was already marked as delivered
+	var alreadyDelivered int
+	err := d.db.QueryRow(`
+		SELECT delivered FROM stager_chunk_assignments 
+		WHERE session_id = ? AND chunk_index = ?
+	`, sessionID, chunkIndex).Scan(&alreadyDelivered)
+
+	if err != nil {
+		// Chunk assignment doesn't exist - this is fine for cache-served chunks
+		// Just update session activity without incrementing counter
+		d.db.Exec(`UPDATE stager_sessions SET last_activity = ? WHERE id = ?`, now, sessionID)
+		return nil
+	}
+
+	// If already delivered, don't increment counter (prevents duplicate counting)
+	if alreadyDelivered == 1 {
+		// Just update activity timestamp
+		d.db.Exec(`UPDATE stager_sessions SET last_activity = ? WHERE id = ?`, now, sessionID)
+		return nil
+	}
+
+	// Mark chunk as delivered (first time)
+	_, err = d.db.Exec(`
 		UPDATE stager_chunk_assignments 
 		SET delivered = 1, delivered_at = ? 
 		WHERE session_id = ? AND chunk_index = ?
@@ -1439,7 +1460,7 @@ func (d *MasterDatabase) MarkStagerChunkDelivered(sessionID string, chunkIndex i
 		return err
 	}
 
-	// Update session chunks_delivered count
+	// Increment session chunks_delivered count (only once per chunk)
 	_, err = d.db.Exec(`
 		UPDATE stager_sessions 
 		SET chunks_delivered = chunks_delivered + 1, last_activity = ?
