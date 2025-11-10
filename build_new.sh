@@ -14,7 +14,7 @@
 
 set -e
 
-VERSION="0.3.0"
+VERSION="0.2.1"
 BUILD_DATE=$(date -u '+%Y-%m-%d')
 GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
@@ -35,7 +35,7 @@ cat << "EOF"
   \____/|_| |_|_|\_\_| |_|\___/  \_/\_/ |_| |_|  \_____|____|
 EOF
 echo -e "${NC}"
-echo -e "${GREEN}Unkn0wnC2 Master Installation${NC}"
+echo -e "${GREEN}Unkn0wnC2 Archon Installation${NC}"
 echo -e "${GREEN}Version: ${VERSION}${NC}"
 echo ""
 
@@ -140,14 +140,14 @@ echo ""
 LDFLAGS="-s -w -X main.version=${VERSION} -X main.buildDate=${BUILD_DATE} -X main.gitCommit=${GIT_COMMIT}"
 BUILDFLAGS="-trimpath"
 
-echo -e "${YELLOW}[1/6] Building Master Server...${NC}"
+echo -e "${YELLOW}[1/6] Building Archon Server...${NC}"
 cd Master
 go build ${BUILDFLAGS} -ldflags="${LDFLAGS}" -o unkn0wnc2 .
 if [ $? -ne 0 ]; then
-    echo -e "${RED}Failed to build Master server${NC}"
+    echo -e "${RED}Failed to build Archon server${NC}"
     exit 1
 fi
-echo -e "${GREEN}✓ Master server compiled: $(du -h unkn0wnc2 | cut -f1)${NC}"
+echo -e "${GREEN}✓ Archon server compiled: $(du -h unkn0wnc2 | cut -f1)${NC}"
 echo ""
 
 echo -e "${YELLOW}[2/6] Creating directory structure...${NC}"
@@ -272,23 +272,23 @@ echo ""
 if [ -f /tmp/unkn0wnc2_admin_pass ]; then
     ADMIN_PASSWORD=$(cat /tmp/unkn0wnc2_admin_pass)
     ENCRYPTION_KEY=$(grep '"encryption_key"' /opt/unkn0wnc2/master_config.json | cut -d'"' -f4)
-    echo -e "${CYAN}╔════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║     ADMIN CREDENTIALS (SAVE THESE!)    ║${NC}"
-    echo -e "${CYAN}╠════════════════════════════════════════╣${NC}"
-    echo -e "${CYAN}║${NC} Username: ${GREEN}admin${NC}                          ${CYAN}║${NC}"
-    echo -e "${CYAN}║${NC} Password: ${GREEN}${ADMIN_PASSWORD}${NC}                  ${CYAN}║${NC}"
-    echo -e "${CYAN}╠════════════════════════════════════════╣${NC}"
+    echo -e "${CYAN}╔═════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║                       ADMIN CREDENTIALS                     ║${NC}"
+    echo -e "${CYAN}╠═════════════════════════════════════════════════════════════╣${NC}"
+    echo -e "${CYAN}║${NC} Username: ${GREEN}admin${NC}                    ${CYAN}║${NC}"
+    echo -e "${CYAN}║${NC} Password: ${GREEN}${ADMIN_PASSWORD}${NC}        ${CYAN}║${NC}"
+    echo -e "${CYAN}╠═════════════════════════════════════════════════════════════╣${NC}"
     echo -e "${CYAN}║${NC} Encryption Key: ${GREEN}${ENCRYPTION_KEY}${NC}  ${CYAN}║${NC}"
-    echo -e "${CYAN}╚════════════════════════════════════════╝${NC}"
+    echo -e "${CYAN}╚═════════════════════════════════════════════════════════════╝${NC}"
     echo ""
-    echo -e "${YELLOW}⚠  These credentials will NOT be shown again!${NC}"
-    echo -e "${YELLOW}⚠  Change password after first login via web UI${NC}"
+    echo -e "${YELLOW}These credentials will NOT be shown again!${NC}"
+    echo -e "${YELLOW}Change password after first login via web UI${NC}"
     echo ""
     rm -f /tmp/unkn0wnc2_admin_pass
 fi
 
 echo -e "${CYAN}USAGE:${NC}"
-echo "  Start Master Server:"
+echo "  Start Archon Server:"
 echo "    unkn0wnc2 --bind-addr <ip> --bind-port <port>"
 echo ""
 echo "  Example:"

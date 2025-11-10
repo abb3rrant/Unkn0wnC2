@@ -832,16 +832,15 @@ func (d *MasterDatabase) GetBeacon(beaconID string) (map[string]interface{}, err
 
 // SaveResultChunk stores a result chunk from a DNS server
 // Handles multi-server chunked results by aggregating all chunks
+// Uses fine-grained locking to avoid blocking other DNS servers
 func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, chunkIndex, totalChunks int, data string) error {
-	d.mutex.Lock()
-	defer d.mutex.Unlock()
-
 	now := time.Now().Unix()
 
 	// CRITICAL FIX: Ensure DNS server exists before saving result (handles race condition)
 	// DNS server might submit results before first checkin completes
 	// Insert a placeholder entry if it doesn't exist (will be updated on checkin)
 	// Use dns_server_id as domain placeholder since domain is NOT NULL UNIQUE
+	// No lock needed - database handles concurrency for INSERT OR IGNORE
 	_, err := d.db.Exec(`
 		INSERT OR IGNORE INTO dns_servers (id, domain, address, api_key_hash, status, first_seen, last_checkin, created_at, updated_at)
 		VALUES (?, ?, '', 'placeholder', 'active', ?, 0, ?, ?)
@@ -956,9 +955,9 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 		fmt.Printf("[Master DB] Task %s progress: %d/%d chunks received\n", taskID, chunkCount, totalChunks)
 
 		if chunkCount == totalChunks {
-			// We have all chunks! Reassemble them (call directly, we already hold the lock)
-			fmt.Printf("[Master DB] ✓ All %d chunks received for task %s, triggering reassembly...\n", totalChunks, taskID)
-			d.reassembleChunkedResultLocked(taskID, beaconID, totalChunks)
+			// We have all chunks! Trigger reassembly in goroutine to avoid blocking other submissions
+			fmt.Printf("[Master DB] ✓ All %d chunks received for task %s, triggering async reassembly...\n", totalChunks, taskID)
+			go d.reassembleChunkedResult(taskID, beaconID, totalChunks)
 		} else if chunkCount > totalChunks {
 			// This shouldn't happen but log if it does
 			fmt.Printf("[Master DB] ⚠️  Warning: Task %s has %d chunks but expected %d (duplicate chunks from load balancing?)\n",
@@ -969,9 +968,12 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 	return nil
 }
 
-// reassembleChunkedResultLocked combines all chunks into a complete result
-// Must be called with d.mutex already locked
-func (d *MasterDatabase) reassembleChunkedResultLocked(taskID, beaconID string, totalChunks int) {
+// reassembleChunkedResult combines all chunks into a complete result
+// Can be called asynchronously without holding mutex
+func (d *MasterDatabase) reassembleChunkedResult(taskID, beaconID string, totalChunks int) {
+	// Use mutex only for final insert/update operations
+	// Database queries are safe due to WAL mode
+
 	// Check if we already have a complete assembled result (avoid duplicate work)
 	var existingID int
 	err := d.db.QueryRow(`
