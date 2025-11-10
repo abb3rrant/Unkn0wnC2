@@ -841,11 +841,13 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 	// CRITICAL FIX: Ensure DNS server exists before saving result (handles race condition)
 	// DNS server might submit results before first checkin completes
 	// Insert a placeholder entry if it doesn't exist (will be updated on checkin)
+	// Use dns_server_id as domain placeholder since domain is NOT NULL UNIQUE
 	_, err := d.db.Exec(`
 		INSERT OR IGNORE INTO dns_servers (id, domain, address, api_key_hash, status, first_seen, last_checkin, created_at, updated_at)
-		VALUES (?, ?, '', '', 'active', ?, 0, ?, ?)
+		VALUES (?, ?, '', 'placeholder', 'active', ?, 0, ?, ?)
 	`, dnsServerID, dnsServerID, now, now, now)
 	if err != nil {
+		fmt.Printf("[Master DB] ❌ Failed to auto-register DNS server %s: %v\n", dnsServerID, err)
 		return fmt.Errorf("failed to ensure DNS server exists: %w", err)
 	}
 
