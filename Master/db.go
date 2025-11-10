@@ -38,10 +38,15 @@ func NewMasterDatabase(dbPath string) (*MasterDatabase, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	// Configure connection pool
-	db.SetMaxOpenConns(10) // Master server handles more concurrent operations
-	db.SetMaxIdleConns(5)
-	db.SetConnMaxLifetime(0)
+	// Configure connection pool - CRITICAL for high-throughput operations
+	// With batched result submissions, we need enough connections to handle:
+	// - Multiple DNS servers submitting batches concurrently
+	// - Operator API requests
+	// - DNS server check-ins
+	// - Task syncs
+	db.SetMaxOpenConns(50)   // Increased from 10 for batched result handling
+	db.SetMaxIdleConns(25)   // Keep more idle connections ready
+	db.SetConnMaxLifetime(0) // No limit, reuse connections indefinitely
 
 	database := &MasterDatabase{
 		db: db,
@@ -833,6 +838,17 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 
 	now := time.Now().Unix()
 
+	// CRITICAL FIX: Ensure DNS server exists before saving result (handles race condition)
+	// DNS server might submit results before first checkin completes
+	// Insert a placeholder entry if it doesn't exist (will be updated on checkin)
+	_, err := d.db.Exec(`
+		INSERT OR IGNORE INTO dns_servers (id, domain, address, api_key_hash, status, first_seen, last_checkin, created_at, updated_at)
+		VALUES (?, ?, '', '', 'active', ?, 0, ?, ?)
+	`, dnsServerID, dnsServerID, now, now, now)
+	if err != nil {
+		return fmt.Errorf("failed to ensure DNS server exists: %w", err)
+	}
+
 	// Determine if this is a complete result
 	isComplete := 0
 	if chunkIndex == 0 {
@@ -844,7 +860,7 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 			// This is a DNS server sending us the complete assembled result
 			// Check if we already have it
 			var existingID int
-			err := d.db.QueryRow(`
+			err = d.db.QueryRow(`
 				SELECT id FROM task_results 
 				WHERE task_id = ? AND chunk_index = 0 AND total_chunks = ? AND is_complete = 1
 				LIMIT 1
@@ -875,7 +891,7 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 
 	// Insert the chunk (for single-chunk results or individual chunks from multi-chunk results)
 	// Use INSERT OR REPLACE to handle duplicate chunks from DNS retries or load balancing
-	_, err := d.db.Exec(`
+	_, err = d.db.Exec(`
 		INSERT OR REPLACE INTO task_results (task_id, beacon_id, dns_server_id, result_data, received_at, chunk_index, total_chunks, is_complete)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`, taskID, beaconID, dnsServerID, data, now, chunkIndex, totalChunks, isComplete)
