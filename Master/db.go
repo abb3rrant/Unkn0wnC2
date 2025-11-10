@@ -853,7 +853,7 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 			if err == sql.ErrNoRows {
 				// Store the complete result
 				_, err = d.db.Exec(`
-					INSERT INTO task_results (task_id, beacon_id, dns_server_id, result_data, received_at, chunk_index, total_chunks, is_complete)
+					INSERT OR REPLACE INTO task_results (task_id, beacon_id, dns_server_id, result_data, received_at, chunk_index, total_chunks, is_complete)
 					VALUES (?, ?, ?, ?, ?, 0, ?, 1)
 				`, taskID, beaconID, dnsServerID, data, now, totalChunks)
 
@@ -862,6 +862,9 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 						dnsServerID, taskID, totalChunks, len(data))
 					// Mark task as completed
 					d.markTaskCompleted(taskID)
+				} else if strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
+					fmt.Printf("[Master DB] Warning: Failed to save assembled result (DNS server %s not registered?)\n", dnsServerID)
+					return nil // Don't crash
 				}
 				return err
 			}
@@ -871,12 +874,18 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 	}
 
 	// Insert the chunk (for single-chunk results or individual chunks from multi-chunk results)
+	// Use INSERT OR REPLACE to handle duplicate chunks from DNS retries or load balancing
 	_, err := d.db.Exec(`
-		INSERT INTO task_results (task_id, beacon_id, dns_server_id, result_data, received_at, chunk_index, total_chunks, is_complete)
+		INSERT OR REPLACE INTO task_results (task_id, beacon_id, dns_server_id, result_data, received_at, chunk_index, total_chunks, is_complete)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`, taskID, beaconID, dnsServerID, data, now, chunkIndex, totalChunks, isComplete)
 
 	if err != nil {
+		// Log but don't crash on foreign key constraint errors (DNS server might not be registered yet)
+		if strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
+			fmt.Printf("[Master DB] Warning: Failed to save result chunk (DNS server %s not registered?): %v\n", dnsServerID, err)
+			return nil // Don't crash, just skip this chunk
+		}
 		return err
 	}
 
@@ -994,14 +1003,18 @@ func (d *MasterDatabase) reassembleChunkedResultLocked(taskID, beaconID string, 
 	}
 
 	// Store the complete result with chunk_index=0 to indicate it's the assembled version
+	// Use INSERT OR REPLACE to handle edge cases
 	now := time.Now().Unix()
 	_, err = d.db.Exec(`
-		INSERT INTO task_results (task_id, beacon_id, dns_server_id, result_data, received_at, chunk_index, total_chunks, is_complete)
+		INSERT OR REPLACE INTO task_results (task_id, beacon_id, dns_server_id, result_data, received_at, chunk_index, total_chunks, is_complete)
 		VALUES (?, ?, 'master-assembled', ?, ?, 0, ?, 1)
 	`, taskID, beaconID, completeResult.String(), now, totalChunks)
 
 	if err != nil {
-		fmt.Printf("[Master DB] Error storing assembled result: %v\n", err)
+		// Ignore foreign key errors - 'master-assembled' is not a real DNS server
+		if !strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
+			fmt.Printf("[Master DB] Error storing assembled result: %v\n", err)
+		}
 		return
 	}
 

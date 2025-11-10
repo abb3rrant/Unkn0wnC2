@@ -909,6 +909,41 @@ func (d *Database) GetCachedChunk(sessionID string, chunkIndex int) (string, err
 	return chunkData, err
 }
 
+// GetCachedBinaryID returns the client_binary_id for any cached binary (typically only one)
+func (d *Database) GetCachedBinaryID() (string, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	var clientBinaryID string
+	err := d.db.QueryRow(`
+		SELECT DISTINCT client_binary_id FROM stager_chunk_cache LIMIT 1
+	`).Scan(&clientBinaryID)
+
+	if err == sql.ErrNoRows {
+		return "", fmt.Errorf("no cached chunks available")
+	}
+
+	return clientBinaryID, err
+}
+
+// GetCachedChunkByBinaryID gets a chunk by client_binary_id and chunk index
+func (d *Database) GetCachedChunkByBinaryID(clientBinaryID string, chunkIndex int) (string, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	var chunkData string
+	err := d.db.QueryRow(`
+		SELECT chunk_data FROM stager_chunk_cache
+		WHERE client_binary_id = ? AND chunk_index = ?
+	`, clientBinaryID, chunkIndex).Scan(&chunkData)
+
+	if err == sql.ErrNoRows {
+		return "", fmt.Errorf("chunk %d not found in cache for binary %s", chunkIndex, clientBinaryID)
+	}
+
+	return chunkData, err
+}
+
 // CacheStagerChunks stores chunks in local cache for instant retrieval (batch operation)
 func (d *Database) CacheStagerChunks(clientBinaryID string, chunks []string) error {
 	d.mutex.Lock()

