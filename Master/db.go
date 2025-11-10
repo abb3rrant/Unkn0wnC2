@@ -17,7 +17,7 @@ import (
 
 const (
 	// MasterDatabaseSchemaVersion tracks the current schema version
-	MasterDatabaseSchemaVersion = 1
+	MasterDatabaseSchemaVersion = 2
 )
 
 // MasterDatabase wraps the SQL database connection for the master server
@@ -130,11 +130,18 @@ func (d *MasterDatabase) applyMigrations(fromVersion int) error {
 		}
 	}
 
+	// Migration 2: Add UNIQUE constraint to task_results to prevent duplicate chunks
+	if fromVersion < 2 {
+		if err := d.migration2AddChunkUniqueConstraint(); err != nil {
+			return fmt.Errorf("migration 2 failed: %w", err)
+		}
+	}
+
 	// Record schema version
 	_, err := d.db.Exec(`
 		INSERT INTO schema_version (version, applied_at, description)
 		VALUES (?, ?, ?)
-	`, MasterDatabaseSchemaVersion, time.Now().Unix(), "Master server schema initialized")
+	`, MasterDatabaseSchemaVersion, time.Now().Unix(), "Master server schema updated")
 
 	return err
 }
@@ -246,9 +253,10 @@ func (d *MasterDatabase) migration1InitialSchema() error {
 		total_chunks INTEGER DEFAULT 1,
 		is_complete INTEGER DEFAULT 1,
 		FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
-		FOREIGN KEY (beacon_id) REFERENCES beacons(id) ON DELETE CASCADE
+		FOREIGN KEY (beacon_id) REFERENCES beacons(id) ON DELETE CASCADE,
 		-- REMOVED: FOREIGN KEY (dns_server_id) REFERENCES dns_servers(id) ON DELETE CASCADE
 		-- dns_server_id is metadata only, should not block result storage
+		UNIQUE(task_id, chunk_index)
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_task_results_task_id ON task_results(task_id);
@@ -422,6 +430,88 @@ func (d *MasterDatabase) migration1InitialSchema() error {
 
 	_, err := d.db.Exec(schema)
 	return err
+}
+
+// migration2AddChunkUniqueConstraint adds UNIQUE constraint to task_results
+// This prevents duplicate chunks from multiple DNS servers (Shadow Mesh deduplication)
+func (d *MasterDatabase) migration2AddChunkUniqueConstraint() error {
+	fmt.Println("[Master DB] Migration 2: Adding UNIQUE constraint to task_results (task_id, chunk_index)")
+
+	// SQLite doesn't support ALTER TABLE ADD CONSTRAINT
+	// We need to recreate the table with the new constraint
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Step 1: Create new table with UNIQUE constraint
+	_, err = tx.Exec(`
+		CREATE TABLE IF NOT EXISTS task_results_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id TEXT NOT NULL,
+			beacon_id TEXT NOT NULL,
+			dns_server_id TEXT NOT NULL,
+			result_data TEXT NOT NULL,
+			received_at INTEGER NOT NULL,
+			chunk_index INTEGER DEFAULT 0,
+			total_chunks INTEGER DEFAULT 1,
+			is_complete INTEGER DEFAULT 1,
+			FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+			FOREIGN KEY (beacon_id) REFERENCES beacons(id) ON DELETE CASCADE,
+			UNIQUE(task_id, chunk_index)
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to create new table: %w", err)
+	}
+
+	// Step 2: Copy data from old table, keeping only one chunk per (task_id, chunk_index)
+	// Use GROUP BY to deduplicate - keeps the row with max(id) for each unique (task_id, chunk_index)
+	_, err = tx.Exec(`
+		INSERT INTO task_results_new (id, task_id, beacon_id, dns_server_id, result_data, received_at, chunk_index, total_chunks, is_complete)
+		SELECT id, task_id, beacon_id, dns_server_id, result_data, received_at, chunk_index, total_chunks, is_complete
+		FROM task_results
+		WHERE id IN (
+			SELECT MAX(id)
+			FROM task_results
+			GROUP BY task_id, chunk_index
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to copy data: %w", err)
+	}
+
+	// Step 3: Drop old table
+	_, err = tx.Exec(`DROP TABLE task_results`)
+	if err != nil {
+		return fmt.Errorf("failed to drop old table: %w", err)
+	}
+
+	// Step 4: Rename new table
+	_, err = tx.Exec(`ALTER TABLE task_results_new RENAME TO task_results`)
+	if err != nil {
+		return fmt.Errorf("failed to rename table: %w", err)
+	}
+
+	// Step 5: Recreate indexes
+	_, err = tx.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_task_results_task_id ON task_results(task_id);
+		CREATE INDEX IF NOT EXISTS idx_task_results_beacon_id ON task_results(beacon_id);
+		CREATE INDEX IF NOT EXISTS idx_task_results_dns_server ON task_results(dns_server_id);
+		CREATE INDEX IF NOT EXISTS idx_task_results_received_at ON task_results(received_at);
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to recreate indexes: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	fmt.Println("[Master DB] Migration 2 complete: UNIQUE constraint added, duplicates removed")
+	return nil
 }
 
 // DNS Server operations
