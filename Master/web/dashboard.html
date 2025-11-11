@@ -320,7 +320,7 @@
     <div class="nav-menu">
         <a href="/dashboard" class="nav-btn active">Dashboard</a>
         <a href="/builder" class="nav-btn">Builder</a>
-        <a href="/stager" class="nav-btn">Herald Sessions</a>
+        <a href="/stager" class="nav-btn">Stager Sessions</a>
         <a href="/users" class="nav-btn" id="usersNavBtn">Users</a>
     </div>
 
@@ -328,12 +328,12 @@
         <!-- Statistics -->
         <div class="stats-grid">
             <div class="stat-card">
-                <div class="label">Active Vessels</div>
+                <div class="label">Active Beacons</div>
                 <div class="value" id="beaconCount">0</div>
                 <div class="subtitle">Connected clients</div>
             </div>
             <div class="stat-card">
-                <div class="label">Prefects</div>
+                <div class="label">DNS-Servers</div>
                 <div class="value" id="serverCount">0</div>
                 <div class="subtitle">DNS servers</div>
             </div>
@@ -352,13 +352,13 @@
         <!-- Beacons Table -->
         <div class="section">
             <div class="section-header">
-                <h2 class="section-title">Active Vessels</h2>
+                <h2 class="section-title">Active Beacons</h2>
                 <button class="btn-refresh" onclick="loadBeacons()">↻ Refresh</button>
             </div>
             <div id="beaconsTable">
                 <div class="empty-state">
                     <div class="empty-state-icon">📡</div>
-                    <div>No active vessels</div>
+                    <div>No active beacons</div>
                 </div>
             </div>
         </div>
@@ -366,13 +366,13 @@
         <!-- DNS Servers Table -->
         <div class="section">
             <div class="section-header">
-                <h2 class="section-title">Prefects</h2>
+                <h2 class="section-title">DNS-Servers</h2>
                 <button class="btn-refresh" onclick="loadServers()">↻ Refresh</button>
             </div>
             <div id="serversTable">
                 <div class="empty-state">
                     <div class="empty-state-icon">🖥️</div>
-                    <div>No Prefects registered</div>
+                    <div>No DNS-servers registered</div>
                 </div>
             </div>
         </div>
