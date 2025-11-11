@@ -963,7 +963,7 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 				if err == nil {
 					fmt.Printf("[Master DB] Received complete assembled result from %s: task %s, %d chunks, %d bytes\n",
 						dnsServerID, taskID, totalChunks, len(data))
-					// Mark task as completed
+					// Mark task as completed (markTaskCompleted checks if already completed)
 					d.markTaskCompleted(taskID)
 				} else {
 					fmt.Printf("[Master DB] Error saving assembled result: %v\n", err)

