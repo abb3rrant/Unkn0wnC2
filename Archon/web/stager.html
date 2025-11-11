@@ -384,28 +384,37 @@
         let autoRefreshInterval = null;
         let autoRefreshEnabled = false;
 
-        // Auth wrapper
-        async function authFetch(url, options = {}) {
-            const token = localStorage.getItem('token');
-            if (!token) {
-                window.location.href = '/login';
-                return null;
-            }
+        // Helper to get cookie
+        function getCookie(name) {
+            const value = `; ${document.cookie}`;
+            const parts = value.split(`; ${name}=`);
+            if (parts.length === 2) return parts.pop().split(';').shift();
+            return null;
+        }
 
+        // Auth wrapper with cookie-based auth and CSRF protection
+        async function authFetch(url, options = {}) {
             const headers = {
-                'Authorization': `Bearer ${token}`,
                 'Content-Type': 'application/json',
                 ...options.headers
             };
 
+            // Add CSRF token for state-changing requests
+            if (options.method && options.method !== 'GET') {
+                const csrfToken = getCookie('csrf_token');
+                if (csrfToken) {
+                    headers['X-CSRF-Token'] = csrfToken;
+                }
+            }
+
             try {
                 const response = await fetch(API_BASE + url, {
                     ...options,
-                    headers
+                    headers,
+                    credentials: 'include' // Include cookies
                 });
 
-                if (response.status === 401) {
-                    localStorage.removeItem('token');
+                if (response.status === 401 || response.status === 403) {
                     window.location.href = '/login';
                     return null;
                 }

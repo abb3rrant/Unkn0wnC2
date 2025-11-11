@@ -23,20 +23,22 @@ import (
 // - MasterAPIKey: API key for authentication with master server (REQUIRED - set at build time)
 // - MasterServerID: Unique identifier for this DNS server (REQUIRED - set at build time)
 type Config struct {
-	BindAddr       string       `json:"bind_addr"`
-	BindPort       int          `json:"bind_port"`
-	SvrAddr        string       `json:"server_address"`
-	Domain         string       `json:"domain"`
-	NS1            string       `json:"ns1"`
-	NS2            string       `json:"ns2"`
-	ForwardDNS     bool         `json:"forward_dns"`
-	UpstreamDNS    string       `json:"upstream_dns"`
-	EncryptionKey  string       `json:"encryption_key"`
-	Debug          bool         `json:"debug"`
-	StagerJitter   StagerJitter `json:"stager"`
-	MasterServer   string       `json:"master_server"`    // Master server URL (e.g., "https://master.example.com")
-	MasterAPIKey   string       `json:"master_api_key"`   // API key for master authentication
-	MasterServerID string       `json:"master_server_id"` // Unique ID for this DNS server
+	BindAddr          string       `json:"bind_addr"`
+	BindPort          int          `json:"bind_port"`
+	SvrAddr           string       `json:"server_address"`
+	Domain            string       `json:"domain"`
+	NS1               string       `json:"ns1"`
+	NS2               string       `json:"ns2"`
+	ForwardDNS        bool         `json:"forward_dns"`
+	UpstreamDNS       string       `json:"upstream_dns"`
+	EncryptionKey     string       `json:"encryption_key"`
+	Debug             bool         `json:"debug"`
+	StagerJitter      StagerJitter `json:"stager"`
+	MasterServer      string       `json:"master_server"`       // Master server URL (e.g., "https://master.example.com")
+	MasterAPIKey      string       `json:"master_api_key"`      // API key for master authentication
+	MasterServerID    string       `json:"master_server_id"`    // Unique ID for this DNS server
+	MasterTLSCACert   string       `json:"master_tls_ca_cert"`  // Optional: CA certificate path for Master TLS verification
+	MasterTLSInsecure bool         `json:"master_tls_insecure"` // If true, skip TLS verification (dev/testing only)
 }
 
 // StagerJitter holds timing configuration for stager chunk delivery
@@ -72,9 +74,11 @@ func DefaultConfig() Config {
 			RetryDelaySeconds: 3,
 			MaxRetries:        5,
 		},
-		MasterServer:   "", // REQUIRED: Set by builder
-		MasterAPIKey:   "", // REQUIRED: Set by builder
-		MasterServerID: "dns1",
+		MasterServer:      "", // REQUIRED: Set by builder
+		MasterAPIKey:      "", // REQUIRED: Set by builder
+		MasterServerID:    "dns1",
+		MasterTLSCACert:   "",    // Optional: Path to CA cert for production
+		MasterTLSInsecure: false, // Default: Verify TLS certificates
 	}
 }
 

@@ -7,10 +7,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 )
@@ -27,13 +29,37 @@ type MasterClient struct {
 }
 
 // NewMasterClient creates a new master server client
-func NewMasterClient(masterURL, serverID, apiKey string, debug bool) *MasterClient {
+func NewMasterClient(masterURL, serverID, apiKey string, tlsCACert string, tlsInsecure bool, debug bool) *MasterClient {
 	// Configure HTTP client with TLS
+	tlsConfig := &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: tlsInsecure,
+	}
+
+	// If CA cert provided, load it
+	if tlsCACert != "" {
+		caCert, err := os.ReadFile(tlsCACert)
+		if err != nil {
+			if debug {
+				fmt.Printf("[MasterClient] Warning: Failed to load CA cert from %s: %v\n", tlsCACert, err)
+			}
+		} else {
+			caCertPool := x509.NewCertPool()
+			if caCertPool.AppendCertsFromPEM(caCert) {
+				tlsConfig.RootCAs = caCertPool
+				if debug {
+					fmt.Printf("[MasterClient] Loaded CA certificate from %s\n", tlsCACert)
+				}
+			} else {
+				if debug {
+					fmt.Printf("[MasterClient] Warning: Failed to parse CA cert from %s\n", tlsCACert)
+				}
+			}
+		}
+	}
+
 	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{
-			MinVersion:         tls.VersionTLS12,
-			InsecureSkipVerify: true, // For self-signed certs - in production, provide CA cert
-		},
+		TLSClientConfig:     tlsConfig,
 		MaxIdleConns:        10,
 		IdleConnTimeout:     90 * time.Second,
 		TLSHandshakeTimeout: 10 * time.Second,

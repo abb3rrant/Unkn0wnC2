@@ -220,8 +220,8 @@
                 const data = await response.json();
 
                 if (response.ok) {
-                    // Store token
-                    localStorage.setItem('token', data.token);
+                    // Authentication successful - token is stored in httpOnly cookie
+                    // No localStorage needed (better security - XSS protection)
                     
                     // Show success and redirect
                     btnText.textContent = '✓ Success';
@@ -249,10 +249,21 @@
             }, 5000);
         }
 
-        // Check if already logged in
-        if (localStorage.getItem('token')) {
-            window.location.href = '/dashboard';
+        // Check if already logged in by attempting to access protected resource
+        // (Cookie-based auth - no localStorage check needed)
+        async function checkAuth() {
+            try {
+                const response = await fetch('/api/stats', {
+                    credentials: 'include' // Include cookies
+                });
+                if (response.ok) {
+                    window.location.href = '/dashboard';
+                }
+            } catch (error) {
+                // Not logged in or error - stay on login page
+            }
         }
+        checkAuth();
     </script>
 </body>
 </html>

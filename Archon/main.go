@@ -210,6 +210,14 @@ func main() {
 				fmt.Printf("[Cleanup] Warning: Failed to detect partial results: %v\n", err)
 			}
 
+			// Cleanup expired and revoked sessions
+			// Prevents session table bloat and ensures proper authentication state
+			if count, err := db.CleanupExpiredSessions(); err == nil && count > 0 {
+				fmt.Printf("[Cleanup] ✓ Removed %d expired/revoked sessions\n", count)
+			} else if err != nil && cfg.Debug {
+				fmt.Printf("[Cleanup] Warning: Failed to cleanup sessions: %v\n", err)
+			}
+
 			// Wait for next tick
 			<-ticker.C
 		}

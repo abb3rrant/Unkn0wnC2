@@ -11,12 +11,30 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+
+	"golang.org/x/crypto/pbkdf2"
 )
 
-// generateAESKey generates a 32-byte AES key from a passphrase
+// generateAESKey derives a 256-bit AES key from a passphrase using PBKDF2
+// with SHA256, 100,000 iterations, and a fixed salt derived from the passphrase.
+// This provides better protection against brute force attacks compared to simple hashing.
+// The salt is deterministic (based on passphrase) to ensure consistent keys across
+// server and client components.
 func generateAESKey(passphrase string) []byte {
-	hash := sha256.Sum256([]byte(passphrase))
-	return hash[:]
+	// Use first 32 chars of passphrase as salt (padded/truncated if needed)
+	// This ensures the same passphrase always produces the same key
+	salt := []byte(passphrase)
+	if len(salt) < 32 {
+		// Pad with the passphrase repeated
+		for len(salt) < 32 {
+			salt = append(salt, []byte(passphrase)...)
+		}
+	}
+	salt = salt[:32]
+
+	// PBKDF2 with 100,000 iterations (OWASP recommendation for 2023+)
+	key := pbkdf2.Key([]byte(passphrase), salt, 100000, 32, sha256.New)
+	return key
 }
 
 // encryptAESGCM encrypts data using AES-GCM

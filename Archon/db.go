@@ -17,7 +17,7 @@ import (
 
 const (
 	// MasterDatabaseSchemaVersion tracks the current schema version
-	MasterDatabaseSchemaVersion = 3
+	MasterDatabaseSchemaVersion = 5
 )
 
 // MasterDatabase wraps the SQL database connection for the master server
@@ -73,11 +73,11 @@ func (d *MasterDatabase) Close() error {
 
 // initSchema creates the database schema if it doesn't exist
 func (d *MasterDatabase) initSchema() error {
-	// CRITICAL: Foreign keys DISABLED for task_results table
-	// dns_server_id is metadata only and should not block result storage
-	// We keep foreign keys ON for other tables (tasks, beacons)
+	// CRITICAL: Foreign keys ENABLED for data integrity
+	// Note: task_results.dns_server_id FK was specifically removed from schema
+	// to allow result storage without DNS server registration (see line 266)
 	pragmas := []string{
-		"PRAGMA foreign_keys = OFF", // Disabled to allow result storage without DNS server registration
+		"PRAGMA foreign_keys = ON", // Enabled for data integrity (specific FK removed where needed)
 		"PRAGMA journal_mode = WAL",
 		"PRAGMA synchronous = NORMAL",
 		"PRAGMA cache_size = -64000",
@@ -142,6 +142,20 @@ func (d *MasterDatabase) applyMigrations(fromVersion int) error {
 	if fromVersion < 3 {
 		if err := d.migration3AddTasksUpdatedAt(); err != nil {
 			return fmt.Errorf("migration 3 failed: %w", err)
+		}
+	}
+
+	// Migration 4: Add jti (JWT ID) column to sessions for token revocation
+	if fromVersion < 4 {
+		if err := d.migration4AddSessionJTI(); err != nil {
+			return fmt.Errorf("migration 4 failed: %w", err)
+		}
+	}
+
+	// Migration 5: Add sha256_checksum column to client_binaries for signature verification
+	if fromVersion < 5 {
+		if err := d.migration5AddBinaryChecksum(); err != nil {
+			return fmt.Errorf("migration 5 failed: %w", err)
 		}
 	}
 
@@ -562,6 +576,84 @@ func (d *MasterDatabase) migration3AddTasksUpdatedAt() error {
 	}
 
 	fmt.Println("[Master DB] Migration 3 complete: updated_at column added to tasks table")
+	return nil
+}
+
+// migration4AddSessionJTI adds jti (JWT ID) column to sessions table for token revocation
+func (d *MasterDatabase) migration4AddSessionJTI() error {
+	fmt.Println("[Master DB] Migration 4: Adding jti column to sessions table")
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Check if column already exists
+	var hasColumn bool
+	err = tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='jti'`).Scan(&hasColumn)
+	if err != nil {
+		return fmt.Errorf("failed to check if column exists: %w", err)
+	}
+
+	if hasColumn {
+		fmt.Println("[Master DB] Migration 4: jti column already exists, skipping")
+		return tx.Commit()
+	}
+
+	// Add the jti column (JWT ID for token revocation)
+	_, err = tx.Exec(`ALTER TABLE sessions ADD COLUMN jti TEXT UNIQUE`)
+	if err != nil {
+		return fmt.Errorf("failed to add jti column: %w", err)
+	}
+
+	// Create index for faster lookups
+	_, err = tx.Exec(`CREATE INDEX IF NOT EXISTS idx_sessions_jti ON sessions(jti)`)
+	if err != nil {
+		return fmt.Errorf("failed to create jti index: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	fmt.Println("[Master DB] Migration 4 complete: jti column added to sessions table")
+	return nil
+}
+
+// migration5AddBinaryChecksum adds sha256_checksum column to client_binaries table
+func (d *MasterDatabase) migration5AddBinaryChecksum() error {
+	fmt.Println("[Master DB] Migration 5: Adding sha256_checksum column to client_binaries table")
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Check if column already exists
+	var hasColumn bool
+	err = tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('client_binaries') WHERE name='sha256_checksum'`).Scan(&hasColumn)
+	if err != nil {
+		return fmt.Errorf("failed to check if column exists: %w", err)
+	}
+
+	if hasColumn {
+		fmt.Println("[Master DB] Migration 5: sha256_checksum column already exists, skipping")
+		return tx.Commit()
+	}
+
+	// Add the sha256_checksum column (hex-encoded SHA256 hash of original binary)
+	_, err = tx.Exec(`ALTER TABLE client_binaries ADD COLUMN sha256_checksum TEXT`)
+	if err != nil {
+		return fmt.Errorf("failed to add sha256_checksum column: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	fmt.Println("[Master DB] Migration 5 complete: sha256_checksum column added to client_binaries table")
 	return nil
 }
 
@@ -1505,7 +1597,7 @@ func (d *MasterDatabase) CreateStagerSession(id, stagerIP, os, arch, clientBinar
 }
 
 // UpsertClientBinary inserts or updates a client binary record (for filesystem-loaded beacons)
-func (d *MasterDatabase) UpsertClientBinary(id, filename, os, arch string, originalSize, compressedSize, base64Size, totalChunks int, base64Data, dnsDomains string) error {
+func (d *MasterDatabase) UpsertClientBinary(id, filename, os, arch string, originalSize, compressedSize, base64Size, totalChunks int, base64Data, dnsDomains, sha256Checksum string) error {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 
@@ -1513,8 +1605,8 @@ func (d *MasterDatabase) UpsertClientBinary(id, filename, os, arch string, origi
 
 	_, err := d.db.Exec(`
 		INSERT INTO client_binaries (id, filename, os, arch, original_size, compressed_size, base64_size, 
-			chunk_size, total_chunks, base64_data, dns_domains, created_at, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 370, ?, ?, ?, ?, ?)
+			chunk_size, total_chunks, base64_data, dns_domains, sha256_checksum, created_at, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 370, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			filename = excluded.filename,
 			os = excluded.os,
@@ -1524,8 +1616,9 @@ func (d *MasterDatabase) UpsertClientBinary(id, filename, os, arch string, origi
 			base64_size = excluded.base64_size,
 			total_chunks = excluded.total_chunks,
 			base64_data = excluded.base64_data,
-			dns_domains = excluded.dns_domains
-	`, id, filename, os, arch, originalSize, compressedSize, base64Size, totalChunks, base64Data, dnsDomains, now, "filesystem")
+			dns_domains = excluded.dns_domains,
+			sha256_checksum = excluded.sha256_checksum
+	`, id, filename, os, arch, originalSize, compressedSize, base64Size, totalChunks, base64Data, dnsDomains, sha256Checksum, now, "filesystem")
 
 	return err
 }
@@ -3305,6 +3398,74 @@ func (d *MasterDatabase) CleanupStalePendingTasks(pendingHours int) (int, error)
 	`, time.Now().Unix(), cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("failed to expire stale pending tasks: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	return int(rows), err
+}
+
+// Session Management
+
+// CreateSession stores a new JWT session in the database
+func (d *MasterDatabase) CreateSession(sessionID, operatorID, jti, tokenHash, ipAddress, userAgent string, expiresAt int64) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	now := time.Now().Unix()
+
+	_, err := d.db.Exec(`
+		INSERT INTO sessions (id, operator_id, jti, token_hash, created_at, expires_at, last_activity, ip_address, user_agent, is_revoked)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+	`, sessionID, operatorID, jti, tokenHash, now, expiresAt, now, ipAddress, userAgent)
+
+	return err
+}
+
+// IsSessionRevoked checks if a session with the given JTI is revoked
+func (d *MasterDatabase) IsSessionRevoked(jti string) (bool, error) {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	var isRevoked bool
+	err := d.db.QueryRow(`
+		SELECT is_revoked FROM sessions WHERE jti = ?
+	`, jti).Scan(&isRevoked)
+
+	if err == sql.ErrNoRows {
+		// Session doesn't exist in DB - treat as not revoked (allows backward compatibility)
+		return false, nil
+	}
+
+	return isRevoked, err
+}
+
+// RevokeSessionByJTI marks a session as revoked by its JTI
+func (d *MasterDatabase) RevokeSessionByJTI(jti string) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	_, err := d.db.Exec(`
+		UPDATE sessions SET is_revoked = 1 WHERE jti = ?
+	`, jti)
+
+	return err
+}
+
+// CleanupExpiredSessions removes expired and revoked sessions from the database
+// This prevents session table bloat and ensures proper authentication state
+func (d *MasterDatabase) CleanupExpiredSessions() (int, error) {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	now := time.Now().Unix()
+
+	// Delete sessions that are expired OR revoked
+	result, err := d.db.Exec(`
+		DELETE FROM sessions
+		WHERE expires_at < ? OR is_revoked = 1
+	`, now)
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete expired sessions: %w", err)
 	}
 
 	rows, err := result.RowsAffected()

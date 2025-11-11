@@ -693,7 +693,7 @@ func main() {
 	fmt.Printf("\033[0;36m==================================================\033[0m\n\n")
 
 	// Initialize Master Client
-	masterClient = NewMasterClient(cfg.MasterServer, cfg.MasterServerID, cfg.MasterAPIKey, debugMode)
+	masterClient = NewMasterClient(cfg.MasterServer, cfg.MasterServerID, cfg.MasterAPIKey, cfg.MasterTLSCACert, cfg.MasterTLSInsecure, debugMode)
 
 	// Register with Master and retrieve active domain list
 	fmt.Println("Registering with Master Server...")

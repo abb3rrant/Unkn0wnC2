@@ -55,12 +55,12 @@ func DefaultConfig() Config {
 		WebRoot:        "/opt/unkn0wnc2/web",
 		SourceDir:      "/opt/unkn0wnc2/src",
 		Debug:          false,
-		JWTSecret:      "CHANGE_THIS_SECRET_IN_PRODUCTION",
+		JWTSecret:      "", // MUST be provided via config or environment variable
 		SessionTimeout: 60,
 		DNSServers:     []DNSServerAuth{},
 		AdminCredentials: AdminCredentials{
 			Username: "admin",
-			Password: "Unkn0wnC2@2025", // Will be hashed on first run
+			Password: "", // MUST be provided via config or environment variable
 		},
 	}
 }
@@ -149,9 +149,9 @@ func LoadConfig(configPath string) (Config, error) {
 
 // ValidateConfig checks if the configuration is valid
 func ValidateConfig(cfg Config) error {
-	// Check for production security issues
-	if cfg.JWTSecret == "CHANGE_THIS_SECRET_IN_PRODUCTION" {
-		return errors.New("SECURITY WARNING: Using default JWT secret! Set jwt_secret in config or MASTER_JWT_SECRET environment variable")
+	// Check JWT secret is provided
+	if cfg.JWTSecret == "" {
+		return errors.New("SECURITY ERROR: JWT secret not provided! Set jwt_secret in config or MASTER_JWT_SECRET environment variable.\nGenerate with: openssl rand -base64 32")
 	}
 
 	// Check for weak JWT secrets
@@ -160,15 +160,24 @@ func ValidateConfig(cfg Config) error {
 	}
 
 	// Check for example JWT secrets from the example config
-	weakSecrets := []string{"!QAZ78fobh$*NC", "your-secret-key", "changeme", "secret", "password"}
+	weakSecrets := []string{"CHANGE_THIS_SECRET_IN_PRODUCTION", "!QAZ78fobh$*NC", "your-secret-key", "changeme", "secret", "password"}
 	for _, weak := range weakSecrets {
 		if cfg.JWTSecret == weak {
 			return fmt.Errorf("SECURITY ERROR: Using example/weak JWT secret! Generate a secure secret with: openssl rand -base64 32")
 		}
 	}
 
-	if cfg.AdminCredentials.Password == "Unkn0wnC2@2025" {
-		fmt.Println("WARNING: Using default admin password! Change this immediately in production")
+	// Check admin password is provided
+	if cfg.AdminCredentials.Password == "" {
+		return errors.New("SECURITY ERROR: Admin password not provided! Set admin_password in config or MASTER_ADMIN_PASSWORD environment variable")
+	}
+
+	// Check for weak admin passwords
+	weakPasswords := []string{"Unkn0wnC2@2025", "admin", "password", "changeme", "12345678"}
+	for _, weak := range weakPasswords {
+		if cfg.AdminCredentials.Password == weak {
+			return fmt.Errorf("SECURITY ERROR: Using example/weak admin password! Use a strong unique password")
+		}
 	}
 
 	// Validate DNS server API keys
