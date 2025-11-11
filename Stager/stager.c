@@ -1268,7 +1268,11 @@ int main(int argc, char *argv[]) {
     // This ensures Master has created the session before chunk requests start
     // Critical for progress tracking to work on first run
     DEBUG_PRINT("[*] Waiting 2 seconds for session synchronization...\n");
-    sleep_ms(2000);
+#ifdef _WIN32
+    Sleep(2000);  // Windows Sleep takes milliseconds
+#else
+    sleep(2);  // Linux sleep() takes seconds
+#endif
     DEBUG_PRINT("[*] Starting chunk retrieval\n");
     
     // Allocate chunk storage

