@@ -1245,14 +1245,18 @@ func (d *MasterDatabase) GetTaskResult(taskID string) (string, bool, error) {
 	d.mutex.RLock()
 	defer d.mutex.RUnlock()
 
-	// First try to get the complete assembled result (chunk_index = 0, is_complete = 1)
+	// First try to get the complete result
+	// chunk_index = 0: Assembled multi-chunk result OR legacy single-chunk
+	// chunk_index = 1 AND total_chunks = 1: New 1-indexed single-chunk result
 	var resultData string
 	var isComplete int
 
 	err := d.db.QueryRow(`
 		SELECT result_data, is_complete 
 		FROM task_results 
-		WHERE task_id = ? AND chunk_index = 0 AND is_complete = 1
+		WHERE task_id = ? AND is_complete = 1 AND (
+			chunk_index = 0 OR (chunk_index = 1 AND total_chunks = 1)
+		)
 		ORDER BY received_at DESC
 		LIMIT 1
 	`, taskID).Scan(&resultData, &isComplete)

