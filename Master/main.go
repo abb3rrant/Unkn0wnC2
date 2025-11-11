@@ -41,8 +41,6 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Failed to generate config: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("✓ Generated example configuration: %s\n", *configPath)
-		fmt.Println("⚠️  IMPORTANT: Edit this file and change default passwords and secrets!")
 		os.Exit(0)
 	}
 
@@ -131,13 +129,13 @@ func main() {
 	// Start server in a goroutine
 	go func() {
 		fmt.Printf("\n%s==================================================%s\n", ColorGreen, ColorReset)
-		fmt.Printf("%sMaster Server v%s%s\n", ColorGreen, version, ColorReset)
+		fmt.Printf("%sArchon Server v%s%s\n", ColorGreen, version, ColorReset)
 		fmt.Printf("Build: %s (commit: %s)\n", buildDate, gitCommit)
 		fmt.Printf("%s==================================================%s\n", ColorGreen, ColorReset)
-		fmt.Printf("🌐 HTTPS Server listening on: https://%s\n", addr)
-		fmt.Printf("🔐 TLS enabled with certificate: %s\n", cfg.TLSCert)
-		fmt.Printf("📊 Database: %s\n", cfg.DatabasePath)
-		fmt.Printf("👥 DNS Servers registered: %d\n", len(cfg.DNSServers))
+		fmt.Printf("HTTPS Server listening on: https://%s\n", addr)
+		fmt.Printf("TLS enabled with certificate: %s\n", cfg.TLSCert)
+		fmt.Printf("Database: %s\n", cfg.DatabasePath)
+		fmt.Printf("DNS Servers registered: %d\n", len(cfg.DNSServers))
 
 		// Display registered DNS servers
 		if len(cfg.DNSServers) > 0 {
@@ -215,7 +213,7 @@ func main() {
 			// Detect partial results (sent tasks with incomplete chunks after 6 hours)
 			// Alerts operators to beacons that died mid-exfiltration
 			if count, err := db.DetectPartialResults(6); err == nil && count > 0 {
-				fmt.Printf("[Cleanup] ⚠️  Detected %d tasks with partial results (incomplete chunks >6hrs)\n", count)
+				fmt.Printf("[Cleanup] Detected %d tasks with partial results (incomplete chunks >6hrs)\n", count)
 			} else if err != nil && cfg.Debug {
 				fmt.Printf("[Cleanup] Warning: Failed to detect partial results: %v\n", err)
 			}
@@ -230,7 +228,7 @@ func main() {
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 	<-quit
 
-	fmt.Println("\n🛑 Shutting down Master Server...")
+	fmt.Println("\nShutting down Archon Server...")
 
 	// Create shutdown context with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -246,7 +244,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Database close error: %v\n", err)
 	}
 
-	fmt.Println("✓ Master Server stopped gracefully")
+	fmt.Println("✓ Archon Server stopped gracefully")
 }
 
 // initializeAdmin creates the initial admin account if it doesn't exist
@@ -275,7 +273,7 @@ func initializeAdmin(db *MasterDatabase, cfg Config) error {
 	}
 
 	fmt.Printf("✓ Created admin account: %s\n", cfg.AdminCredentials.Username)
-	fmt.Printf("⚠️  Default password is set - please change it after first login!\n")
+	fmt.Printf("Default password is set - please change it after first login!\n")
 
 	return nil
 }
@@ -295,7 +293,7 @@ func registerConfiguredDNSServers(db *MasterDatabase, cfg Config) error {
 		)
 
 		if err != nil {
-			fmt.Printf("⚠️  Warning: Failed to register DNS server %s: %v\n", dnsConfig.ID, err)
+			fmt.Printf("Warning: Failed to register DNS server %s: %v\n", dnsConfig.ID, err)
 			continue
 		}
 
@@ -324,7 +322,7 @@ func printBanner() {
 	fmt.Println(" | |__| | | | |   <| | | | |_| |\\ V  V /| | | | | |____ / /_ ")
 	fmt.Println("  \\____/|_| |_|_|\\_\\_| |_|\\___/  \\_/\\_/ |_| |_|  \\_____|____|")
 	fmt.Println(ColorReset)
-	fmt.Println(ColorGreen + "                    MASTER SERVER" + ColorReset)
+	fmt.Println(ColorGreen + "                    ARCHON SERVER" + ColorReset)
 	fmt.Println()
 }
 

