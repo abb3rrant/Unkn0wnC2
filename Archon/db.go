@@ -17,7 +17,7 @@ import (
 
 const (
 	// MasterDatabaseSchemaVersion tracks the current schema version
-	MasterDatabaseSchemaVersion = 2
+	MasterDatabaseSchemaVersion = 3
 )
 
 // MasterDatabase wraps the SQL database connection for the master server
@@ -138,6 +138,13 @@ func (d *MasterDatabase) applyMigrations(fromVersion int) error {
 		}
 	}
 
+	// Migration 3: Add updated_at column to tasks table for status sync
+	if fromVersion < 3 {
+		if err := d.migration3AddTasksUpdatedAt(); err != nil {
+			return fmt.Errorf("migration 3 failed: %w", err)
+		}
+	}
+
 	// Record schema version
 	_, err := d.db.Exec(`
 		INSERT INTO schema_version (version, applied_at, description)
@@ -223,6 +230,7 @@ func (d *MasterDatabase) migration1InitialSchema() error {
 		created_at INTEGER NOT NULL,
 		sent_at INTEGER,
 		completed_at INTEGER,
+		updated_at INTEGER NOT NULL,
 		synced_at INTEGER,
 		result_size INTEGER DEFAULT 0,
 		chunk_count INTEGER DEFAULT 0,
@@ -512,6 +520,48 @@ func (d *MasterDatabase) migration2AddChunkUniqueConstraint() error {
 	}
 
 	fmt.Println("[Master DB] Migration 2 complete: UNIQUE constraint added, duplicates removed")
+	return nil
+}
+
+// migration3AddTasksUpdatedAt adds updated_at column to tasks table for Shadow Mesh status sync
+func (d *MasterDatabase) migration3AddTasksUpdatedAt() error {
+	fmt.Println("[Master DB] Migration 3: Adding updated_at column to tasks table")
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Check if column already exists
+	var hasColumn bool
+	err = tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name='updated_at'`).Scan(&hasColumn)
+	if err != nil {
+		return fmt.Errorf("failed to check if column exists: %w", err)
+	}
+
+	if hasColumn {
+		fmt.Println("[Master DB] Migration 3: updated_at column already exists, skipping")
+		return tx.Commit()
+	}
+
+	// Add the column with a default value (use created_at as initial value)
+	_, err = tx.Exec(`ALTER TABLE tasks ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0`)
+	if err != nil {
+		return fmt.Errorf("failed to add updated_at column: %w", err)
+	}
+
+	// Set updated_at to created_at for existing rows
+	_, err = tx.Exec(`UPDATE tasks SET updated_at = created_at WHERE updated_at = 0`)
+	if err != nil {
+		return fmt.Errorf("failed to initialize updated_at values: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	fmt.Println("[Master DB] Migration 3 complete: updated_at column added to tasks table")
 	return nil
 }
 
@@ -2043,9 +2093,9 @@ func (d *MasterDatabase) CreateBroadcastTask(command, createdBy string) error {
 
 		// Insert task
 		_, err := d.db.Exec(`
-			INSERT INTO tasks (id, beacon_id, command, status, assigned_dns_server, created_by, created_at)
-			VALUES (?, ?, ?, 'pending', ?, ?, ?)
-		`, taskID, beaconID, command, dnsServerID, createdBy, now)
+			INSERT INTO tasks (id, beacon_id, command, status, assigned_dns_server, created_by, created_at, updated_at)
+			VALUES (?, ?, ?, 'pending', ?, ?, ?, ?)
+		`, taskID, beaconID, command, dnsServerID, createdBy, now, now)
 
 		if err == nil {
 			created++
@@ -2116,9 +2166,9 @@ func (d *MasterDatabase) CreateTask(beaconID, command, createdBy string) (string
 
 	// Create task WITHOUT assigned_dns_server (available to all)
 	_, err = d.db.Exec(`
-		INSERT INTO tasks (id, beacon_id, command, status, created_by, created_at)
-		VALUES (?, ?, ?, 'pending', ?, ?)
-	`, taskID, beaconID, command, createdBy, now)
+		INSERT INTO tasks (id, beacon_id, command, status, created_by, created_at, updated_at)
+		VALUES (?, ?, ?, 'pending', ?, ?, ?)
+	`, taskID, beaconID, command, createdBy, now, now)
 
 	if err != nil {
 		return "", fmt.Errorf("failed to create task: %w", err)
