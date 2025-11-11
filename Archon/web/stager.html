@@ -341,6 +341,14 @@
                 <div class="stat-label">Completed</div>
                 <div class="stat-value" id="statCompleted">0</div>
             </div>
+            <div class="stat-card">
+                <div class="stat-label">Success Rate</div>
+                <div class="stat-value" id="statSuccessRate">0%</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Avg Speed</div>
+                <div class="stat-value" id="statAvgSpeed">N/A</div>
+            </div>
         </div>
 
         <!-- Sessions Table -->
@@ -355,6 +363,7 @@
                         <th>Status</th>
                         <th>Speed</th>
                         <th>ETA</th>
+                        <th>DNS Server</th>
                         <th>Started</th>
                     </tr>
                 </thead>
@@ -428,10 +437,27 @@
 
         async function loadStagerSessions() {
             try {
+                console.log('Fetching stager sessions...');
                 const response = await authFetch('/api/stager/sessions');
-                if (!response) return;
+                if (!response) {
+                    console.error('No response from authFetch');
+                    return;
+                }
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error('API error:', response.status, errorText);
+                    throw new Error(`HTTP ${response.status}: ${errorText}`);
+                }
 
                 const sessions = await response.json();
+                console.log('Loaded sessions:', sessions);
+                
+                // Ensure sessions is an array
+                if (!Array.isArray(sessions)) {
+                    console.error('Sessions is not an array:', sessions);
+                    throw new Error('Invalid response format: expected array');
+                }
                 
                 // Update stats
                 const total = sessions.length;
@@ -451,11 +477,17 @@
                     avgSpeed = (totalSpeed / completedSessions.length).toFixed(1);
                 }
 
-                document.getElementById('statTotal').textContent = total;
-                document.getElementById('statActive').textContent = active;
-                document.getElementById('statCompleted').textContent = completed;
-                document.getElementById('statSuccessRate').textContent = successRate + '%';
-                document.getElementById('statAvgSpeed').textContent = avgSpeed > 0 ? avgSpeed + ' ch/s' : 'N/A';
+                const statTotal = document.getElementById('statTotal');
+                const statActive = document.getElementById('statActive');
+                const statCompleted = document.getElementById('statCompleted');
+                const statSuccessRate = document.getElementById('statSuccessRate');
+                const statAvgSpeed = document.getElementById('statAvgSpeed');
+                
+                if (statTotal) statTotal.textContent = total;
+                if (statActive) statActive.textContent = active;
+                if (statCompleted) statCompleted.textContent = completed;
+                if (statSuccessRate) statSuccessRate.textContent = successRate + '%';
+                if (statAvgSpeed) statAvgSpeed.textContent = avgSpeed > 0 ? avgSpeed + ' ch/s' : 'N/A';
 
                 // Update table
                 const tbody = document.getElementById('sessionsTableBody');
@@ -534,6 +566,18 @@
 
             } catch (error) {
                 console.error('Failed to load stager sessions:', error);
+                const tbody = document.getElementById('sessionsTableBody');
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="9" class="empty-state">
+                            <div class="empty-state-icon">⚠️</div>
+                            <div>Failed to load stager sessions</div>
+                            <div style="margin-top: 10px; color: #ff6666; font-size: 12px;">
+                                ${error.message}
+                            </div>
+                        </td>
+                    </tr>
+                `;
             }
         }
 

