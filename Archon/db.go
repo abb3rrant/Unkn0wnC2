@@ -1364,7 +1364,7 @@ func (d *MasterDatabase) SaveClientBinary(id, filename, os, arch, version, base6
 		totalChunks, base64Data, dnsDomains, now, createdByVal)
 
 	if err != nil {
-		fmt.Printf("[DB] ⚠️  ERROR saving client binary: %v\n", err)
+		fmt.Printf("[DB] ERROR saving client binary: %v\n", err)
 		return err
 	}
 
@@ -1386,7 +1386,7 @@ func (d *MasterDatabase) GetClientBinaries() ([]map[string]interface{}, error) {
 		ORDER BY created_at DESC
 	`)
 	if err != nil {
-		fmt.Printf("[DB] ⚠️  ERROR querying client_binaries: %v\n", err)
+		fmt.Printf("[DB] ERROR querying client_binaries: %v\n", err)
 		return nil, err
 	}
 	defer rows.Close()
@@ -1403,7 +1403,7 @@ func (d *MasterDatabase) GetClientBinaries() ([]map[string]interface{}, error) {
 		err := rows.Scan(&id, &filename, &os, &arch, &version, &originalSize, &compressedSize,
 			&base64Size, &chunkSize, &totalChunks, &dnsDomains, &createdAt, &createdBy)
 		if err != nil {
-			fmt.Printf("[DB] ⚠️  ERROR scanning row %d: %v\n", rowCount, err)
+			fmt.Printf("[DB] ERROR scanning row %d: %v\n", rowCount, err)
 			continue
 		}
 
@@ -2688,13 +2688,13 @@ func (d *MasterDatabase) markTaskCompleted(taskID string) {
 	`, now, now, taskID)
 
 	if err != nil {
-		fmt.Printf("[Master DB] ❌ Error marking task %s as completed: %v\n", taskID, err)
+		fmt.Printf("[Master DB] Error marking task %s as completed: %v\n", taskID, err)
 		return
 	}
 
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
-		fmt.Printf("[Master DB] ⚠️  Task %s was already completed or doesn't exist\n", taskID)
+		fmt.Printf("[Master DB] Task %s was already completed or doesn't exist\n", taskID)
 	} else {
 		fmt.Printf("[Master DB] ✓ Task %s marked as completed\n", taskID)
 	}

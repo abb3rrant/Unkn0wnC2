@@ -150,14 +150,6 @@ func main() {
 		}
 
 		fmt.Println()
-		fmt.Println("API Endpoints:")
-		fmt.Println("  POST   /api/auth/login        - Operator authentication")
-		fmt.Println("  GET    /api/beacons           - List all beacons")
-		fmt.Println("  GET    /api/tasks             - List all tasks")
-		fmt.Println("  POST   /api/beacons/:id/task  - Create task for beacon")
-		fmt.Println("  POST   /api/dns-server/*      - DNS server endpoints (API key auth)")
-		fmt.Println("  GET    /health                - Health check")
-		fmt.Println()
 		fmt.Printf("%sPress Ctrl+C to shutdown gracefully%s\n", ColorYellow, ColorReset)
 		fmt.Println()
 

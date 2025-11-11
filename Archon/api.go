@@ -1614,7 +1614,7 @@ func (api *APIServer) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if api.config.Debug {
-		fmt.Printf("[API] ✅ Task %s deleted by %s\n", taskID, username)
+		fmt.Printf("[API] Task %s deleted by %s\n", taskID, username)
 	}
 
 	// Log audit event
@@ -1648,7 +1648,7 @@ func (api *APIServer) handleDeleteBeacon(w http.ResponseWriter, r *http.Request)
 	}
 
 	if api.config.Debug {
-		fmt.Printf("[API] ✅ Beacon %s deleted by %s\n", beaconID, username)
+		fmt.Printf("[API] Beacon %s deleted by %s\n", beaconID, username)
 	}
 
 	// Log audit event
@@ -1844,12 +1844,12 @@ func (api *APIServer) handleStagerInit(w http.ResponseWriter, r *http.Request) {
 	clientBinaryID, base64Data, totalChunks, err := api.loadAndProcessClientBinary(req.OS, req.Arch)
 	if err != nil {
 		// Always log this error - critical for troubleshooting
-		fmt.Printf("[API] ❌ Failed to load client binary for %s/%s: %v\n", req.OS, req.Arch, err)
+		fmt.Printf("[API] Failed to load client binary for %s/%s: %v\n", req.OS, req.Arch, err)
 		api.sendError(w, http.StatusNotFound, fmt.Sprintf("failed to load client binary: %v", err))
 		return
 	}
 
-	fmt.Printf("[API] ✅ Loaded client binary: %s (%d chunks)\n", clientBinaryID, totalChunks)
+	fmt.Printf("[API] Loaded client binary: %s (%d chunks)\n", clientBinaryID, totalChunks)
 
 	// Create stager session (4-char random ID to keep DNS packets under 512 bytes)
 	sessionID := fmt.Sprintf("stg_%04x", rand.Intn(65536))
@@ -1919,13 +1919,13 @@ func (api *APIServer) handleStagerInit(w http.ResponseWriter, r *http.Request) {
 	err = api.db.QueueStagerCacheForDNSServers(clientBinaryID, dnsServerIDs)
 	if err != nil {
 		// Log but don't fail - stager will still work via on-demand caching
-		fmt.Printf("[API] ⚠️  Failed to queue cache tasks: %v\n", err)
+		fmt.Printf("[API] Failed to queue cache tasks: %v\n", err)
 	} else {
-		fmt.Printf("[API] 📦 Queued stager cache for %d DNS servers\n", len(dnsServerIDs))
+		fmt.Printf("[API] Queued stager cache for %d DNS servers\n", len(dnsServerIDs))
 	}
 
 	// Always log stager session creation (not just in debug mode)
-	fmt.Printf("[API] 🚀 Stager session created: %s | Stager: %s (%s/%s) | Chunks: %d across %d DNS servers\n",
+	fmt.Printf("[API] Stager session created: %s | Stager: %s (%s/%s) | Chunks: %d across %d DNS servers\n",
 		sessionID[:16], req.StagerIP, req.OS, req.Arch, totalChunks, len(dnsServerIDs))
 
 	if api.config.Debug {
@@ -1990,7 +1990,7 @@ func (api *APIServer) handleStagerChunk(w http.ResponseWriter, r *http.Request) 
 	api.db.UpdateStagerSessionActivity(req.SessionID)
 
 	// Log chunk delivery (always, not just debug)
-	fmt.Printf("[API] 📦 Chunk %d delivered to stager %s via DNS server %s\n",
+	fmt.Printf("[API] Chunk %d delivered to stager %s via DNS server %s\n",
 		req.ChunkIndex, req.StagerIP, dnsServerID)
 
 	if api.config.Debug {
@@ -2061,7 +2061,7 @@ func (api *APIServer) handleStagerContact(w http.ResponseWriter, r *http.Request
 	chunkCount, err := api.db.GetCachedChunkCount(req.ClientBinaryID)
 	if err != nil {
 		// If we can't get chunk count, log warning but continue
-		fmt.Printf("[API] ⚠️  Warning: Could not get chunk count for cached binary %s: %v\n", req.ClientBinaryID, err)
+		fmt.Printf("[API] Warning: Could not get chunk count for cached binary %s: %v\n", req.ClientBinaryID, err)
 		chunkCount = 0 // Will be updated as chunks are served
 	}
 
@@ -2078,14 +2078,14 @@ func (api *APIServer) handleStagerContact(w http.ResponseWriter, r *http.Request
 
 	if err != nil {
 		// Log error but don't fail - DNS server already serving from cache
-		fmt.Printf("[API] ⚠️  Warning: Failed to create stager session for tracking: %v\n", err)
+		fmt.Printf("[API] Warning: Failed to create stager session for tracking: %v\n", err)
 	} else {
-		fmt.Printf("[API] 🚀 Stager session created from cache contact: %s | Stager: %s (%s/%s) | Binary: %s | Chunks: %d\n",
+		fmt.Printf("[API] Stager session created from cache contact: %s | Stager: %s (%s/%s) | Binary: %s | Chunks: %d\n",
 			sessionID, req.StagerIP, req.OS, req.Arch, req.ClientBinaryID, chunkCount)
 	}
 
 	// Log the contact
-	fmt.Printf("[API] 📞 Stager contact: %s (%s/%s) contacted DNS server %s using cached binary %s\n",
+	fmt.Printf("[API] Stager contact: %s (%s/%s) contacted DNS server %s using cached binary %s\n",
 		req.StagerIP, req.OS, req.Arch, dnsServerID, req.ClientBinaryID)
 
 	// Return success with session ID for DNS server to use in progress reports
@@ -2119,7 +2119,7 @@ func (api *APIServer) handleStagerProgress(w http.ResponseWriter, r *http.Reques
 
 	// Log progress (periodic batching could reduce logs)
 	if req.ChunkIndex%100 == 0 || api.config.Debug {
-		fmt.Printf("[API] 📊 Progress: Chunk %d delivered for session %s via DNS %s\n",
+		fmt.Printf("[API] Progress: Chunk %d delivered for session %s via DNS %s\n",
 			req.ChunkIndex, req.SessionID, dnsServerID)
 	}
 
@@ -2131,7 +2131,7 @@ func (api *APIServer) panicRecoveryMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if err := recover(); err != nil {
-				fmt.Printf("[API] ⚠️  PANIC RECOVERED: %v\nPath: %s %s\n", err, r.Method, r.URL.Path)
+				fmt.Printf("[API] PANIC RECOVERED: %v\nPath: %s %s\n", err, r.Method, r.URL.Path)
 				// Try to send error response (might fail if headers already sent)
 				w.WriteHeader(http.StatusInternalServerError)
 				json.NewEncoder(w).Encode(map[string]interface{}{

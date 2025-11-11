@@ -117,7 +117,7 @@ if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
         echo -e "${GREEN}  ${INSTALL_CMD} ${PACKAGES[@]}${NC}"
         
     elif command -v yum &> /dev/null; then
-        echo -e "${GREEN}  sudo yum install -y golang gcc gcc-c++ mingw64-gcc openssl zlib-devel${NC}"
+        echo -e "${GREEN}  sudo apt install -y golang gcc gcc-c++ mingw64-gcc openssl zlib-devel${NC}"
     else
         echo -e "${YELLOW}  Please install the missing dependencies using your system's package manager${NC}"
     fi
