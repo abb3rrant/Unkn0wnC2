@@ -141,7 +141,7 @@ LDFLAGS="-s -w -X main.version=${VERSION} -X main.buildDate=${BUILD_DATE} -X mai
 BUILDFLAGS="-trimpath"
 
 echo -e "${YELLOW}[1/6] Building Archon Server...${NC}"
-cd Master
+cd Archon
 go build ${BUILDFLAGS} -ldflags="${LDFLAGS}" -o unkn0wnc2 .
 if [ $? -ne 0 ]; then
     echo -e "${RED}Failed to build Archon server${NC}"
@@ -169,7 +169,7 @@ echo -e "${GREEN}✓ Copied web interface files${NC}"
 cd ..
 cp -r Server Client Stager /opt/unkn0wnc2/src/
 echo -e "${GREEN}✓ Copied source files for builder${NC}"
-cd Master
+cd Archon
 
 # Generate secure credentials
 JWT_SECRET=$(openssl rand -hex 32)
