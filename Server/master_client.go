@@ -737,3 +737,24 @@ func (mc *MasterClient) GetStagerChunk(sessionID string, chunkIndex int, stagerI
 
 	return &chunkResp, nil
 }
+
+// GetTaskStatus queries the Master for the current status of a task
+// This allows DNS servers to check if tasks were completed on other servers
+func (mc *MasterClient) GetTaskStatus(taskID string) (string, error) {
+	endpoint := fmt.Sprintf("/api/tasks/%s/status?dns_server_id=%s&api_key=%s", taskID, mc.serverID, mc.apiKey)
+
+	respData, err := mc.doRequest("GET", endpoint, nil)
+	if err != nil {
+		return "", fmt.Errorf("task status query failed: %w", err)
+	}
+
+	var resp struct {
+		Status string `json:"status"`
+	}
+
+	if err := json.Unmarshal(respData, &resp); err != nil {
+		return "", fmt.Errorf("failed to parse task status response: %w", err)
+	}
+
+	return resp.Status, nil
+}

