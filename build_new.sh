@@ -14,7 +14,7 @@
 
 set -e
 
-VERSION="0.2.1"
+VERSION="0.3.0"
 BUILD_DATE=$(date -u '+%Y-%m-%d')
 GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
