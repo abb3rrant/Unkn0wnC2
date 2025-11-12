@@ -22,7 +22,8 @@
 
         .navbar {
             background: rgba(10, 10, 10, 0.98);
-            border-bottom: 1px solid #333;
+            border-bottom: 1px solid rgba(255, 51, 51, 0.2);
+            border-image: linear-gradient(to right, rgba(255, 51, 51, 0.3) 0%, rgba(255, 51, 51, 0.1) 30%, transparent 100%) 1;
             padding: 15px 30px;
             display: flex;
             justify-content: space-between;
@@ -30,15 +31,41 @@
             position: sticky;
             top: 0;
             z-index: 1000;
+            clip-path: polygon(0 0, 100% 0, 100% 100%, 0 calc(100% - 1px));
+        }
+
+        .navbar::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            bottom: -1px;
+            width: 30%;
+            height: 1px;
+            background: rgba(255, 51, 51, 0.3);
+            box-shadow: 0 0 10px rgba(255, 51, 51, 0.1);
         }
 
         .navbar-brand {
             font-size: 32px;
             font-weight: 700;
             color: rgba(255, 51, 51, 0.8);
-            text-shadow: 0 0 15px rgba(255, 51, 51, 0.15);
+            text-shadow: 
+                0 0 15px rgba(255, 51, 51, 0.15);
             font-family: 'Bebas Neue', 'Impact', sans-serif;
             letter-spacing: 4px;
+            position: relative;
+        }
+
+        .navbar-brand::before {
+            content: '';
+            position: absolute;
+            left: -10px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 2px;
+            height: 80%;
+            background: rgba(255, 51, 51, 0.4);
+            box-shadow: 0 0 8px rgba(255, 51, 51, 0.2);
         }
 
         .navbar-right {
@@ -47,56 +74,104 @@
             align-items: center;
         }
 
-        .btn-back {
-            padding: 8px 16px;
-            background: rgba(255, 51, 51, 0.05);
-            border: 1px solid rgba(255, 51, 51, 0.15);
-            border-radius: 6px;
-            color: rgba(255, 51, 51, 0.8);
-            cursor: pointer;
-            font-size: 13px;
-            text-decoration: none;
-            transition: all 0.3s ease;
+        .user-info {
+            color: #666;
+            font-size: 14px;
         }
 
-        .btn-back:hover {
-            background: rgba(255, 51, 51, 0.08);
+        .btn-logout {
+            padding: 8px 20px;
+            padding-left: 25px;
+            background: rgba(20, 20, 20, 0.9);
+            border: 1px solid rgba(255, 50, 50, 0.2);
+            border-left: 2px solid rgba(255, 51, 51, 0.3);
+            border-radius: 0;
+            color: rgba(255, 51, 51, 0.8);
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s ease;
+            clip-path: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 0 100%);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn-logout::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 0;
+            height: 100%;
+            background: rgba(255, 50, 50, 0.08);
+            transition: width 0.3s ease;
+        }
+
+        .btn-logout:hover::before {
+            width: 100%;
+        }
+
+        .btn-logout:hover {
+            border-left-color: rgba(255, 51, 51, 0.5);
+            box-shadow: -2px 0 15px rgba(255, 50, 50, 0.15);
         }
 
         .nav-menu {
             background: rgba(10, 10, 10, 0.98);
-            border-bottom: 1px solid #333;
+            border-bottom: 1px solid rgba(255, 51, 51, 0.1);
             padding: 12px 30px;
             display: flex;
             gap: 15px;
-            margin-bottom: 20px;
+            position: sticky;
+            top: 61px;
+            z-index: 999;
         }
 
         .nav-btn {
             padding: 10px 24px;
-            background: rgba(255, 50, 50, 0.05);
-            border: 1px solid rgba(255, 50, 50, 0.15);
-            border-radius: 6px;
-            color: #e0e0e0;
+            padding-left: 30px;
+            background: rgba(20, 20, 20, 0.8);
+            border: none;
+            border-left: 2px solid rgba(255, 50, 50, 0.3);
+            border-bottom: 1px solid rgba(255, 50, 50, 0.1);
+            border-radius: 0;
+            color: #999;
             cursor: pointer;
             font-size: 14px;
             font-weight: 500;
             transition: all 0.3s ease;
             text-decoration: none;
             display: inline-block;
+            clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%);
+            position: relative;
+        }
+
+        .nav-btn::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 0;
+            height: 100%;
+            background: rgba(255, 51, 51, 0.05);
+            transition: width 0.3s ease;
+        }
+
+        .nav-btn:hover::before {
+            width: 100%;
         }
 
         .nav-btn:hover {
-            background: rgba(255, 50, 50, 0.08);
-            border-color: rgba(255, 50, 50, 0.5);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(255, 50, 50, 0.08);
+            border-left-color: rgba(255, 51, 51, 0.5);
+            color: #ccc;
+            box-shadow: -2px 0 12px rgba(255, 50, 50, 0.1);
         }
 
         .nav-btn.active {
-            background: rgba(255, 50, 50, 0.15);
-            border-color: rgba(255, 51, 51, 0.8);
-            color: rgba(255, 51, 51, 0.8);
+            background: rgba(20, 20, 20, 0.95);
+            border-left-color: rgba(255, 51, 51, 0.6);
+            border-left-width: 3px;
+            color: rgba(255, 51, 51, 0.9);
+            font-weight: 600;
         }
 
         .container {
@@ -637,7 +712,8 @@
     <nav class="navbar">
         <div class="navbar-brand">Unkn0wnC2</div>
         <div class="navbar-right">
-            <a href="/dashboard" class="btn-back">← Back to Dashboard</a>
+            <div class="user-info">Logged in as <strong id="username">admin</strong></div>
+            <button class="btn-logout" onclick="logout()">Logout</button>
         </div>
     </nav>
 
