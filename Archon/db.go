@@ -1131,11 +1131,15 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 	`, taskID, beaconID, dnsServerID, data, now, chunkIndex, totalChunks, isComplete)
 
 	if err != nil {
-		fmt.Printf("[Master DB] Error saving result chunk: %v\n", err)
+		// Don't log FK errors for D tasks (discovery tasks don't need result storage)
+		if !strings.HasPrefix(taskID, "D") || !strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
+			fmt.Printf("[Master DB] Error saving result chunk: %v\n", err)
+		}
 		return err
 	}
 
-	if chunkIndex >= 1 {
+	// Only log result storage for non-discovery tasks
+	if !strings.HasPrefix(taskID, "D") && chunkIndex >= 1 {
 		if totalChunks == 1 {
 			fmt.Printf("[Master DB] Saved single-chunk result for task %s from %s (%d bytes)\n", taskID, dnsServerID, len(data))
 		} else {
@@ -2799,9 +2803,15 @@ func (d *MasterDatabase) markTaskCompleted(taskID string) {
 
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
-		fmt.Printf("[Master DB] Task %s was already completed or doesn't exist\n", taskID)
+		// Don't log warnings for D tasks (discovery tasks may not exist in tasks table)
+		if !strings.HasPrefix(taskID, "D") {
+			fmt.Printf("[Master DB] Task %s was already completed or doesn't exist\n", taskID)
+		}
 	} else {
-		fmt.Printf("[Master DB] ✓ Task %s marked as completed\n", taskID)
+		// Only log completion for non-discovery tasks
+		if !strings.HasPrefix(taskID, "D") {
+			fmt.Printf("[Master DB] ✓ Task %s marked as completed\n", taskID)
+		}
 	}
 }
 

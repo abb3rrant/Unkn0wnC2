@@ -164,7 +164,7 @@ func main() {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				fmt.Printf("[Cleanup] ❌ PANIC in cleanup goroutine: %v\n", r)
+				fmt.Printf("[Cleanup] PANIC in cleanup goroutine: %v\n", r)
 			}
 		}()
 

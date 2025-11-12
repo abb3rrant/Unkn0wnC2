@@ -236,7 +236,7 @@ func (api *APIServer) handleBuildClient(w http.ResponseWriter, r *http.Request) 
 
 	// Store client binary in database for stager use
 	if err := api.storeClientBinaryForStager(binaryPath, filename, req, savedPath); err != nil {
-		fmt.Printf("[Builder] ⚠️  ERROR: Failed to store client binary in database: %v\n", err)
+		fmt.Printf("[Builder] ERROR: Failed to store client binary in database: %v\n", err)
 		// Continue anyway - binary is still saved to disk
 	}
 
@@ -321,7 +321,7 @@ func (api *APIServer) handleBuildStager(w http.ResponseWriter, r *http.Request) 
 
 		// Join all domains with comma (stager will parse and randomly select)
 		req.Domain = strings.Join(activeDomains, ",")
-		fmt.Printf("[Builder] 🚀 Building stager with Shadow Mesh client-side load balancing:\n")
+		fmt.Printf("[Builder] Building stager with Shadow Mesh client-side load balancing:\n")
 		fmt.Printf("  └─ Embedded domains: %s\n", req.Domain)
 		fmt.Printf("  └─ Stager will randomly distribute requests across %d DNS servers\n", len(activeDomains))
 	}
@@ -371,7 +371,7 @@ func (api *APIServer) handleBuildStager(w http.ResponseWriter, r *http.Request) 
 				}
 			}
 			if !found {
-				fmt.Printf("[Builder] ⚠️  Warning: Client binary ID %s not found in database\n", clientBinaryID)
+				fmt.Printf("[Builder] Warning: Client binary ID %s not found in database\n", clientBinaryID)
 				clientBinaryID = "" // Clear invalid ID
 			}
 		}
@@ -398,7 +398,7 @@ func (api *APIServer) handleBuildStager(w http.ResponseWriter, r *http.Request) 
 		// Get all active DNS server IDs
 		dnsServers, err := api.db.GetDNSServers()
 		if err != nil {
-			fmt.Printf("[Builder] ⚠️  Failed to get DNS servers: %v\n", err)
+			fmt.Printf("[Builder] Failed to get DNS servers: %v\n", err)
 		} else {
 			fmt.Printf("[Builder] Found %d DNS servers\n", len(dnsServers))
 
@@ -419,21 +419,21 @@ func (api *APIServer) handleBuildStager(w http.ResponseWriter, r *http.Request) 
 			}
 
 			if len(dnsServerIDs) == 0 {
-				fmt.Printf("[Builder] ⚠️  No active DNS servers found - cache not queued\n")
+				fmt.Printf("[Builder] No active DNS servers found - cache not queued\n")
 			} else {
 				// Queue cache for all DNS servers
 				fmt.Printf("[Builder] Queueing cache for %d active DNS servers...\n", len(dnsServerIDs))
 				err = api.db.QueueStagerCacheForDNSServers(clientBinaryID, dnsServerIDs)
 				if err != nil {
-					fmt.Printf("[Builder] ❌ Failed to queue cache: %v (stager will still work via on-demand caching)\n", err)
+					fmt.Printf("[Builder] Failed to queue cache: %v (stager will still work via on-demand caching)\n", err)
 				} else {
-					fmt.Printf("[Builder] 📦 Queued stager cache (%s) for %d DNS servers (will sync on next checkin)\n",
+					fmt.Printf("[Builder] Queued stager cache (%s) for %d DNS servers (will sync on next checkin)\n",
 						clientBinaryID, len(dnsServerIDs))
 				}
 			}
 		}
 	} else {
-		fmt.Printf("[Builder] ⚠️  No client binary ID - skipping cache queue\n")
+		fmt.Printf("[Builder]  No client binary ID - skipping cache queue\n")
 	}
 
 	// Send binary as download

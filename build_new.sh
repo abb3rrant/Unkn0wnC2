@@ -211,51 +211,19 @@ echo ""
 
 echo -e "${YELLOW}[4/6] Generating TLS certificates...${NC}"
 if [ ! -f /opt/unkn0wnc2/certs/master.crt ]; then
-    # Create OpenSSL config with IP SAN
-    cat > /tmp/master_cert.conf <<EOF
-[req]
-default_bits = 4096
-prompt = no
-default_md = sha256
-distinguished_name = dn
-req_extensions = v3_req
-
-[dn]
-C = US
-ST = State
-L = City
-O = Unkn0wnC2
-CN = master
-
-[v3_req]
-keyUsage = keyEncipherment, dataEncipherment, digitalSignature
-extendedKeyUsage = serverAuth
-subjectAltName = @alt_names
-
-[alt_names]
-DNS.1 = master
-DNS.2 = localhost
-IP.1 = 100.100.1.4
-IP.2 = 127.0.0.1
-EOF
-    
     openssl req -x509 -newkey rsa:4096 -nodes \
         -keyout /opt/unkn0wnc2/certs/master.key \
         -out /opt/unkn0wnc2/certs/master.crt \
         -days 365 \
-        -config /tmp/master_cert.conf \
-        -extensions v3_req \
+        -subj "/C=US/ST=State/L=City/O=Unkn0wnC2/CN=master" \
         2>/dev/null
     
-    rm -f /tmp/master_cert.conf
     chmod 600 /opt/unkn0wnc2/certs/master.key
     chmod 644 /opt/unkn0wnc2/certs/master.crt
     
-    echo -e "${GREEN}✓ Generated self-signed TLS certificate with IP SANs (valid 365 days)${NC}"
-    echo -e "${GREEN}  SANs: 100.100.1.4, 127.0.0.1, master, localhost${NC}"
+    echo -e "${GREEN}✓ Generated self-signed TLS certificate (valid 365 days)${NC}"
 else
     echo -e "${YELLOW}! Certificates already exist, skipping${NC}"
-    echo -e "${YELLOW}  To regenerate with IP SANs: rm /opt/unkn0wnc2/certs/master.* && ./build_new.sh${NC}"
 fi
 echo ""
 
