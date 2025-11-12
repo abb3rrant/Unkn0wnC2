@@ -1376,8 +1376,10 @@ func (api *APIServer) handleGetTaskResult(w http.ResponseWriter, r *http.Request
 	vars := mux.Vars(r)
 	taskID := vars["id"]
 
-	// Get the complete result
+	// Get the complete result (must acquire lock since GetTaskResult doesn't)
+	api.db.mutex.RLock()
 	resultData, isComplete, err := api.db.GetTaskResult(taskID)
+	api.db.mutex.RUnlock()
 
 	if err != nil {
 		if err.Error() == "no result found" {
@@ -1722,7 +1724,10 @@ func (api *APIServer) handleGetTaskProgress(w http.ResponseWriter, r *http.Reque
 	taskID := vars["id"]
 
 	// Use the results-based progress calculation for accurate operator view
+	api.db.mutex.RLock()
 	progress, err := api.db.GetTaskProgressFromResults(taskID)
+	api.db.mutex.RUnlock()
+
 	if err != nil {
 		api.sendError(w, http.StatusInternalServerError, "failed to retrieve progress")
 		return

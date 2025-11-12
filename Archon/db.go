@@ -1342,8 +1342,8 @@ func (d *MasterDatabase) reassembleChunkedResult(taskID, beaconID string, totalC
 
 // GetTaskResult retrieves the complete result for a task
 func (d *MasterDatabase) GetTaskResult(taskID string) (string, bool, error) {
-	d.mutex.RLock()
-	defer d.mutex.RUnlock()
+	// NOTE: Caller must hold mutex (either RLock or Lock)
+	// Do not acquire mutex here to avoid deadlock
 
 	// First try to get the complete result
 	// chunk_index = 0: Assembled multi-chunk result OR legacy single-chunk
@@ -2686,8 +2686,8 @@ func (d *MasterDatabase) GetTaskProgress(taskID string) (map[string]interface{},
 // This is the authoritative source for progress as it reflects what the Master has received
 // With distributed chunks, this aggregates data from all DNS servers
 func (d *MasterDatabase) GetTaskProgressFromResults(taskID string) (map[string]interface{}, error) {
-	d.mutex.RLock()
-	defer d.mutex.RUnlock()
+	// NOTE: Caller must hold mutex (either RLock or Lock)
+	// Do not acquire mutex here to avoid deadlock
 
 	// First check if we have a complete result
 	var completeExists int
