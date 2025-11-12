@@ -275,6 +275,9 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=/opt/unkn0wnc2
+Environment="GOCACHE=/opt/unkn0wnc2/.cache/go-build"
+Environment="GOMODCACHE=/opt/unkn0wnc2/.cache/go-mod"
+Environment="GOTMPDIR=/opt/unkn0wnc2/.cache/tmp"
 ExecStart=/usr/bin/unkn0wnc2 --bind-addr 0.0.0.0 --bind-port 8443
 Restart=on-failure
 RestartSec=5s

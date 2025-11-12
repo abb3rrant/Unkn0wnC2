@@ -541,7 +541,19 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 	// Clean and download dependencies to ensure compatible versions
 	modTidyCmd := exec.Command("go", "mod", "tidy")
 	modTidyCmd.Dir = buildDir
-	modTidyCmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64")
+	env := os.Environ()
+	env = append(env, "GOOS=linux", "GOARCH=amd64")
+	// Ensure Go cache directories are set if running in restricted environment
+	if os.Getenv("GOCACHE") != "" {
+		env = append(env, "GOCACHE="+os.Getenv("GOCACHE"))
+	}
+	if os.Getenv("GOMODCACHE") != "" {
+		env = append(env, "GOMODCACHE="+os.Getenv("GOMODCACHE"))
+	}
+	if os.Getenv("GOTMPDIR") != "" {
+		env = append(env, "GOTMPDIR="+os.Getenv("GOTMPDIR"))
+	}
+	modTidyCmd.Env = env
 	if output, err := modTidyCmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("go mod tidy failed: %w\nOutput: %s", err, string(output))
 	}
@@ -552,7 +564,7 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 
 	cmd := exec.Command("go", "build", "-trimpath", "-ldflags=-s -w", "-o", outputPath, ".")
 	cmd.Dir = buildDir
-	cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64")
+	cmd.Env = env // Reuse the same environment from mod tidy
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -662,6 +674,18 @@ func getConfig() Config {
 	fmt.Printf("Debug: Generated config.go with %d DNS domains\n", len(req.DNSDomains)) // Clean and download dependencies
 	modTidyCmd := exec.Command("go", "mod", "tidy")
 	modTidyCmd.Dir = buildDir
+	env := os.Environ()
+	// Ensure Go cache directories are set if running in restricted environment
+	if os.Getenv("GOCACHE") != "" {
+		env = append(env, "GOCACHE="+os.Getenv("GOCACHE"))
+	}
+	if os.Getenv("GOMODCACHE") != "" {
+		env = append(env, "GOMODCACHE="+os.Getenv("GOMODCACHE"))
+	}
+	if os.Getenv("GOTMPDIR") != "" {
+		env = append(env, "GOTMPDIR="+os.Getenv("GOTMPDIR"))
+	}
+	modTidyCmd.Env = env
 	if output, err := modTidyCmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("go mod tidy failed: %w\nOutput: %s", err, string(output))
 	}
@@ -677,7 +701,8 @@ func getConfig() Config {
 	outputPath := filepath.Join(buildDir, fmt.Sprintf("beacon%s", ext))
 	cmd := exec.Command("go", "build", "-trimpath", "-ldflags=-s -w", "-o", outputPath, ".")
 	cmd.Dir = buildDir
-	cmd.Env = append(os.Environ(), fmt.Sprintf("GOOS=%s", goos), "GOARCH=amd64")
+	env = append(env, fmt.Sprintf("GOOS=%s", goos), "GOARCH=amd64")
+	cmd.Env = env
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
