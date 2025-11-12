@@ -270,10 +270,6 @@ sequenceDiagram
 | **Session Info** | `sessionID\|totalChunks` | Response to STG request | `sess_abc123\|15` |
 | **ERROR** | `ERROR` | Invalid or malformed message | `ERROR` |
 
-### 🎭 Authoritative DNS Server Logic Flow
-
-![Authoritative DNS Server Logic Flow](assets/logic_flow.png)
-
 ### Malleable Timing (stager / client / exfil)
 
 This project exposes several timing parameters that are intentionally malleable to tune stealth vs throughput. Defaults are set in build_config.json and in the Stager build defaults.
