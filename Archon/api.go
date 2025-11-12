@@ -506,13 +506,17 @@ func (api *APIServer) sendJSON(w http.ResponseWriter, data interface{}) {
 func (api *APIServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		fmt.Printf("[API] Failed to decode login request: %v\n", err)
 		api.sendError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
+	fmt.Printf("[API] Login attempt for user: %s\n", req.Username)
+
 	// Verify credentials
 	operatorID, role, err := api.db.VerifyOperatorCredentials(req.Username, req.Password)
 	if err != nil {
+		fmt.Printf("[API] Credential verification failed: %v\n", err)
 		api.sendError(w, http.StatusUnauthorized, "invalid credentials")
 
 		// Log failed login attempt
@@ -521,6 +525,8 @@ func (api *APIServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 			r.RemoteAddr)
 		return
 	}
+
+	fmt.Printf("[API] Credentials verified for user: %s (ID: %s)\n", req.Username, operatorID)
 
 	// Generate JWT token with unique JTI (JWT ID) for revocation support
 	jti := generateID()
@@ -540,14 +546,18 @@ func (api *APIServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	tokenString, err := token.SignedString(api.jwtSecret)
 	if err != nil {
+		fmt.Printf("[API] Failed to sign JWT token: %v\n", err)
 		api.sendError(w, http.StatusInternalServerError, "failed to generate token")
 		return
 	}
+
+	fmt.Printf("[API] JWT token generated for user: %s\n", req.Username)
 
 	// Create session record in database for revocation support
 	sessionID := generateID()
 	tokenHashBytes, err := bcrypt.GenerateFromPassword([]byte(tokenString), bcrypt.DefaultCost)
 	if err != nil {
+		fmt.Printf("[API] Failed to hash token: %v\n", err)
 		api.sendError(w, http.StatusInternalServerError, "failed to hash token")
 		return
 	}
@@ -557,6 +567,8 @@ func (api *APIServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 		api.sendError(w, http.StatusInternalServerError, "failed to create session")
 		return
 	}
+
+	fmt.Printf("[API] Session created successfully for user: %s\n", req.Username)
 
 	// Log successful login
 	api.db.LogAuditEvent(operatorID, "login_success", "operator", operatorID,

@@ -1974,18 +1974,22 @@ func (d *MasterDatabase) VerifyOperatorCredentials(username, password string) (s
 
 	if err != nil {
 		if err == sql.ErrNoRows {
+			fmt.Printf("[DB] User not found: %s\n", username)
 			return "", "", fmt.Errorf("invalid credentials")
 		}
+		fmt.Printf("[DB] Query error for user %s: %v\n", username, err)
 		return "", "", err
 	}
 
 	if isActive != 1 {
+		fmt.Printf("[DB] Account disabled for user: %s\n", username)
 		return "", "", fmt.Errorf("account disabled")
 	}
 
 	// Verify password
 	err = bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password))
 	if err != nil {
+		fmt.Printf("[DB] Password verification failed for user %s: %v\n", username, err)
 		return "", "", fmt.Errorf("invalid credentials")
 	}
 
