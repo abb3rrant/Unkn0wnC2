@@ -499,8 +499,9 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 	configStr := string(config)
 
 	// Debug: Show what we're looking for and replacing
-	fmt.Printf("Debug: MasterServer before replacement contains empty: %v\n", strings.Contains(configStr, "MasterServer:   \"\","))
-	fmt.Printf("Debug: Replacing MasterServer with: %s\n", masterURL)
+	fmt.Printf("[Builder] Replacing MasterServer with: %s\n", masterURL)
+	fmt.Printf("[Builder] Replacing MasterAPIKey with: %s\n", apiKey)
+	fmt.Printf("[Builder] Replacing MasterServerID with: %s\n", serverID)
 
 	configStr = strings.ReplaceAll(configStr, "Domain:        \"secwolf.net\",", fmt.Sprintf("Domain:        \"%s\",", req.Domain))
 	configStr = strings.ReplaceAll(configStr, "NS1:           \"ns1.secwolf.net\",", fmt.Sprintf("NS1:           \"%s\",", req.NS1))
@@ -511,12 +512,18 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 		configStr = strings.ReplaceAll(configStr, "SvrAddr:       \"98.90.218.70\",", fmt.Sprintf("SvrAddr:       \"%s\",", req.ServerAddress))
 	}
 	// Set distributed mode config (required fields) - replace ALL occurrences
+	// Handle both with and without comments
 	configStr = strings.ReplaceAll(configStr, "MasterServer:      \"\",", fmt.Sprintf("MasterServer:      \"%s\",", masterURL))
+	configStr = strings.ReplaceAll(configStr, "MasterServer:      \"\", // REQUIRED: Set by builder", fmt.Sprintf("MasterServer:      \"%s\", // REQUIRED: Set by builder", masterURL))
 	configStr = strings.ReplaceAll(configStr, "MasterAPIKey:      \"\",", fmt.Sprintf("MasterAPIKey:      \"%s\",", apiKey))
+	configStr = strings.ReplaceAll(configStr, "MasterAPIKey:      \"\", // REQUIRED: Set by builder", fmt.Sprintf("MasterAPIKey:      \"%s\", // REQUIRED: Set by builder", apiKey))
 	configStr = strings.ReplaceAll(configStr, "MasterServerID:    \"dns1\",", fmt.Sprintf("MasterServerID:    \"%s\",", serverID))
 
-	// Debug: Verify MasterServer was set after replacement
-	fmt.Printf("Debug: MasterServer after replacement still empty: %v\n", strings.Contains(configStr, "MasterServer:   \"\","))
+	// Verify MasterServer was set after replacement
+	if strings.Contains(configStr, "MasterServer:      \"\",") {
+		return "", fmt.Errorf("CRITICAL: MasterServer replacement failed - empty value still present in config")
+	}
+	fmt.Printf("[Builder] ✓ Configuration embedded successfully\n")
 
 	if err := os.WriteFile(configPath, []byte(configStr), 0644); err != nil {
 		return "", fmt.Errorf("failed to write config: %w", err)
