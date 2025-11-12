@@ -593,7 +593,6 @@
             <table class="table" id="usersTable" style="display: none;">
                 <thead>
                     <tr>
-                        <th>Status</th>
                         <th>Username</th>
                         <th>Role</th>
                         <th>Email</th>
@@ -812,10 +811,6 @@
             users.forEach(user => {
                 const tr = document.createElement('tr');
                 
-                // Status indicator
-                const statusClass = user.active ? 'status-active' : 'status-inactive';
-                const statusText = user.active ? 'Active' : 'Inactive';
-                
                 // Role badge
                 const roleClass = `role-${user.role}`;
                 
@@ -833,13 +828,10 @@
                 }
                 
                 if (currentUserRole === 'admin' && !isCurrentUser) {
-                    const toggleText = user.active ? 'Disable' : 'Enable';
-                    actions += `<button class="btn btn-small ${user.active ? 'btn-danger' : 'btn-success'}" onclick="toggleStatus('${user.id}', ${!user.active})">${toggleText}</button>`;
                     actions += `<button class="btn btn-small btn-danger" onclick="openDeleteModal('${user.id}', '${user.username}')">Delete</button>`;
                 }
                 
                 tr.innerHTML = `
-                    <td><span class="status-indicator ${statusClass}"></span>${statusText}</td>
                     <td>${user.username}</td>
                     <td><span class="role-badge ${roleClass}">${user.role.toUpperCase()}</span></td>
                     <td>${user.email || '-'}</td>
