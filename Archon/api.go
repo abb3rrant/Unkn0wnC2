@@ -654,9 +654,6 @@ func (api *APIServer) handleCurrentUser(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Log for debugging
-	fmt.Printf("[API] Current user request: ID=%s, Username=%s, Role=%s\n", operatorID, username, role)
-
 	// Return current user info
 	userData := map[string]interface{}{
 		"id":       operatorID,

@@ -140,7 +140,7 @@ echo ""
 LDFLAGS="-s -w -X main.version=${VERSION} -X main.buildDate=${BUILD_DATE} -X main.gitCommit=${GIT_COMMIT}"
 BUILDFLAGS="-trimpath"
 
-echo -e "${YELLOW}[1/6] Building Archon Server...${NC}"
+echo -e "${YELLOW}[1/7] Building Archon Server...${NC}"
 cd Archon
 go build ${BUILDFLAGS} -ldflags="${LDFLAGS}" -o unkn0wnc2 .
 if [ $? -ne 0 ]; then
@@ -150,12 +150,12 @@ fi
 echo -e "${GREEN}✓ Archon server compiled: $(du -h unkn0wnc2 | cut -f1)${NC}"
 echo ""
 
-echo -e "${YELLOW}[2/6] Creating directory structure...${NC}"
+echo -e "${YELLOW}[2/7] Creating directory structure...${NC}"
 mkdir -p /opt/unkn0wnc2/{certs,web,configs,builders,builds/dns-server,builds/client,builds/stager,src}
 echo -e "${GREEN}✓ Created /opt/unkn0wnc2/${NC}"
 echo ""
 
-echo -e "${YELLOW}[3/6] Installing files...${NC}"
+echo -e "${YELLOW}[3/7] Installing files...${NC}"
 
 # Install binary
 install -m 755 unkn0wnc2 /usr/bin/unkn0wnc2
@@ -209,7 +209,7 @@ fi
 cd ..
 echo ""
 
-echo -e "${YELLOW}[4/6] Generating TLS certificates...${NC}"
+echo -e "${YELLOW}[4/7] Generating TLS certificates...${NC}"
 if [ ! -f /opt/unkn0wnc2/certs/master.crt ]; then
     openssl req -x509 -newkey rsa:4096 -nodes \
         -keyout /opt/unkn0wnc2/certs/master.key \
@@ -227,14 +227,14 @@ else
 fi
 echo ""
 
-echo -e "${YELLOW}[5/6] Setting permissions...${NC}"
+echo -e "${YELLOW}[5/7] Setting permissions...${NC}"
 chown -R root:root /opt/unkn0wnc2
 chmod 755 /opt/unkn0wnc2
 chmod 600 /opt/unkn0wnc2/master_config.json
 echo -e "${GREEN}✓ Permissions set${NC}"
 echo ""
 
-echo -e "${YELLOW}[6/6] Verifying builder environment...${NC}"
+echo -e "${YELLOW}[6/7] Verifying builder environment...${NC}"
 
 # Verify source files are in place
 SOURCE_CHECK=true
@@ -263,6 +263,44 @@ else
 fi
 echo ""
 
+echo -e "${YELLOW}[7/7] Creating systemd service file...${NC}"
+
+# Create systemd service file
+cat > /etc/systemd/system/unkn0wnc2.service << 'EOFSERVICE'
+[Unit]
+Description=Unkn0wnC2 Archon Master Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/unkn0wnc2
+ExecStart=/usr/bin/unkn0wnc2 --bind-addr 0.0.0.0 --bind-port 8443
+Restart=on-failure
+RestartSec=5s
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/unkn0wnc2
+ProtectHome=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=unkn0wnc2
+
+[Install]
+WantedBy=multi-user.target
+EOFSERVICE
+
+chmod 644 /etc/systemd/system/unkn0wnc2.service
+systemctl daemon-reload
+echo -e "${GREEN}✓ Created systemd service file${NC}"
+echo -e "${GREEN}✓ Service: /etc/systemd/system/unkn0wnc2.service${NC}"
+echo ""
+
 echo -e "${GREEN}════════════════════════════════════${NC}"
 echo -e "${GREEN}Installation Complete!${NC}"
 echo -e "${GREEN}════════════════════════════════════${NC}"
@@ -288,11 +326,21 @@ if [ -f /tmp/unkn0wnc2_admin_pass ]; then
 fi
 
 echo -e "${CYAN}USAGE:${NC}"
-echo "  Start Archon Server:"
+echo "  Start Archon Server manually:"
 echo "    unkn0wnc2 --bind-addr <ip> --bind-port <port>"
 echo ""
-echo "  Example:"
-echo "    unkn0wnc2 --bind-addr 0.0.0.0 --bind-port 8443"
+echo "  Or use systemd service:"
+echo "    sudo systemctl start unkn0wnc2      # Start the service"
+echo "    sudo systemctl stop unkn0wnc2       # Stop the service"
+echo "    sudo systemctl restart unkn0wnc2    # Restart the service"
+echo "    sudo systemctl enable unkn0wnc2     # Enable on boot"
+echo "    sudo systemctl status unkn0wnc2     # Check status"
+echo ""
+echo "  To customize bind address/port:"
+echo "    Edit /etc/systemd/system/unkn0wnc2.service"
+echo "    Change ExecStart line: --bind-addr <ip> --bind-port <port>"
+echo "    Then run: sudo systemctl daemon-reload"
+echo "              sudo systemctl restart unkn0wnc2"
 echo ""
 echo -e "${CYAN}WEB INTERFACE:${NC}"
 echo "  Access at: https://<your-ip>:8443/"
@@ -310,5 +358,6 @@ echo "  Config:       /opt/unkn0wnc2/master_config.json"
 echo "  Certificates: /opt/unkn0wnc2/certs/"
 echo "  Web Files:    /opt/unkn0wnc2/web/"
 echo "  Database:     /opt/unkn0wnc2/master.db (created on first run)"
+echo "  Service:      /etc/systemd/system/unkn0wnc2.service"
 echo ""
  

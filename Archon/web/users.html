@@ -774,7 +774,6 @@
                 document.getElementById('usersTable').style.display = 'none';
 
                 // Get current user info first
-                console.log('Fetching current user info...');
                 const currentUserResponse = await authFetch('/api/auth/me');
                 
                 if (!currentUserResponse) {
@@ -783,14 +782,10 @@
                 }
                 
                 const currentUserData = await currentUserResponse.json();
-                console.log('Current user data:', currentUserData);
                 
                 if (currentUserData.success && currentUserData.data) {
                     currentUserRole = currentUserData.data.role;
                     currentUserId = currentUserData.data.id;
-                    
-                    console.log('Set currentUserRole:', currentUserRole);
-                    console.log('Set currentUserId:', currentUserId);
                     
                     // Update username display
                     document.getElementById('username').textContent = currentUserData.data.username;
@@ -799,15 +794,11 @@
                     if (currentUserRole !== 'admin') {
                         document.getElementById('createUserBtn').style.display = 'none';
                     }
-                } else {
-                    console.error('Failed to get current user:', currentUserData);
                 }
 
                 // Load users list
-                console.log('Fetching users list...');
                 const response = await authFetch('/api/operators');
                 const data = await response.json();
-                console.log('Users data:', data);
 
                 document.getElementById('loadingIndicator').style.display = 'none';
 
@@ -828,8 +819,6 @@
             const tbody = document.getElementById('usersTableBody');
             tbody.innerHTML = '';
 
-            console.log('Current user ID:', currentUserId, 'Role:', currentUserRole);
-
             users.forEach(user => {
                 const tr = document.createElement('tr');
                 
@@ -844,8 +833,6 @@
                 let actions = '';
                 // Convert both to strings for comparison
                 const isCurrentUser = String(user.id) === String(currentUserId);
-                
-                console.log('User:', user.username, 'ID:', user.id, 'IsCurrentUser:', isCurrentUser);
                 
                 if (currentUserRole === 'admin' || isCurrentUser) {
                     actions += `<button class="btn btn-small" onclick="openEditModal('${user.id}', '${user.username}', '${user.role}', '${user.email || ''}')">Edit</button>`;

@@ -23,88 +23,38 @@ This software is provided for educational and authorized security testing purpos
 **The author is not responsible for misuse or illegal activity. Use at your own risk.**
 
 ---
-
-## To-Do
-
-1. Teaming Server
-2. Documentation
-3. WebUI
-4. Campaign Tracking - Good visuals for Red Team debrief of TTPs
-5. Client Features utilizing systemcalls vs running commands
-6. Exfil/Upload features with a Loot folder
-7. BoF functionality maybe
-
 ## 🚀 Quick Deployment
 
-**NEW: Package-Style Installation with Web-Based Builder**
-
-### Installation (Production)
+1. **Clone this repo**
 ```bash
-sudo bash build_new.sh
+git clone https://github.com/abb3rrant/Unkn0wnC2
+cd Unkn0wnC2
 ```
-This will:
-- ✅ Compile and install Master to `/opt/unkn0wnc2/`
-- ✅ Auto-generate secure credentials (displayed once)
-- ✅ Create TLS certificates
-- ✅ Install to `/usr/bin/unkn0wnc2`
 
-**Save the admin password!** Then start:
+2. **Run the build script**
 ```bash
-unkn0wnc2 --bind-addr 0.0.0.0 --bind-port 8443
+sudo chmod +x build.sh
+sudo ./build.sh
 ```
+> This will:
+> - Compile and install the Archon server to `/usr/bin/unkn0wnc2`
+> - Auto-generate secure credentials (displayed once)
+> - Create TLS certificates for the Archon server
+> - Install all dependencies for building and Archon WebUI to `/opt/unkn0wnc2/`
 
-Access web UI: `https://<server-ip>:8443/`  
-Build components (DNS servers, clients, stagers) through the web interface.
+3. **Save the admin password in the build scripts output, this will be used to access the WebUI.**
 
-📖 **See [QUICKSTART.md](QUICKSTART.md) for step-by-step guide**  
-📖 **See [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md) for full documentation**
-
----
-
-### Legacy Build (Manual)
-
-### 1. 🌐 Domain Setup
-Configure NS records at registrar:
-```
-ns1.yourdomain.net  →  YOUR_SERVER_IP
-ns2.yourdomain.net  →  YOUR_SERVER_IP
-```
-Add glue records at registrar, verify: `dig @8.8.8.8 NS yourdomain.net`
-
-### 2. 🔨 Build (Legacy)
+3. **Start the Archon Server**
 ```bash
-# Generate unique encryption key
-openssl rand -base64 32
-
-# Edit build_config.json - set encryption_key, domain, server IPs, and timings
-# Don't you dare use Nano!
-vim build_config.json
-
-# You may need to remove Windows line endings and make the scripts executable
-dos2unix build.sh && dos2unix Stager/build.sh
-chmod +x build.sh Stager/build.sh
-
-# Build all components with configuration
-./build.sh
+sudo unkn0wnc2 --bind-addr <interface IP to bind to> --bind-port <port>
 ```
 
-Output will be in `build/`
+4. **Access web UI: `https://<server-ip>:<port>/`**  
 
-### 3. 🖥️ Deploy Server
-```bash
-# Copy to target server
-scp build/dns-server-linux user@server:/opt/unkn0wnc2/
-cd /usr/bin/unkn0wnc2
+5. **Change admin password and create operators**
 
-# Run (requires root for port 53, config embedded at build time)
-sudo unkn0wnc2
-```
 
-### 4. 📡 Deploy Client
-**Option A - Direct:** `./dns-client-linux`  
-**Option B - Stager:** `./stager-linux-x64` (downloads client via DNS)
-
-**Production:** Change encryption key, disable debug mode, use system DNS (stealth)
+5. **Build components (DNS servers, clients, stagers) through the web interface.**
 
 ---
 
