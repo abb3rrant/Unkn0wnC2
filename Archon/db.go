@@ -602,15 +602,16 @@ func (d *MasterDatabase) migration4AddSessionJTI() error {
 	}
 
 	// Add the jti column (JWT ID for token revocation)
-	_, err = tx.Exec(`ALTER TABLE sessions ADD COLUMN jti TEXT UNIQUE`)
+	// SQLite doesn't support adding a UNIQUE column directly, so we add it as nullable first
+	_, err = tx.Exec(`ALTER TABLE sessions ADD COLUMN jti TEXT`)
 	if err != nil {
 		return fmt.Errorf("failed to add jti column: %w", err)
 	}
 
-	// Create index for faster lookups
-	_, err = tx.Exec(`CREATE INDEX IF NOT EXISTS idx_sessions_jti ON sessions(jti)`)
+	// Create unique index for the jti column
+	_, err = tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_jti ON sessions(jti) WHERE jti IS NOT NULL`)
 	if err != nil {
-		return fmt.Errorf("failed to create jti index: %w", err)
+		return fmt.Errorf("failed to create unique jti index: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
