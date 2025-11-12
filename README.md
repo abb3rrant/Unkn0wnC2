@@ -1,12 +1,9 @@
 # 🕵️ Unkn0wnC2
-DNS-based Command & Control framework operating as an authoritative DNS server with encrypted C2 communications.
+DNS-based Command & Control framework utilizing multiple authoritative DNS servers and encrypted C2 communications.
 
+This DNS C2 implementation's strengths comes from it's malleable C2 timing and mesh architecture. 
 
-This DNS C2 implementation's strengths comes from it's malleable C2 timing. 
-
-Many C2s can utilize DNS for covert communications, but the exfil/task timings aren't usually adjustable without changing code directly. This C2 allows you to change the timing of exfil during the build process. Keeping your exfil slow is key to staying stealthy as common C2s send outputs/exfil quickly, alerting Blue Teams on large ammounts of DNS traffic in a short period of time.
-
-A SQLite database has been implemented to maintain data persistence on long engagements and prevent memory leakage.
+Many C2s can utilize DNS for covert communications, but the exfil/task timings aren't usually adjustable without changing code directly. This C2 allows you to change the timing of exfil during the build process. Keeping your exfil slow is key to staying stealthy as common C2s send outputs/exfil quickly, alerting Blue Teams on large ammounts of DNS traffic in a short period of time. All DNS C2s utilize 1 domain per beacon, while this implementation can utilize many, and also alows for domains to dynamically be added to existing beacons mid operation.
 
 ![Unkn0wnC2](assets/unkn0wnc2.png)
 
