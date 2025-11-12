@@ -553,6 +553,7 @@ func (api *APIServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	err = api.db.CreateSession(sessionID, operatorID, jti, string(tokenHashBytes), r.RemoteAddr, r.UserAgent(), expiresAt.Unix())
 	if err != nil {
+		fmt.Printf("[API] Failed to create session: %v\n", err)
 		api.sendError(w, http.StatusInternalServerError, "failed to create session")
 		return
 	}
