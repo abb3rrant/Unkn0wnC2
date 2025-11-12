@@ -16,7 +16,7 @@
 
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #0f0f0f 0%, #1a1a1a 100%);
+            background: #000000;
             display: flex;
             justify-content: center;
             align-items: center;
@@ -25,13 +25,39 @@
         }
 
         .login-container {
-            background: rgba(20, 20, 20, 0.95);
-            border: 1px solid #333;
-            border-radius: 12px;
+            background: rgba(10, 10, 10, 0.98);
+            border: 1px solid rgba(255, 51, 51, 0.2);
+            border-left: 3px solid rgba(255, 51, 51, 0.4);
+            clip-path: polygon(0 0, 100% 0, 100% calc(100% - 20px), calc(100% - 20px) 100%, 0 100%);
             padding: 40px;
             width: 100%;
             max-width: 420px;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+            box-shadow: 
+                0 8px 32px rgba(0, 0, 0, 0.9),
+                -2px 0 15px rgba(255, 51, 51, 0.1);
+            position: relative;
+        }
+
+        .login-container::before {
+            content: '';
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 40px;
+            height: 40px;
+            border-top: 1px solid rgba(255, 51, 51, 0.3);
+            border-right: 1px solid rgba(255, 51, 51, 0.3);
+        }
+
+        .login-container::after {
+            content: '';
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            width: 40px;
+            height: 40px;
+            border-bottom: 1px solid rgba(255, 51, 51, 0.3);
+            border-left: 1px solid rgba(255, 51, 51, 0.3);
         }
 
         .logo {
@@ -40,16 +66,28 @@
         }
 
         .logo h1 {
-            color: #ff3333;
+            color: rgba(255, 51, 51, 0.8);
             font-size: 42px;
             margin-bottom: 5px;
-            text-shadow: 0 0 10px rgba(255, 51, 51, 0.5);
+            text-shadow: 
+                0 0 20px rgba(255, 51, 51, 0.2),
+                0 0 5px rgba(255, 0, 0, 0.15);
             font-family: 'Bebas Neue', 'Impact', sans-serif;
             letter-spacing: 5px;
+            position: relative;
+        }
+        
+        .logo h1::after {
+            content: attr(data-text);
+            position: absolute;
+            left: 1px;
+            top: 1px;
+            z-index: -1;
+            color: rgba(255, 0, 0, 0.1);
         }
 
         .logo .subtitle {
-            color: #888;
+            color: #555;
             font-size: 14px;
             letter-spacing: 2px;
         }
@@ -61,7 +99,7 @@
         .form-group label {
             display: block;
             margin-bottom: 8px;
-            color: #aaa;
+            color: #666;
             font-size: 14px;
             font-weight: 500;
         }
@@ -69,38 +107,64 @@
         .form-group input {
             width: 100%;
             padding: 12px 15px;
-            background: rgba(40, 40, 40, 0.8);
-            border: 1px solid #444;
-            border-radius: 6px;
+            padding-left: 20px;
+            background: rgba(15, 15, 15, 0.9);
+            border: none;
+            border-left: 2px solid rgba(255, 51, 51, 0.3);
+            border-bottom: 1px solid rgba(255, 51, 51, 0.1);
+            border-radius: 0;
             color: #e0e0e0;
             font-size: 15px;
             transition: all 0.3s ease;
+            clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%);
         }
 
         .form-group input:focus {
             outline: none;
-            border-color: #ff3333;
-            background: rgba(45, 45, 45, 0.9);
-            box-shadow: 0 0 0 3px rgba(255, 51, 51, 0.2);
+            border-left-color: rgba(255, 51, 51, 0.6);
+            border-bottom-color: rgba(255, 51, 51, 0.3);
+            background: rgba(20, 20, 20, 0.95);
+            box-shadow: -2px 0 15px rgba(255, 51, 51, 0.15);
         }
 
         .btn-login {
             width: 100%;
             padding: 14px;
-            background: linear-gradient(135deg, #ff3333 0%, #cc0000 100%);
-            border: none;
-            border-radius: 6px;
-            color: #fff;
+            padding-left: 30px;
+            background: rgba(20, 20, 20, 0.9);
+            border: 1px solid rgba(255, 51, 51, 0.3);
+            border-left: 3px solid rgba(255, 51, 51, 0.4);
+            border-radius: 0;
+            color: rgba(255, 51, 51, 0.9);
             font-size: 16px;
             font-weight: 600;
             cursor: pointer;
             transition: all 0.3s ease;
             margin-top: 10px;
+            clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px));
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn-login::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 0;
+            height: 100%;
+            background: rgba(255, 51, 51, 0.1);
+            transition: width 0.4s ease;
+            clip-path: polygon(30% 0, 100% 0, 100% 100%, 0 100%);
+        }
+
+        .btn-login:hover::before {
+            width: 100%;
         }
 
         .btn-login:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(255, 51, 51, 0.4);
+            border-left-color: rgba(255, 51, 51, 0.7);
+            box-shadow: -2px 0 20px rgba(255, 51, 51, 0.2);
         }
 
         .btn-login:active {
@@ -108,20 +172,25 @@
         }
 
         .btn-login:disabled {
-            background: #444;
+            background: rgba(20, 20, 20, 0.5);
+            border-color: rgba(100, 100, 100, 0.3);
+            color: #555;
             cursor: not-allowed;
             transform: none;
         }
 
         .error-message {
-            background: rgba(255, 50, 50, 0.1);
-            border: 1px solid rgba(255, 50, 50, 0.3);
-            color: #ff5555;
+            background: rgba(255, 50, 50, 0.05);
+            border: 1px solid rgba(255, 50, 50, 0.2);
+            border-left: 2px solid rgba(255, 50, 50, 0.4);
+            color: rgba(255, 85, 85, 0.9);
             padding: 12px;
-            border-radius: 6px;
+            padding-left: 18px;
+            border-radius: 0;
             margin-bottom: 20px;
             font-size: 14px;
             display: none;
+            clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%);
         }
 
         .error-message.show {

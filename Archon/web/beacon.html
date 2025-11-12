@@ -16,12 +16,12 @@
 
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #0f0f0f;
+            background: #000000;
             color: #e0e0e0;
         }
 
         .navbar {
-            background: rgba(20, 20, 20, 0.95);
+            background: rgba(10, 10, 10, 0.98);
             border-bottom: 1px solid #333;
             padding: 15px 30px;
             display: flex;
@@ -35,8 +35,8 @@
         .navbar-brand {
             font-size: 32px;
             font-weight: 700;
-            color: #ff3333;
-            text-shadow: 0 0 10px rgba(255, 51, 51, 0.5);
+            color: rgba(255, 51, 51, 0.8);
+            text-shadow: 0 0 15px rgba(255, 51, 51, 0.15);
             font-family: 'Bebas Neue', 'Impact', sans-serif;
             letter-spacing: 4px;
         }
@@ -49,10 +49,10 @@
 
         .btn-back {
             padding: 8px 16px;
-            background: rgba(255, 51, 51, 0.1);
-            border: 1px solid rgba(255, 51, 51, 0.3);
+            background: rgba(255, 51, 51, 0.05);
+            border: 1px solid rgba(255, 51, 51, 0.15);
             border-radius: 6px;
-            color: #ff3333;
+            color: rgba(255, 51, 51, 0.8);
             cursor: pointer;
             font-size: 13px;
             text-decoration: none;
@@ -60,11 +60,11 @@
         }
 
         .btn-back:hover {
-            background: rgba(255, 51, 51, 0.2);
+            background: rgba(255, 51, 51, 0.08);
         }
 
         .nav-menu {
-            background: rgba(25, 25, 25, 0.95);
+            background: rgba(10, 10, 10, 0.98);
             border-bottom: 1px solid #333;
             padding: 12px 30px;
             display: flex;
@@ -74,8 +74,8 @@
 
         .nav-btn {
             padding: 10px 24px;
-            background: rgba(255, 50, 50, 0.1);
-            border: 1px solid rgba(255, 50, 50, 0.3);
+            background: rgba(255, 50, 50, 0.05);
+            border: 1px solid rgba(255, 50, 50, 0.15);
             border-radius: 6px;
             color: #e0e0e0;
             cursor: pointer;
@@ -87,16 +87,16 @@
         }
 
         .nav-btn:hover {
-            background: rgba(255, 50, 50, 0.2);
+            background: rgba(255, 50, 50, 0.08);
             border-color: rgba(255, 50, 50, 0.5);
             transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(255, 50, 50, 0.2);
+            box-shadow: 0 4px 12px rgba(255, 50, 50, 0.08);
         }
 
         .nav-btn.active {
-            background: rgba(255, 50, 50, 0.3);
-            border-color: #ff3333;
-            color: #ff3333;
+            background: rgba(255, 50, 50, 0.15);
+            border-color: rgba(255, 51, 51, 0.8);
+            color: rgba(255, 51, 51, 0.8);
         }
 
         .container {
@@ -106,8 +106,8 @@
         }
 
         .beacon-header {
-            background: rgba(30, 30, 30, 0.8);
-            border: 1px solid rgba(255, 51, 51, 0.2);
+            background: rgba(15, 15, 15, 0.9);
+            border: 1px solid rgba(255, 51, 51, 0.08);
             border-radius: 8px;
             padding: 25px;
             margin-bottom: 30px;
@@ -117,10 +117,10 @@
             font-family: 'Bebas Neue', 'Arial Narrow', sans-serif;
             font-size: 36px;
             font-weight: 700;
-            color: #ff3333;
+            color: rgba(255, 51, 51, 0.8);
             margin-bottom: 20px;
             letter-spacing: 3px;
-            text-shadow: 0 0 15px rgba(255, 51, 51, 0.3);
+            text-shadow: 0 0 15px rgba(255, 51, 51, 0.15);
         }
 
         .beacon-info {
@@ -136,7 +136,7 @@
         }
 
         .beacon-info-label {
-            color: #888;
+            color: #555;
             font-size: 11px;
             margin-bottom: 5px;
             text-transform: uppercase;
@@ -167,7 +167,7 @@
         /* DNS Contacts Styling */
         .dns-contact-item {
             background: rgba(0, 0, 0, 0.3);
-            border: 1px solid rgba(255, 51, 51, 0.2);
+            border: 1px solid rgba(255, 51, 51, 0.08);
             border-radius: 6px;
             padding: 15px;
             margin-bottom: 10px;
@@ -179,7 +179,7 @@
             align-items: center;
             margin-bottom: 12px;
             padding-bottom: 10px;
-            border-bottom: 1px solid rgba(255, 51, 51, 0.2);
+            border-bottom: 1px solid rgba(255, 51, 51, 0.08);
         }
 
         .dns-contact-domain {
@@ -202,7 +202,7 @@
         }
 
         .detail-label {
-            color: #888;
+            color: #555;
             font-size: 11px;
             text-transform: uppercase;
         }
@@ -214,16 +214,30 @@
 
         .section {
             background: rgba(20, 20, 20, 0.6);
-            border: 1px solid rgba(255, 51, 51, 0.3);
-            border-radius: 8px;
+            border: 2px solid rgba(255, 51, 51, 0.15);
+            border-left: 3px solid rgba(255, 51, 51, 0.15);
+            border-radius: 0;
             padding: 20px;
             margin-bottom: 20px;
+            clip-path: polygon(0 0, 100% 0, 100% calc(100% - 15px), calc(100% - 15px) 100%, 0 100%);
+            position: relative;
+        }
+
+        .section::before {
+            content: '';
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            width: 25px;
+            height: 25px;
+            border-top: 2px solid #ff3333;
+            border-right: 2px solid #ff3333;
         }
 
         .section-title {
             font-family: 'Bebas Neue', sans-serif;
             font-size: 22px;
-            color: #ff3333;
+            color: rgba(255, 51, 51, 0.8);
             margin-bottom: 20px;
             letter-spacing: 2px;
         }
@@ -237,33 +251,60 @@
         .task-input {
             flex: 1;
             padding: 12px;
+            padding-left: 18px;
             background: rgba(0, 0, 0, 0.5);
-            border: 1px solid rgba(255, 51, 51, 0.3);
-            border-radius: 6px;
+            border: none;
+            border-left: 3px solid rgba(255, 51, 51, 0.5);
+            border-bottom: 1px solid rgba(255, 51, 51, 0.15);
+            border-radius: 0;
             color: #fff;
             font-family: 'Courier New', monospace;
             font-size: 14px;
+            clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%);
         }
 
         .task-input:focus {
             outline: none;
-            border-color: #ff3333;
+            border-left-color: rgba(255, 51, 51, 0.8);
+            border-bottom-color: rgba(255, 51, 51, 0.8);
+            box-shadow: -2px 0 15px rgba(255, 51, 51, 0.15);
         }
 
         .btn-task {
             padding: 12px 24px;
-            background: rgba(255, 51, 51, 0.2);
-            border: 1px solid #ff3333;
-            border-radius: 6px;
-            color: #ff3333;
+            padding-left: 30px;
+            background: rgba(255, 51, 51, 0.08);
+            border: none;
+            border-left: 2px solid rgba(255, 51, 51, 0.15);
+            border-radius: 0;
+            color: rgba(255, 51, 51, 0.8);
             cursor: pointer;
             font-size: 14px;
             font-weight: bold;
             transition: all 0.3s ease;
+            clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn-task::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 0;
+            height: 100%;
+            background: rgba(255, 51, 51, 0.08);
+            transition: width 0.3s ease;
+        }
+
+        .btn-task:hover::before {
+            width: 100%;
         }
 
         .btn-task:hover {
-            background: rgba(255, 51, 51, 0.3);
+            border-left-width: 4px;
+            box-shadow: -3px 0 12px rgba(255, 51, 51, 0.4);
         }
 
         .btn-task:disabled {
@@ -279,7 +320,7 @@
 
         .task-item {
             background: rgba(0, 0, 0, 0.5);
-            border: 1px solid rgba(255, 51, 51, 0.2);
+            border: 1px solid rgba(255, 51, 51, 0.08);
             border-radius: 6px;
             padding: 15px;
             cursor: pointer;
@@ -292,8 +333,8 @@
         }
 
         .task-item.selected {
-            border-color: #ff3333;
-            background: rgba(255, 51, 51, 0.1);
+            border-color: rgba(255, 51, 51, 0.8);
+            background: rgba(255, 51, 51, 0.05);
         }
 
         .task-header {
@@ -305,7 +346,7 @@
 
         .task-id {
             font-weight: bold;
-            color: #ff3333;
+            color: rgba(255, 51, 51, 0.8);
         }
 
         .task-status {
@@ -369,13 +410,13 @@
         }
 
         .task-time {
-            color: #666;
+            color: #444;
             font-size: 11px;
         }
 
         .result-viewer {
             background: rgba(0, 0, 0, 0.7);
-            border: 1px solid rgba(255, 51, 51, 0.3);
+            border: 1px solid rgba(255, 51, 51, 0.15);
             border-radius: 6px;
             padding: 15px;
             margin-top: 15px;
@@ -389,27 +430,27 @@
             align-items: center;
             margin-bottom: 10px;
             padding-bottom: 10px;
-            border-bottom: 1px solid rgba(255, 51, 51, 0.2);
+            border-bottom: 1px solid rgba(255, 51, 51, 0.08);
         }
 
         .result-title {
-            color: #ff3333;
+            color: rgba(255, 51, 51, 0.8);
             font-weight: bold;
         }
 
         .btn-copy {
             padding: 6px 12px;
-            background: rgba(255, 51, 51, 0.1);
-            border: 1px solid rgba(255, 51, 51, 0.3);
+            background: rgba(255, 51, 51, 0.05);
+            border: 1px solid rgba(255, 51, 51, 0.15);
             border-radius: 4px;
-            color: #ff3333;
+            color: rgba(255, 51, 51, 0.8);
             cursor: pointer;
             font-size: 11px;
             transition: all 0.3s ease;
         }
 
         .btn-copy:hover {
-            background: rgba(255, 51, 51, 0.2);
+            background: rgba(255, 51, 51, 0.08);
         }
 
         .result-content {
@@ -424,7 +465,7 @@
         .empty-state {
             text-align: center;
             padding: 40px;
-            color: #666;
+            color: #444;
         }
 
         .empty-state-icon {
@@ -454,7 +495,7 @@
             width: 50px;
             height: 50px;
             border: 4px solid #333;
-            border-top-color: #ff3333;
+            border-top-color: rgba(255, 51, 51, 0.8);
             border-radius: 50%;
             animation: spin 1s linear infinite;
         }
@@ -483,7 +524,7 @@
         }
 
         code {
-            background: rgba(255, 51, 51, 0.1);
+            background: rgba(255, 51, 51, 0.05);
             padding: 2px 6px;
             border-radius: 3px;
             font-family: 'Courier New', monospace;
@@ -492,16 +533,16 @@
         .no-result {
             text-align: center;
             padding: 20px;
-            color: #888;
+            color: #555;
             font-style: italic;
         }
 
         .btn-refresh {
             padding: 6px 12px;
-            background: rgba(255, 51, 51, 0.1);
-            border: 1px solid rgba(255, 51, 51, 0.3);
+            background: rgba(255, 51, 51, 0.05);
+            border: 1px solid rgba(255, 51, 51, 0.15);
             border-radius: 4px;
-            color: #ff3333;
+            color: rgba(255, 51, 51, 0.8);
             cursor: pointer;
             font-size: 11px;
             transition: all 0.3s ease;
@@ -509,7 +550,7 @@
         }
 
         .btn-refresh:hover {
-            background: rgba(255, 51, 51, 0.2);
+            background: rgba(255, 51, 51, 0.08);
         }
 
         .progress-bar-container {
@@ -530,7 +571,7 @@
 
         .progress-text {
             font-size: 11px;
-            color: #888;
+            color: #555;
             margin-top: 3px;
         }
 
@@ -558,7 +599,7 @@
 
         .progress-text-small {
             font-size: 10px;
-            color: #888;
+            color: #555;
         }
 
         /* Enhanced status colors */
@@ -1004,7 +1045,7 @@
                                 <div class="progress-text" style="margin-top: 10px; font-size: 13px;">
                                     <strong>${progress.received_chunks} / ${progress.total_chunks} chunks</strong> (${progress.progress}%)
                                 </div>
-                                ${progress.status ? `<div style="color: #888; font-size: 11px; margin-top: 5px;">Status: ${progress.status}</div>` : ''}
+                                ${progress.status ? `<div style="color: #555; font-size: 11px; margin-top: 5px;">Status: ${progress.status}</div>` : ''}
                             </div>`;
                     } else {
                         resultContent.innerHTML = `
@@ -1028,7 +1069,7 @@
                             <div style="color: #999; font-size: 13px;">
                                 Beacon did not check in within 48 hours
                             </div>
-                            <div style="color: #666; margin-top: 15px; font-size: 12px; line-height: 1.6;">
+                            <div style="color: #444; margin-top: 15px; font-size: 12px; line-height: 1.6;">
                                 This task was automatically expired by the cleanup job.<br>
                                 The beacon may be offline or have a very long callback interval.<br>
                                 You can create a new task if the beacon comes back online.
@@ -1047,7 +1088,7 @@
                             <div style="color: #ff8c00; margin: 15px 0; font-size: 14px;">
                                 Received ${prog.received_chunks} of ${prog.total_chunks} chunks (${percentReceived}%)
                             </div>
-                            <div style="color: #666; font-size: 12px; line-height: 1.6;">
+                            <div style="color: #444; font-size: 12px; line-height: 1.6;">
                                 Beacon stopped responding before completing the transfer.<br>
                                 The beacon may have crashed, lost network, or been terminated.<br>
                                 <br>
@@ -1063,7 +1104,7 @@
                             <div style="color: #cd853f; margin: 15px 0; font-size: 13px;">
                                 Task execution exceeded the timeout limit
                             </div>
-                            <div style="color: #666; font-size: 12px; line-height: 1.6;">
+                            <div style="color: #444; font-size: 12px; line-height: 1.6;">
                                 The command may have hung or taken longer than expected.<br>
                                 Consider breaking down long-running tasks or increasing timeout limits.
                             </div>

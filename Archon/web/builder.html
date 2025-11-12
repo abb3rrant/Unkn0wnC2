@@ -16,12 +16,12 @@
 
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #0f0f0f;
+            background: #000000;
             color: #e0e0e0;
         }
 
         .navbar {
-            background: rgba(20, 20, 20, 0.95);
+            background: rgba(10, 10, 10, 0.98);
             border-bottom: 1px solid #333;
             padding: 15px 30px;
             display: flex;
@@ -35,8 +35,8 @@
         .navbar-brand {
             font-size: 32px;
             font-weight: 700;
-            color: #ff3333;
-            text-shadow: 0 0 10px rgba(255, 51, 51, 0.5);
+            color: rgba(255, 51, 51, 0.8);
+            text-shadow: 0 0 15px rgba(255, 51, 51, 0.15);
             font-family: 'Bebas Neue', 'Impact', sans-serif;
             letter-spacing: 4px;
         }
@@ -47,24 +47,24 @@
         }
 
         .nav-link {
-            color: #888;
+            color: #555;
             text-decoration: none;
             padding: 8px 16px;
             border-radius: 4px;
             transition: all 0.3s;
         }
         .nav-link:hover {
-            color: #ff3333;
-            background: rgba(255, 51, 51, 0.1);
+            color: rgba(255, 51, 51, 0.8);
+            background: rgba(255, 51, 51, 0.05);
         }
 
         .nav-link.active {
-            color: #ff3333;
-            background: rgba(255, 51, 51, 0.2);
+            color: rgba(255, 51, 51, 0.8);
+            background: rgba(255, 51, 51, 0.08);
         }
 
         .nav-menu {
-            background: rgba(25, 25, 25, 0.95);
+            background: rgba(10, 10, 10, 0.98);
             border-bottom: 1px solid #333;
             padding: 12px 30px;
             display: flex;
@@ -74,8 +74,8 @@
 
         .nav-btn {
             padding: 10px 24px;
-            background: rgba(255, 50, 50, 0.1);
-            border: 1px solid rgba(255, 50, 50, 0.3);
+            background: rgba(255, 50, 50, 0.05);
+            border: 1px solid rgba(255, 50, 50, 0.15);
             border-radius: 6px;
             color: #e0e0e0;
             cursor: pointer;
@@ -87,16 +87,16 @@
         }
 
         .nav-btn:hover {
-            background: rgba(255, 50, 50, 0.2);
+            background: rgba(255, 50, 50, 0.08);
             border-color: rgba(255, 50, 50, 0.5);
             transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(255, 50, 50, 0.2);
+            box-shadow: 0 4px 12px rgba(255, 50, 50, 0.08);
         }
 
         .nav-btn.active {
-            background: rgba(255, 50, 50, 0.3);
-            border-color: #ff3333;
-            color: #ff3333;
+            background: rgba(255, 50, 50, 0.15);
+            border-color: rgba(255, 51, 51, 0.8);
+            color: rgba(255, 51, 51, 0.8);
         }
 
         .container {
@@ -113,28 +113,46 @@
         }
 
         .builder-card {
-            background: rgba(30, 30, 30, 0.8);
-            border: 1px solid rgba(255, 51, 51, 0.2);
-            border-radius: 8px;
+            background: rgba(15, 15, 15, 0.9);
+            border: 2px solid rgba(255, 51, 51, 0.15);
+            border-top: 3px solid #ff3333;
+            border-left: 2px solid rgba(255, 51, 51, 0.15);
+            border-radius: 0;
             padding: 20px;
             transition: all 0.3s;
+            clip-path: polygon(0 0, 100% 0, 100% calc(100% - 15px), calc(100% - 15px) 100%, 0 100%);
+            position: relative;
+        }
+
+        .builder-card::before {
+            content: '';
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 25px;
+            height: 25px;
+            border-top: 2px solid #ff3333;
+            border-right: 2px solid #ff3333;
         }
 
         .builder-card:hover {
-            border-color: rgba(255, 51, 51, 0.6);
-            box-shadow: 0 0 20px rgba(255, 51, 51, 0.2);
+            border-color: rgba(255, 51, 51, 0.8);
+            box-shadow: 
+                0 0 20px rgba(255, 51, 51, 0.15),
+                -3px 0 15px rgba(255, 51, 51, 0.08);
+            transform: translateX(5px);
         }
 
         .builder-title {
             font-family: 'Bebas Neue', sans-serif;
             font-size: 24px;
-            color: #ff3333;
+            color: rgba(255, 51, 51, 0.8);
             margin-bottom: 15px;
             letter-spacing: 2px;
         }
 
         .builder-description {
-            color: #888;
+            color: #555;
             margin-bottom: 20px;
             font-size: 13px;
             line-height: 1.6;
@@ -155,39 +173,66 @@
         .form-input, .form-select {
             width: 100%;
             padding: 10px;
+            padding-left: 15px;
             background: rgba(0, 0, 0, 0.5);
-            border: 1px solid rgba(255, 51, 51, 0.3);
-            border-radius: 4px;
+            border: none;
+            border-left: 2px solid rgba(255, 51, 51, 0.5);
+            border-bottom: 1px solid rgba(255, 51, 51, 0.15);
+            border-radius: 0;
             color: #fff;
             font-family: 'Courier New', monospace;
             font-size: 13px;
+            clip-path: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 0 100%);
         }
 
         .form-input:focus, .form-select:focus {
             outline: none;
-            border-color: #ff3333;
+            border-left-color: rgba(255, 51, 51, 0.8);
+            border-bottom-color: rgba(255, 51, 51, 0.8);
+            box-shadow: -2px 0 10px rgba(255, 51, 51, 0.15);
         }
 
         .form-input::placeholder {
-            color: #666;
+            color: #444;
         }
 
         .btn-build {
             width: 100%;
             padding: 12px;
-            background: rgba(255, 51, 51, 0.2);
-            border: 1px solid #ff3333;
-            border-radius: 6px;
-            color: #ff3333;
+            padding-left: 25px;
+            background: rgba(255, 51, 51, 0.08);
+            border: none;
+            border-left: 3px solid rgba(255, 51, 51, 0.15);
+            border-radius: 0;
+            color: rgba(255, 51, 51, 0.8);
             font-weight: bold;
             cursor: pointer;
             transition: all 0.3s;
             font-size: 14px;
             margin-top: 10px;
+            clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px));
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn-build::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 0;
+            height: 100%;
+            background: rgba(255, 51, 51, 0.15);
+            transition: width 0.4s ease;
+        }
+
+        .btn-build:hover::after {
+            width: 100%;
         }
 
         .btn-build:hover {
-            background: rgba(255, 51, 51, 0.3);
+            border-left-width: 6px;
+            box-shadow: -4px 0 15px rgba(255, 51, 51, 0.4);
         }
 
         .btn-build:disabled {
@@ -217,14 +262,14 @@
             width: 50px;
             height: 50px;
             border: 4px solid #333;
-            border-top-color: #ff3333;
+            border-top-color: rgba(255, 51, 51, 0.8);
             border-radius: 50%;
             animation: spin 1s linear infinite;
             margin-bottom: 20px;
         }
 
         .loading-text {
-            color: #ff3333;
+            color: rgba(255, 51, 51, 0.8);
             font-size: 16px;
         }
 
@@ -255,20 +300,20 @@
             font-family: 'Bebas Neue', 'Arial Narrow', sans-serif;
             font-size: 36px;
             font-weight: 700;
-            color: #ff3333;
+            color: rgba(255, 51, 51, 0.8);
             margin-bottom: 25px;
             letter-spacing: 3px;
-            text-shadow: 0 0 15px rgba(255, 51, 51, 0.3);
+            text-shadow: 0 0 15px rgba(255, 51, 51, 0.15);
         }
 
         .help-text {
-            color: #666;
+            color: #444;
             font-size: 11px;
             margin-top: 3px;
         }
 
         .advanced-toggle {
-            color: #888;
+            color: #555;
             cursor: pointer;
             font-size: 12px;
             margin-bottom: 10px;
@@ -276,7 +321,7 @@
         }
 
         .advanced-toggle:hover {
-            color: #ff3333;
+            color: rgba(255, 51, 51, 0.8);
         }
 
         .advanced-section {
@@ -368,7 +413,7 @@
 
                 <div class="form-group">
                     <label class="form-label">DNS Servers</label>
-                    <div id="clientDNSServersList" style="background: rgba(255, 255, 255, 0.05); padding: 10px; border-radius: 4px; min-height: 80px; color: #aaa;">
+                    <div id="clientDNSServersList" style="background: rgba(255, 255, 255, 0.05); padding: 10px; border-radius: 4px; min-height: 80px; color: #444;">
                         Loading DNS servers...
                     </div>
                     <div class="help-text">All registered DNS servers will be included automatically</div>
@@ -428,7 +473,7 @@
                         <option value="" disabled selected>Loading...</option>
                     </select>
                     <div class="help-text">Pre-built beacon to deploy via stager 
-                        <button onclick="loadClientBinaries(); return false;" style="background: none; border: none; color: #ff3333; cursor: pointer; padding: 0 5px;">Refresh</button>
+                        <button onclick="loadClientBinaries(); return false;" style="background: none; border: none; color: rgba(255, 51, 51, 0.8); cursor: pointer; padding: 0 5px;">Refresh</button>
                     </div>
                 </div>
 
@@ -481,7 +526,7 @@
                 Download or delete previously built binaries
             </div>
             <div id="buildsContainer" style="margin-top: 20px;">
-                <div style="text-align: center; color: #666; padding: 20px;">Loading builds...</div>
+                <div style="text-align: center; color: #444; padding: 20px;">Loading builds...</div>
             </div>
         </div>
     </div>
@@ -573,7 +618,7 @@
                 const clientList = document.getElementById('clientDNSServersList');
 
                 if (servers.length === 0) {
-                    clientList.innerHTML = '<span style="color: #888;">No DNS servers registered yet. Build a DNS server first.</span>';
+                    clientList.innerHTML = '<span style="color: #555;">No DNS servers registered yet. Build a DNS server first.</span>';
                 } else {
                     clientList.innerHTML = servers.map(server => 
                         `<div style="padding: 5px; color: #4CAF50;">✓ ${server.domain} (${server.id})</div>`
@@ -828,7 +873,7 @@
                 const container = document.getElementById('buildsContainer');
 
                 if (builds.length === 0) {
-                    container.innerHTML = '<div style="text-align: center; color: #666; padding: 20px;">No saved builds yet</div>';
+                    container.innerHTML = '<div style="text-align: center; color: #444; padding: 20px;">No saved builds yet</div>';
                     return;
                 }
 
@@ -850,10 +895,10 @@
 
                 for (const [type, items] of Object.entries(grouped)) {
                     html += `<div style="margin-bottom: 30px;">
-                        <h3 style="color: #ff3333; font-size: 18px; margin-bottom: 10px;">${typeNames[type] || type}</h3>
+                        <h3 style="color: rgba(255, 51, 51, 0.8); font-size: 18px; margin-bottom: 10px;">${typeNames[type] || type}</h3>
                         <table style="width: 100%; border-collapse: collapse;">
                             <thead>
-                                <tr style="background: rgba(255, 51, 51, 0.1); text-align: left;">
+                                <tr style="background: rgba(255, 51, 51, 0.05); text-align: left;">
                                     <th style="padding: 10px;">Name</th>
                                     <th style="padding: 10px;">Size</th>
                                     <th style="padding: 10px;">Date</th>
@@ -872,8 +917,8 @@
 
                         html += `<tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.05);">
                             <td style="padding: 10px; color: #ccc;">${build.name}</td>
-                            <td style="padding: 10px; color: #888;">${sizeStr}</td>
-                            <td style="padding: 10px; color: #888;">${date}</td>
+                            <td style="padding: 10px; color: #555;">${sizeStr}</td>
+                            <td style="padding: 10px; color: #555;">${date}</td>
                             <td style="padding: 10px; text-align: right;">
                                 <button onclick="downloadBuild('${build.path.replace(/\\/g, '\\\\')}')" 
                                     style="background: #28a745; color: white; border: none; padding: 5px 10px; 

@@ -16,12 +16,12 @@
 
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #0f0f0f;
+            background: #000000;
             color: #e0e0e0;
         }
 
         .navbar {
-            background: rgba(20, 20, 20, 0.95);
+            background: rgba(10, 10, 10, 0.98);
             border-bottom: 1px solid #333;
             padding: 15px 30px;
             display: flex;
@@ -35,8 +35,8 @@
         .navbar-brand {
             font-size: 32px;
             font-weight: 700;
-            color: #ff3333;
-            text-shadow: 0 0 10px rgba(255, 51, 51, 0.5);
+            color: rgba(255, 51, 51, 0.8);
+            text-shadow: 0 0 15px rgba(255, 51, 51, 0.15);
             font-family: 'Bebas Neue', 'Impact', sans-serif;
             letter-spacing: 4px;
         }
@@ -47,7 +47,7 @@
         }
 
         .nav-link {
-            color: #888;
+            color: #555;
             text-decoration: none;
             padding: 8px 16px;
             border-radius: 4px;
@@ -55,12 +55,12 @@
         }
 
         .nav-link:hover {
-            color: #ff3333;
-            background: rgba(255, 51, 51, 0.1);
+            color: rgba(255, 51, 51, 0.8);
+            background: rgba(255, 51, 51, 0.05);
         }
 
         .nav-menu {
-            background: rgba(25, 25, 25, 0.95);
+            background: rgba(10, 10, 10, 0.98);
             border-bottom: 1px solid #333;
             padding: 12px 30px;
             display: flex;
@@ -70,8 +70,8 @@
 
         .nav-btn {
             padding: 10px 24px;
-            background: rgba(255, 50, 50, 0.1);
-            border: 1px solid rgba(255, 50, 50, 0.3);
+            background: rgba(255, 50, 50, 0.05);
+            border: 1px solid rgba(255, 50, 50, 0.15);
             border-radius: 6px;
             color: #e0e0e0;
             cursor: pointer;
@@ -83,16 +83,16 @@
         }
 
         .nav-btn:hover {
-            background: rgba(255, 50, 50, 0.2);
+            background: rgba(255, 50, 50, 0.08);
             border-color: rgba(255, 50, 50, 0.5);
             transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(255, 50, 50, 0.2);
+            box-shadow: 0 4px 12px rgba(255, 50, 50, 0.08);
         }
 
         .nav-btn.active {
-            background: rgba(255, 50, 50, 0.3);
-            border-color: #ff3333;
-            color: #ff3333;
+            background: rgba(255, 50, 50, 0.15);
+            border-color: rgba(255, 51, 51, 0.8);
+            color: rgba(255, 51, 51, 0.8);
         }
 
         .container {
@@ -105,10 +105,10 @@
             font-family: 'Bebas Neue', 'Arial Narrow', sans-serif;
             font-size: 36px;
             font-weight: 700;
-            color: #ff3333;
+            color: rgba(255, 51, 51, 0.8);
             margin-bottom: 25px;
             letter-spacing: 3px;
-            text-shadow: 0 0 15px rgba(255, 51, 51, 0.3);
+            text-shadow: 0 0 15px rgba(255, 51, 51, 0.15);
         }
 
         .stats-grid {
@@ -119,38 +119,70 @@
         }
 
         .stat-card {
-            background: rgba(30, 30, 30, 0.8);
-            border: 1px solid rgba(255, 51, 51, 0.2);
-            border-radius: 8px;
+            background: rgba(15, 15, 15, 0.9);
+            border: 2px solid rgba(255, 51, 51, 0.15);
+            border-top: 3px solid #ff3333;
+            border-left: 2px solid rgba(255, 51, 51, 0.15);
+            border-radius: 0;
             padding: 20px;
             transition: all 0.3s;
+            clip-path: polygon(0 0, 100% 0, 100% calc(100% - 15px), calc(100% - 15px) 100%, 0 100%);
+            position: relative;
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 25px;
+            height: 25px;
+            border-top: 2px solid #ff3333;
+            border-right: 2px solid #ff3333;
         }
 
         .stat-card:hover {
-            border-color: rgba(255, 51, 51, 0.6);
-            box-shadow: 0 0 20px rgba(255, 51, 51, 0.2);
+            border-color: rgba(255, 51, 51, 0.8);
+            box-shadow: 
+                0 0 20px rgba(255, 51, 51, 0.15),
+                -3px 0 15px rgba(255, 51, 51, 0.08);
+            transform: translateY(-3px);
         }
 
         .stat-label {
-            color: #888;
+            color: #555;
             font-size: 12px;
             text-transform: uppercase;
             margin-bottom: 8px;
         }
 
         .stat-value {
-            color: #ff3333;
+            color: rgba(255, 51, 51, 0.8);
             font-size: 32px;
             font-weight: bold;
             font-family: 'Bebas Neue', sans-serif;
         }
 
         .sessions-table {
-            background: rgba(30, 30, 30, 0.8);
-            border: 1px solid rgba(255, 51, 51, 0.2);
-            border-radius: 8px;
+            background: rgba(15, 15, 15, 0.9);
+            border: 2px solid rgba(255, 51, 51, 0.15);
+            border-left: 3px solid rgba(255, 51, 51, 0.15);
+            border-radius: 0;
             padding: 20px;
             overflow-x: auto;
+            clip-path: polygon(0 0, 100% 0, 100% calc(100% - 20px), calc(100% - 20px) 100%, 0 100%);
+            position: relative;
+        }
+
+        .sessions-table::before {
+            content: '';
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            width: 30px;
+            height: 30px;
+            border-top: 2px solid #ff3333;
+            border-right: 2px solid #ff3333;
         }
 
         table {
@@ -161,8 +193,8 @@
         th {
             text-align: left;
             padding: 12px;
-            border-bottom: 2px solid rgba(255, 51, 51, 0.3);
-            color: #ff3333;
+            border-bottom: 2px solid rgba(255, 51, 51, 0.15);
+            color: rgba(255, 51, 51, 0.8);
             font-size: 12px;
             text-transform: uppercase;
             letter-spacing: 1px;
@@ -181,22 +213,24 @@
         .status-badge {
             display: inline-block;
             padding: 4px 12px;
-            border-radius: 4px;
+            padding-left: 16px;
+            border-radius: 0;
             font-size: 11px;
             font-weight: bold;
             text-transform: uppercase;
+            clip-path: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 0 100%);
         }
 
         .status-active {
             background: rgba(255, 165, 0, 0.2);
             color: #ffa500;
-            border: 1px solid rgba(255, 165, 0, 0.4);
+            border-left: 3px solid #ffa500;
         }
 
         .status-completed {
             background: rgba(0, 255, 0, 0.2);
             color: #00ff00;
-            border: 1px solid rgba(0, 255, 0, 0.4);
+            border-left: 3px solid #00ff00;
         }
 
         .status-failed {
@@ -209,7 +243,7 @@
             width: 250px;
             height: 24px;
             background: rgba(0, 0, 0, 0.5);
-            border: 1px solid rgba(255, 51, 51, 0.3);
+            border: 1px solid rgba(255, 51, 51, 0.15);
             border-radius: 4px;
             overflow: hidden;
             position: relative;
@@ -235,7 +269,7 @@
         .empty-state {
             text-align: center;
             padding: 60px 20px;
-            color: #666;
+            color: #444;
         }
 
         .empty-state-icon {
@@ -244,9 +278,9 @@
         }
 
         .refresh-btn {
-            background: rgba(255, 51, 51, 0.2);
+            background: rgba(255, 51, 51, 0.08);
             border: 1px solid #ff3333;
-            color: #ff3333;
+            color: rgba(255, 51, 51, 0.8);
             padding: 8px 16px;
             border-radius: 4px;
             cursor: pointer;
@@ -255,7 +289,7 @@
         }
 
         .refresh-btn:hover {
-            background: rgba(255, 51, 51, 0.3);
+            background: rgba(255, 51, 51, 0.15);
         }
 
         .auto-refresh {
@@ -266,7 +300,7 @@
         }
 
         .auto-refresh label {
-            color: #888;
+            color: #555;
             font-size: 13px;
         }
 
@@ -281,7 +315,7 @@
         }
 
         .toggle-switch.active {
-            background: rgba(255, 51, 51, 0.3);
+            background: rgba(255, 51, 51, 0.15);
         }
 
         .toggle-slider {
@@ -507,7 +541,7 @@
                             <td colspan="9" class="empty-state">
                                 <div class="empty-state-icon">📭</div>
                                 <div>No stager sessions yet</div>
-                                <div style="margin-top: 10px; color: #666; font-size: 12px;">
+                                <div style="margin-top: 10px; color: #444; font-size: 12px;">
                                     Deploy a stager to see sessions here
                                 </div>
                             </td>
@@ -555,7 +589,7 @@
 
                     return `
                         <tr>
-                            <td><code style="color: #ff3333;">${session.id}</code></td>
+                            <td><code style="color: rgba(255, 51, 51, 0.8);">${session.id}</code></td>
                             <td>${session.stager_ip}</td>
                             <td>${session.os}/${session.arch}</td>
                             <td>

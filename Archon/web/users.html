@@ -16,12 +16,12 @@
 
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #0f0f0f;
+            background: #000000;
             color: #e0e0e0;
         }
 
         .navbar {
-            background: rgba(20, 20, 20, 0.95);
+            background: rgba(10, 10, 10, 0.98);
             border-bottom: 1px solid #333;
             padding: 15px 30px;
             display: flex;
@@ -35,8 +35,8 @@
         .navbar-brand {
             font-size: 32px;
             font-weight: 700;
-            color: #ff3333;
-            text-shadow: 0 0 10px rgba(255, 51, 51, 0.5);
+            color: rgba(255, 51, 51, 0.8);
+            text-shadow: 0 0 15px rgba(255, 51, 51, 0.15);
             font-family: 'Bebas Neue', 'Impact', sans-serif;
             letter-spacing: 4px;
         }
@@ -49,8 +49,8 @@
 
         .btn-logout {
             padding: 8px 20px;
-            background: rgba(255, 50, 50, 0.2);
-            border: 1px solid rgba(255, 50, 50, 0.3);
+            background: rgba(255, 50, 50, 0.08);
+            border: 1px solid rgba(255, 50, 50, 0.15);
             border-radius: 6px;
             color: #ff5555;
             cursor: pointer;
@@ -59,12 +59,12 @@
         }
 
         .btn-logout:hover {
-            background: rgba(255, 50, 50, 0.3);
+            background: rgba(255, 50, 50, 0.15);
             transform: translateY(-2px);
         }
 
         .nav-menu {
-            background: rgba(25, 25, 25, 0.95);
+            background: rgba(10, 10, 10, 0.98);
             border-bottom: 1px solid #333;
             padding: 12px 30px;
             display: flex;
@@ -76,8 +76,8 @@
 
         .nav-btn {
             padding: 10px 24px;
-            background: rgba(255, 50, 50, 0.1);
-            border: 1px solid rgba(255, 50, 50, 0.3);
+            background: rgba(255, 50, 50, 0.05);
+            border: 1px solid rgba(255, 50, 50, 0.15);
             border-radius: 6px;
             color: #e0e0e0;
             cursor: pointer;
@@ -89,16 +89,16 @@
         }
 
         .nav-btn:hover {
-            background: rgba(255, 50, 50, 0.2);
+            background: rgba(255, 50, 50, 0.08);
             border-color: rgba(255, 50, 50, 0.5);
             transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(255, 50, 50, 0.2);
+            box-shadow: 0 4px 12px rgba(255, 50, 50, 0.08);
         }
 
         .nav-btn.active {
-            background: rgba(255, 50, 50, 0.3);
-            border-color: #ff3333;
-            color: #ff3333;
+            background: rgba(255, 50, 50, 0.15);
+            border-color: rgba(255, 51, 51, 0.8);
+            color: rgba(255, 51, 51, 0.8);
         }
 
         .container {
@@ -108,11 +108,25 @@
         }
 
         .section {
-            background: rgba(20, 20, 20, 0.95);
-            border: 1px solid #333;
-            border-radius: 12px;
+            background: rgba(10, 10, 10, 0.98);
+            border: 1px solid rgba(255, 51, 51, 0.15);
+            border-left: 3px solid rgba(255, 51, 51, 0.15);
+            border-radius: 0;
             padding: 25px;
             margin-bottom: 30px;
+            clip-path: polygon(0 0, 100% 0, 100% calc(100% - 20px), calc(100% - 20px) 100%, 0 100%);
+            position: relative;
+        }
+
+        .section::after {
+            content: '';
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            width: 30px;
+            height: 30px;
+            border-top: 2px solid #ff3333;
+            border-right: 2px solid #ff3333;
         }
 
         .section-header {
@@ -121,13 +135,14 @@
             align-items: center;
             margin-bottom: 20px;
             padding-bottom: 15px;
-            border-bottom: 1px solid #333;
+            border-bottom: 2px solid #ff3333;
+            border-image: linear-gradient(to right, #ff3333 0%, transparent 100%) 1;
         }
 
         .section-title {
             font-size: 24px;
             font-weight: 600;
-            color: #ff3333;
+            color: rgba(255, 51, 51, 0.8);
             font-family: 'Bebas Neue', 'Arial Narrow', sans-serif;
             letter-spacing: 2px;
         }
@@ -135,48 +150,67 @@
         .section-title {
             font-size: 24px;
             font-weight: 600;
-            color: #ff3333;
+            color: rgba(255, 51, 51, 0.8);
             font-family: 'Bebas Neue', 'Arial Narrow', sans-serif;
             letter-spacing: 2px;
         }
 
         .btn {
             padding: 8px 16px;
-            background: rgba(255, 51, 51, 0.1);
-            border: 1px solid rgba(255, 51, 51, 0.3);
-            border-radius: 6px;
-            color: #ff3333;
+            padding-left: 22px;
+            background: rgba(255, 51, 51, 0.05);
+            border: none;
+            border-left: 3px solid rgba(255, 51, 51, 0.5);
+            border-radius: 0;
+            color: rgba(255, 51, 51, 0.8);
             cursor: pointer;
             font-size: 14px;
             font-weight: 500;
             transition: all 0.3s ease;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            clip-path: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 0 100%);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 0;
+            height: 100%;
+            background: rgba(255, 51, 51, 0.15);
+            transition: width 0.3s ease;
+        }
+
+        .btn:hover::before {
+            width: 100%;
         }
 
         .btn:hover {
-            background: rgba(255, 51, 51, 0.2);
-            border-color: rgba(255, 51, 51, 0.5);
+            border-left-color: rgba(255, 51, 51, 0.8);
             transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(255, 50, 50, 0.2);
+            box-shadow: -2px 0 12px rgba(255, 50, 50, 0.05);
         }
 
         .btn-primary {
-            background: rgba(255, 51, 51, 0.2);
-            border-color: #ff3333;
+            background: rgba(255, 51, 51, 0.08);
+            border-left-color: rgba(255, 51, 51, 0.8);
         }
 
         .btn-primary:hover {
-            background: rgba(255, 51, 51, 0.3);
+            background: rgba(255, 51, 51, 0.15);
         }
 
         .btn-danger {
-            background: rgba(255, 50, 50, 0.2);
-            border-color: #ff5555;
+            background: rgba(255, 50, 50, 0.08);
+            border-left-color: #ff5555;
             color: #ff5555;
         }
 
         .btn-danger:hover {
-            background: rgba(255, 50, 50, 0.3);
+            background: rgba(255, 50, 50, 0.15);
         }
 
         .btn-success {
@@ -202,14 +236,14 @@
         }
 
         .table thead {
-            background: rgba(255, 51, 51, 0.1);
+            background: rgba(255, 51, 51, 0.05);
         }
 
         .table th {
             padding: 12px;
             text-align: left;
             font-size: 13px;
-            color: #ff3333;
+            color: rgba(255, 51, 51, 0.8);
             text-transform: uppercase;
             letter-spacing: 1px;
             font-weight: 600;
@@ -238,7 +272,7 @@
         }
 
         .role-admin {
-            background: rgba(255, 50, 50, 0.2);
+            background: rgba(255, 50, 50, 0.08);
             color: #ff5555;
         }
 
@@ -292,12 +326,37 @@
 
         .modal-content {
             background: rgba(20, 20, 20, 0.98);
-            border: 1px solid #333;
-            border-radius: 12px;
+            border: 2px solid #ff3333;
+            border-left: 3px solid rgba(255, 51, 51, 0.15);
+            border-radius: 0;
             padding: 30px;
             max-width: 500px;
             width: 90%;
-            box-shadow: 0 0 40px rgba(255, 51, 51, 0.3);
+            box-shadow: 0 0 40px rgba(255, 51, 51, 0.15);
+            clip-path: polygon(0 0, 100% 0, 100% calc(100% - 20px), calc(100% - 20px) 100%, 0 100%);
+            position: relative;
+        }
+
+        .modal-content::before {
+            content: '';
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            width: 35px;
+            height: 35px;
+            border-top: 2px solid #ff3333;
+            border-right: 2px solid #ff3333;
+        }
+
+        .modal-content::after {
+            content: '';
+            position: absolute;
+            bottom: 15px;
+            left: 15px;
+            width: 35px;
+            height: 35px;
+            border-bottom: 2px solid #ff3333;
+            border-left: 2px solid #ff3333;
         }
 
         .modal-header {
@@ -310,7 +369,7 @@
         }
 
         .modal-header h2 {
-            color: #ff3333;
+            color: rgba(255, 51, 51, 0.8);
             font-size: 20px;
             font-weight: 600;
             margin: 0;
@@ -321,7 +380,7 @@
         .close-btn {
             background: none;
             border: none;
-            color: #666;
+            color: #444;
             font-size: 28px;
             cursor: pointer;
             line-height: 1;
@@ -338,7 +397,7 @@
 
         .form-group label {
             display: block;
-            color: #ff3333;
+            color: rgba(255, 51, 51, 0.8);
             margin-bottom: 8px;
             font-size: 13px;
             font-weight: 500;
@@ -350,20 +409,24 @@
         .form-group select {
             width: 100%;
             padding: 10px 12px;
+            padding-left: 16px;
             background: rgba(0, 0, 0, 0.5);
             border: 1px solid #333;
-            border-radius: 6px;
+            border-left: 2px solid #ff3333;
+            border-radius: 0;
             color: #e0e0e0;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             font-size: 14px;
             transition: all 0.3s;
+            clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%);
         }
 
         .form-group input:focus,
         .form-group select:focus {
             outline: none;
-            border-color: #ff3333;
-            box-shadow: 0 0 8px rgba(255, 51, 51, 0.3);
+            border-left-color: #ff5555;
+            border-left-width: 3px;
+            box-shadow: -2px 0 8px rgba(255, 51, 51, 0.15);
         }
 
         .form-actions {
@@ -376,41 +439,47 @@
         .error-message {
             color: #ff5555;
             margin-top: 10px;
-            padding: 10px;
-            background: rgba(255, 50, 50, 0.1);
-            border: 1px solid rgba(255, 50, 50, 0.3);
-            border-radius: 6px;
+            padding: 10px 12px;
+            padding-left: 18px;
+            background: rgba(255, 50, 50, 0.05);
+            border: 1px solid rgba(255, 50, 50, 0.15);
+            border-left: 3px solid #ff5555;
+            border-radius: 0;
             font-size: 14px;
+            clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%);
         }
 
         .success-message {
             color: #00ff88;
             margin-top: 10px;
-            padding: 10px;
+            padding: 10px 12px;
+            padding-left: 18px;
             background: rgba(0, 255, 136, 0.1);
             border: 1px solid rgba(0, 255, 136, 0.3);
-            border-radius: 6px;
+            border-left: 3px solid #00ff88;
+            border-radius: 0;
             font-size: 14px;
+            clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%);
         }
 
         .loading {
             text-align: center;
             padding: 60px 20px;
-            color: #666;
+            color: #444;
             font-size: 16px;
         }
 
         .no-data {
             text-align: center;
             padding: 60px 20px;
-            color: #666;
+            color: #444;
             font-size: 16px;
         }
 
         .empty-state {
             text-align: center;
             padding: 60px 20px;
-            color: #666;
+            color: #444;
         }
 
         .empty-state-icon {
