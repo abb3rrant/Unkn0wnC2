@@ -773,6 +773,24 @@
                 document.getElementById('noDataIndicator').style.display = 'none';
                 document.getElementById('usersTable').style.display = 'none';
 
+                // Get current user info first
+                const currentUserResponse = await authFetch('/api/auth/me');
+                const currentUserData = await currentUserResponse.json();
+                
+                if (currentUserData.success && currentUserData.data) {
+                    currentUserRole = currentUserData.data.role;
+                    currentUserId = currentUserData.data.id;
+                    
+                    // Update username display
+                    document.getElementById('username').textContent = currentUserData.data.username;
+                    
+                    // Hide create button for non-admins
+                    if (currentUserRole !== 'admin') {
+                        document.getElementById('createUserBtn').style.display = 'none';
+                    }
+                }
+
+                // Load users list
                 const response = await authFetch('/api/operators');
                 const data = await response.json();
 
@@ -783,19 +801,6 @@
                     renderUsers(data.data);
                 } else {
                     document.getElementById('noDataIndicator').style.display = 'block';
-                }
-
-                // Get current user info from token
-                const token = localStorage.getItem('token');
-                if (token) {
-                    const payload = JSON.parse(atob(token.split('.')[1]));
-                    currentUserRole = payload.role;
-                    currentUserId = payload.operator_id;
-
-                    // Hide create button for non-admins
-                    if (currentUserRole !== 'admin') {
-                        document.getElementById('createUserBtn').style.display = 'none';
-                    }
                 }
             } catch (error) {
                 console.error('Error loading users:', error);

@@ -643,6 +643,27 @@ func (api *APIServer) handleLogout(w http.ResponseWriter, r *http.Request) {
 	api.sendSuccess(w, "logged out successfully", nil)
 }
 
+// handleCurrentUser returns the current authenticated user's information
+func (api *APIServer) handleCurrentUser(w http.ResponseWriter, r *http.Request) {
+	operatorID := r.Header.Get("X-Operator-ID")
+	username := r.Header.Get("X-Operator-Username")
+	role := r.Header.Get("X-Operator-Role")
+
+	if operatorID == "" {
+		api.sendError(w, http.StatusUnauthorized, "no authenticated user")
+		return
+	}
+
+	// Return current user info
+	userData := map[string]interface{}{
+		"id":       operatorID,
+		"username": username,
+		"role":     role,
+	}
+
+	api.sendSuccess(w, "current user retrieved", userData)
+}
+
 // User Management Endpoints
 
 // handleListOperators returns all operator accounts
@@ -2333,6 +2354,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	operatorRouter.Use(api.csrfMiddleware) // CSRF protection for web UI
 
 	operatorRouter.HandleFunc("/auth/logout", api.handleLogout).Methods("POST")
+	operatorRouter.HandleFunc("/auth/me", api.handleCurrentUser).Methods("GET")
 
 	// User management endpoints
 	operatorRouter.HandleFunc("/operators", api.handleListOperators).Methods("GET")
