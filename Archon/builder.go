@@ -511,9 +511,9 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 		configStr = strings.ReplaceAll(configStr, "SvrAddr:       \"98.90.218.70\",", fmt.Sprintf("SvrAddr:       \"%s\",", req.ServerAddress))
 	}
 	// Set distributed mode config (required fields) - replace ALL occurrences
-	configStr = strings.ReplaceAll(configStr, "MasterServer:   \"\",", fmt.Sprintf("MasterServer:   \"%s\",", masterURL))
-	configStr = strings.ReplaceAll(configStr, "MasterAPIKey:   \"\",", fmt.Sprintf("MasterAPIKey:   \"%s\",", apiKey))
-	configStr = strings.ReplaceAll(configStr, "MasterServerID: \"dns1\",", fmt.Sprintf("MasterServerID: \"%s\",", serverID))
+	configStr = strings.ReplaceAll(configStr, "MasterServer:      \"\",", fmt.Sprintf("MasterServer:      \"%s\",", masterURL))
+	configStr = strings.ReplaceAll(configStr, "MasterAPIKey:      \"\",", fmt.Sprintf("MasterAPIKey:      \"%s\",", apiKey))
+	configStr = strings.ReplaceAll(configStr, "MasterServerID:    \"dns1\",", fmt.Sprintf("MasterServerID:    \"%s\",", serverID))
 
 	// Debug: Verify MasterServer was set after replacement
 	fmt.Printf("Debug: MasterServer after replacement still empty: %v\n", strings.Contains(configStr, "MasterServer:   \"\","))
