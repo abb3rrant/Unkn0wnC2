@@ -80,43 +80,19 @@ func main() {
 	fmt.Printf("Debug mode: %v\n", cfg.Debug)
 	fmt.Println()
 
-	// Verify or generate TLS certificate with IP SANs for the bind address
+	// Verify TLS certificate files exist
 	fmt.Println("Checking TLS certificate...")
-	needsGeneration := false
-	
-	// Check if certificate exists and has correct IP SAN
 	if _, err := os.Stat(cfg.TLSCert); os.IsNotExist(err) {
-		fmt.Println("✗ TLS certificate not found")
-		needsGeneration = true
-	} else if _, err := os.Stat(cfg.TLSKey); os.IsNotExist(err) {
-		fmt.Println("✗ TLS private key not found")
-		needsGeneration = true
-	} else {
-		// Certificate exists, verify it has the correct IP SAN
-		hasIPSAN, err := VerifyCertHasIPSAN(cfg.TLSCert, cfg.BindAddr)
-		if err != nil {
-			fmt.Printf("✗ Failed to verify certificate: %v\n", err)
-			needsGeneration = true
-		} else if !hasIPSAN {
-			fmt.Printf("✗ Certificate does not contain IP SAN for %s\n", cfg.BindAddr)
-			needsGeneration = true
-		} else {
-			fmt.Printf("✓ TLS certificate valid with IP SAN for %s\n", cfg.BindAddr)
-		}
+		fmt.Fprintf(os.Stderr, "✗ TLS certificate not found: %s\n", cfg.TLSCert)
+		fmt.Fprintf(os.Stderr, "Please provide valid certificate files\n")
+		os.Exit(1)
 	}
-
-	// Generate new certificate if needed
-	if needsGeneration {
-		fmt.Printf("Generating new TLS certificate for %s...\n", cfg.BindAddr)
-		if err := GenerateSelfSignedCert(cfg.BindAddr, cfg.TLSCert, cfg.TLSKey); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to generate TLS certificate: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("✓ Generated TLS certificate with IP SAN: %s\n", cfg.BindAddr)
-		fmt.Printf("  Certificate: %s\n", cfg.TLSCert)
-		fmt.Printf("  Private Key: %s\n", cfg.TLSKey)
-		fmt.Println()
+	if _, err := os.Stat(cfg.TLSKey); os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "✗ TLS private key not found: %s\n", cfg.TLSKey)
+		fmt.Fprintf(os.Stderr, "Please provide valid certificate files\n")
+		os.Exit(1)
 	}
+	fmt.Printf("✓ TLS certificate files found\n")
 	fmt.Println()
 
 	// Initialize database
