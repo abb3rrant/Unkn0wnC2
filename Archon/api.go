@@ -24,7 +24,6 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"
-	"golang.org/x/crypto/bcrypt"
 )
 
 // APIServer wraps the HTTP server and provides API functionality
@@ -554,14 +553,10 @@ func (api *APIServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("[API] JWT token generated for user: %s\n", req.Username)
 
 	// Create session record in database for revocation support
+	// Note: Use SHA256 for token hash (not bcrypt) since JWT tokens exceed bcrypt's 72-byte limit
 	sessionID := generateID()
-	tokenHashBytes, err := bcrypt.GenerateFromPassword([]byte(tokenString), bcrypt.DefaultCost)
-	if err != nil {
-		fmt.Printf("[API] Failed to hash token: %v\n", err)
-		api.sendError(w, http.StatusInternalServerError, "failed to hash token")
-		return
-	}
-	err = api.db.CreateSession(sessionID, operatorID, jti, string(tokenHashBytes), r.RemoteAddr, r.UserAgent(), expiresAt.Unix())
+	tokenHash := sha256Hash(tokenString)
+	err = api.db.CreateSession(sessionID, operatorID, jti, tokenHash, r.RemoteAddr, r.UserAgent(), expiresAt.Unix())
 	if err != nil {
 		fmt.Printf("[API] Failed to create session: %v\n", err)
 		api.sendError(w, http.StatusInternalServerError, "failed to create session")
@@ -2179,6 +2174,12 @@ type StagerProgressRequest struct {
 // generateDeterministicStagerSessionID creates a consistent session ID based on stager IP + binary ID
 // This ensures all DNS servers generate the same session ID for the same stager deployment
 // Critical for Shadow Mesh: stager load-balances across multiple DNS servers
+// sha256Hash returns hex-encoded SHA256 hash of input string
+func sha256Hash(data string) string {
+	hash := sha256.Sum256([]byte(data))
+	return hex.EncodeToString(hash[:])
+}
+
 func generateDeterministicStagerSessionID(stagerIP, clientBinaryID string) string {
 	// Hash stager IP + client binary ID to get deterministic session ID
 	data := fmt.Sprintf("%s|%s", stagerIP, clientBinaryID)
