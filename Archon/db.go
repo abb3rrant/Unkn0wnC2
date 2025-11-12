@@ -1217,7 +1217,14 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 		if chunkCount == totalChunks {
 			// We have all chunks! Trigger reassembly in goroutine to avoid blocking other submissions
 			fmt.Printf("[Master DB] ✓ All %d chunks received for task %s, triggering async reassembly...\n", totalChunks, taskID)
-			go d.reassembleChunkedResult(taskID, beaconID, totalChunks)
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						fmt.Printf("[Master DB] ❌ PANIC in reassembleChunkedResult for task %s: %v\n", taskID, r)
+					}
+				}()
+				d.reassembleChunkedResult(taskID, beaconID, totalChunks)
+			}()
 		} else if chunkCount > totalChunks {
 			// This shouldn't happen but log if it does
 			fmt.Printf("[Master DB] ⚠️  Warning: Task %s has %d chunks but expected %d (duplicate chunks from load balancing?)\n",

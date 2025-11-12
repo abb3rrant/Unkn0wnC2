@@ -80,21 +80,6 @@ func main() {
 	fmt.Printf("Debug mode: %v\n", cfg.Debug)
 	fmt.Println()
 
-	// Verify TLS certificate files exist
-	fmt.Println("Checking TLS certificate...")
-	if _, err := os.Stat(cfg.TLSCert); os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "✗ TLS certificate not found: %s\n", cfg.TLSCert)
-		fmt.Fprintf(os.Stderr, "Please provide valid certificate files\n")
-		os.Exit(1)
-	}
-	if _, err := os.Stat(cfg.TLSKey); os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "✗ TLS private key not found: %s\n", cfg.TLSKey)
-		fmt.Fprintf(os.Stderr, "Please provide valid certificate files\n")
-		os.Exit(1)
-	}
-	fmt.Printf("✓ TLS certificate files found\n")
-	fmt.Println()
-
 	// Initialize database
 	fmt.Println("Initializing database...")
 	db, err := NewMasterDatabase(cfg.DatabasePath)
@@ -177,6 +162,12 @@ func main() {
 
 	// Start periodic database cleanup (runs every 6 hours)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Printf("[Cleanup] ❌ PANIC in cleanup goroutine: %v\n", r)
+			}
+		}()
+
 		ticker := time.NewTicker(6 * time.Hour)
 		defer ticker.Stop()
 
