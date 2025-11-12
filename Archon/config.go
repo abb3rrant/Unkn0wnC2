@@ -193,12 +193,12 @@ func ValidateConfig(cfg Config) error {
 		}
 	}
 
-	// Validate TLS certificate paths exist
-	if _, err := os.Stat(cfg.TLSCert); os.IsNotExist(err) {
-		return fmt.Errorf("TLS certificate not found: %s", cfg.TLSCert)
+	// Validate TLS certificate paths are specified (they will be generated if missing)
+	if cfg.TLSCert == "" {
+		return fmt.Errorf("TLS certificate path not specified")
 	}
-	if _, err := os.Stat(cfg.TLSKey); os.IsNotExist(err) {
-		return fmt.Errorf("TLS key not found: %s", cfg.TLSKey)
+	if cfg.TLSKey == "" {
+		return fmt.Errorf("TLS key path not specified")
 	}
 
 	// Validate port

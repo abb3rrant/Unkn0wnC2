@@ -38,7 +38,7 @@ type Config struct {
 	MasterAPIKey      string       `json:"master_api_key"`      // API key for master authentication
 	MasterServerID    string       `json:"master_server_id"`    // Unique ID for this DNS server
 	MasterTLSCACert   string       `json:"master_tls_ca_cert"`  // Optional: CA certificate path for Master TLS verification
-	MasterTLSInsecure bool         `json:"master_tls_insecure"` // If true, skip TLS verification (dev/testing only)
+	MasterTLSInsecure bool         `json:"master_tls_insecure"` // If true, skip TLS verification (default: true, Master binds to runtime IP)
 }
 
 // StagerJitter holds timing configuration for stager chunk delivery
@@ -77,8 +77,8 @@ func DefaultConfig() Config {
 		MasterServer:      "", // REQUIRED: Set by builder
 		MasterAPIKey:      "", // REQUIRED: Set by builder
 		MasterServerID:    "dns1",
-		MasterTLSCACert:   "",    // Optional: Path to CA cert for production
-		MasterTLSInsecure: false, // Default: Verify TLS certificates
+		MasterTLSCACert:   "",   // Optional: Path to CA cert for production
+		MasterTLSInsecure: true, // Default: Skip TLS verification (Master uses runtime IP binding)
 	}
 }
 
@@ -125,9 +125,11 @@ func tryLoadEmbeddedConfig() (Config, bool) {
 			RetryDelaySeconds: 3,
 			MaxRetries:        5,
 		},
-		MasterServer:   "",
-		MasterAPIKey:   "",
-		MasterServerID: "dns1",
+		MasterServer:      "",
+		MasterAPIKey:      "",
+		MasterServerID:    "dns1",
+		MasterTLSCACert:   "",
+		MasterTLSInsecure: true,
 	}
 
 	// Check if this is a properly built binary (MasterServer must be set)
