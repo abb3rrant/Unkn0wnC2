@@ -61,9 +61,20 @@ if ! command -v gcc &> /dev/null; then
     MISSING_DEPS+=("gcc (GNU C compiler)")
 fi
 
-# MinGW for Windows stager builds
+# MinGW for Windows builds (64-bit and 32-bit)
 if ! command -v x86_64-w64-mingw32-gcc &> /dev/null; then
-    MISSING_DEPS+=("x86_64-w64-mingw32-gcc (MinGW cross-compiler)")
+    MISSING_DEPS+=("x86_64-w64-mingw32-gcc (MinGW 64-bit cross-compiler)")
+fi
+if ! command -v i686-w64-mingw32-gcc &> /dev/null; then
+    MISSING_DEPS+=("i686-w64-mingw32-gcc (MinGW 32-bit cross-compiler)")
+fi
+
+# ARM cross-compilers for Linux
+if ! command -v arm-linux-gnueabihf-gcc &> /dev/null; then
+    MISSING_DEPS+=("arm-linux-gnueabihf-gcc (ARM cross-compiler for armv7l)")
+fi
+if ! command -v aarch64-linux-gnu-gcc &> /dev/null; then
+    MISSING_DEPS+=("aarch64-linux-gnu-gcc (ARM64 cross-compiler)")
 fi
 
 # OpenSSL for certificate generation
@@ -102,8 +113,17 @@ if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
                 *"GNU C compiler"*)
                     PACKAGES+=("gcc" "build-essential")
                     ;;
-                *"MinGW"*)
-                    PACKAGES+=("mingw-w64")
+                *"MinGW 64-bit"*)
+                    PACKAGES+=("gcc-mingw-w64-x86-64")
+                    ;;
+                *"MinGW 32-bit"*)
+                    PACKAGES+=("gcc-mingw-w64-i686")
+                    ;;
+                *"ARM cross-compiler for armv7l"*)
+                    PACKAGES+=("gcc-arm-linux-gnueabihf")
+                    ;;
+                *"ARM64 cross-compiler"*)
+                    PACKAGES+=("gcc-aarch64-linux-gnu")
                     ;;
                 *"openssl"*)
                     PACKAGES+=("openssl")
@@ -117,7 +137,7 @@ if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
         echo -e "${GREEN}  ${INSTALL_CMD} ${PACKAGES[@]}${NC}"
         
     elif command -v yum &> /dev/null; then
-        echo -e "${GREEN}  sudo apt install -y golang gcc gcc-c++ mingw64-gcc openssl zlib-devel${NC}"
+        echo -e "${GREEN}  sudo yum install -y golang gcc gcc-c++ mingw64-gcc mingw32-gcc gcc-arm-linux-gnu gcc-aarch64-linux-gnu openssl zlib-devel${NC}"
     else
         echo -e "${YELLOW}  Please install the missing dependencies using your system's package manager${NC}"
     fi
@@ -130,7 +150,16 @@ echo -e "${GREEN}✓ All build dependencies present${NC}"
 echo -e "${GREEN}  - Go compiler: $(go version | awk '{print $3}')${NC}"
 echo -e "${GREEN}  - GCC: $(gcc --version | head -1 | awk '{print $NF}')${NC}"
 if command -v x86_64-w64-mingw32-gcc &> /dev/null; then
-    echo -e "${GREEN}  - MinGW: $(x86_64-w64-mingw32-gcc --version | head -1 | awk '{print $NF}')${NC}"
+    echo -e "${GREEN}  - MinGW (64-bit): $(x86_64-w64-mingw32-gcc --version | head -1 | awk '{print $NF}')${NC}"
+fi
+if command -v i686-w64-mingw32-gcc &> /dev/null; then
+    echo -e "${GREEN}  - MinGW (32-bit): $(i686-w64-mingw32-gcc --version | head -1 | awk '{print $NF}')${NC}"
+fi
+if command -v arm-linux-gnueabihf-gcc &> /dev/null; then
+    echo -e "${GREEN}  - ARM (armv7l): $(arm-linux-gnueabihf-gcc --version | head -1 | awk '{print $NF}')${NC}"
+fi
+if command -v aarch64-linux-gnu-gcc &> /dev/null; then
+    echo -e "${GREEN}  - ARM64: $(aarch64-linux-gnu-gcc --version | head -1 | awk '{print $NF}')${NC}"
 fi
 echo -e "${GREEN}  - OpenSSL: $(openssl version | awk '{print $2}')${NC}"
 echo -e "${GREEN}  - zlib: available${NC}"

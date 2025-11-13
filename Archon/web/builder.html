@@ -504,6 +504,17 @@
                 </div>
 
                 <div class="form-group">
+                    <label class="form-label">Architecture *</label>
+                    <select id="clientArchitecture" class="form-select">
+                        <option value="amd64">x86_64 (amd64)</option>
+                        <option value="386">x86 (32-bit)</option>
+                        <option value="arm64">ARM 64-bit (arm64)</option>
+                        <option value="armv7l">ARM v7 (armv7l)</option>
+                        <option value="arm">ARM (generic)</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
                     <label class="form-label">Check-in Interval (seconds)</label>
                     <div class="form-row">
                         <input type="number" id="clientSleepMin" class="form-input" placeholder="Min" value="60">
@@ -558,6 +569,17 @@
                     <select id="stagerPlatform" class="form-select">
                         <option value="linux">Linux</option>
                         <option value="windows">Windows</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Architecture *</label>
+                    <select id="stagerArchitecture" class="form-select">
+                        <option value="amd64">x86_64 (amd64)</option>
+                        <option value="386">x86 (32-bit)</option>
+                        <option value="arm64">ARM 64-bit (arm64)</option>
+                        <option value="armv7l">ARM v7 (armv7l)</option>
+                        <option value="arm">ARM (generic)</option>
                     </select>
                 </div>
 
@@ -822,6 +844,7 @@
 
             const selectedServers = allServers.map(s => s.domain);
             const platform = document.getElementById('clientPlatform').value;
+            const architecture = document.getElementById('clientArchitecture').value;
             const sleepMin = parseInt(document.getElementById('clientSleepMin').value);
             const sleepMax = parseInt(document.getElementById('clientSleepMax').value);
             const exfilJitterMin = parseInt(document.getElementById('clientExfilJitterMin').value);
@@ -837,6 +860,7 @@
                     body: JSON.stringify({
                         dns_domains: selectedServers,
                         platform,
+                        architecture,
                         sleep_min: sleepMin,
                         sleep_max: sleepMax,
                         exfil_jitter_min_ms: exfilJitterMin,
@@ -856,7 +880,7 @@
                     const a = document.createElement('a');
                     const ext = platform === 'windows' ? '.exe' : '';
                     a.href = url;
-                    a.download = `beacon-${platform}${ext}`;
+                    a.download = `beacon-${platform}-${architecture}${ext}`;
                     a.click();
                     window.URL.revokeObjectURL(url);
 
@@ -876,6 +900,7 @@
         async function buildStager() {
             const clientBinaryID = document.getElementById('stagerClientBinary').value;
             const platform = document.getElementById('stagerPlatform').value;
+            const architecture = document.getElementById('stagerArchitecture').value;
             const payloadURL = document.getElementById('stagerPayloadURL').value.trim();
             const jitterMin = parseInt(document.getElementById('stagerJitterMin').value);
             const jitterMax = parseInt(document.getElementById('stagerJitterMax').value);
@@ -895,6 +920,7 @@
                     body: JSON.stringify({
                         client_binary_id: clientBinaryID,
                         platform,
+                        architecture,
                         payload_url: payloadURL,
                         jitter_min_ms: jitterMin,
                         jitter_max_ms: jitterMax,
@@ -913,7 +939,7 @@
                     const a = document.createElement('a');
                     const ext = platform === 'windows' ? '.exe' : '';
                     a.href = url;
-                    a.download = `stager-${platform}${ext}`;
+                    a.download = `stager-${platform}-${architecture}${ext}`;
                     a.click();
                     window.URL.revokeObjectURL(url);
 

