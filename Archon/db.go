@@ -1225,9 +1225,36 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 				defer func() {
 					if r := recover(); r != nil {
 						fmt.Printf("[Master DB] ❌ PANIC in reassembleChunkedResult for task %s: %v\n", taskID, r)
+						// Mark task as failed on panic
+						now := time.Now().Unix()
+						d.db.Exec(`
+							UPDATE tasks 
+							SET status = 'failed', completed_at = ?, updated_at = ?
+							WHERE id = ? AND status != 'completed'
+						`, now, now, taskID)
 					}
 				}()
-				d.reassembleChunkedResult(taskID, beaconID, totalChunks)
+
+				// Set up timeout for reassembly (30 seconds should be plenty)
+				done := make(chan bool, 1)
+				go func() {
+					d.reassembleChunkedResult(taskID, beaconID, totalChunks)
+					done <- true
+				}()
+
+				select {
+				case <-done:
+					// Reassembly completed successfully
+				case <-time.After(30 * time.Second):
+					fmt.Printf("[Master DB] ⚠️  Reassembly timeout for task %s after 30s\n", taskID)
+					// Mark task as partial - reassembly took too long
+					now := time.Now().Unix()
+					d.db.Exec(`
+						UPDATE tasks 
+						SET status = 'partial', completed_at = ?, updated_at = ?
+						WHERE id = ? AND status != 'completed'
+					`, now, now, taskID)
+				}
 			}()
 		} else if chunkCount > totalChunks {
 			// This shouldn't happen but log if it does
@@ -1296,8 +1323,23 @@ func (d *MasterDatabase) reassembleChunkedResult(taskID, beaconID string, totalC
 
 	// Verify we have all chunks
 	if len(chunks) != totalChunks {
-		fmt.Printf("[Master DB] Incomplete chunks for task %s: have %d unique chunks, need %d\n",
+		fmt.Printf("[Master DB] ❌ Incomplete chunks for task %s: have %d unique chunks, need %d\n",
 			taskID, len(chunks), totalChunks)
+
+		// Mark task as partial - not all chunks received
+		now := time.Now().Unix()
+		_, err := d.db.Exec(`
+			UPDATE tasks 
+			SET status = 'partial', completed_at = ?, updated_at = ?
+			WHERE id = ? AND status != 'completed'
+		`, now, now, taskID)
+
+		if err != nil {
+			fmt.Printf("[Master DB] Error marking task %s as partial: %v\n", taskID, err)
+		} else {
+			fmt.Printf("[Master DB] Task %s marked as 'partial' (missing chunks: expected %d, got %d)\n",
+				taskID, totalChunks, len(chunks))
+		}
 		return
 	}
 
@@ -1323,7 +1365,21 @@ func (d *MasterDatabase) reassembleChunkedResult(taskID, beaconID string, totalC
 	if err != nil {
 		// Ignore foreign key errors - 'master-assembled' is not a real DNS server
 		if !strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
-			fmt.Printf("[Master DB] Error storing assembled result: %v\n", err)
+			fmt.Printf("[Master DB] ❌ Error storing assembled result: %v\n", err)
+
+			// Mark task as failed if we can't store the result
+			now := time.Now().Unix()
+			_, updateErr := d.db.Exec(`
+				UPDATE tasks 
+				SET status = 'failed', completed_at = ?, updated_at = ?
+				WHERE id = ? AND status != 'completed'
+			`, now, now, taskID)
+
+			if updateErr != nil {
+				fmt.Printf("[Master DB] Error marking task %s as failed: %v\n", taskID, updateErr)
+			} else {
+				fmt.Printf("[Master DB] Task %s marked as 'failed' (database error during reassembly)\n", taskID)
+			}
 		}
 		return
 	}

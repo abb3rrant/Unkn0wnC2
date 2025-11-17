@@ -1675,11 +1675,24 @@ func (api *APIServer) handleSubmitResult(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Check if task is now complete after saving this chunk
+	// For multi-chunk results, only report complete if assembled result is actually available
 	taskComplete := false
 	task, err := api.db.GetTaskWithResult(req.TaskID)
 	if err == nil {
 		if status, ok := task["status"].(string); ok {
-			taskComplete = (status == "completed" || status == "failed")
+			if status == "completed" {
+				// Verify result is actually present (not just status change)
+				// This prevents race condition where status="completed" but reassembly not yet finished
+				if _, hasResult := task["result"]; hasResult {
+					taskComplete = true
+				} else if req.TotalChunks == 1 {
+					// Single-chunk results should have result immediately
+					taskComplete = true
+				}
+				// If no result yet, don't report complete (async reassembly still running)
+			} else if status == "failed" {
+				taskComplete = true
+			}
 		}
 	}
 

