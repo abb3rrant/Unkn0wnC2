@@ -3124,14 +3124,39 @@ func (d *MasterDatabase) MarkTaskCompleteFromBeacon(taskID, beaconID string, tot
 		`, taskID).Scan(&resultSize)
 
 		if err != nil {
-			// SHADOW MESH: If result not found, it may arrive later from another DNS server
-			// Don't fail - just log and wait for actual data to arrive
+			// SHADOW MESH: If result not found with total_chunks=1, check if it exists with total_chunks=0
+			// This happens when DNS server didn't receive RESULT_META and didn't know it was single-chunk
 			if err.Error() == "sql: no rows in result set" {
-				fmt.Printf("[Master DB] Task %s completion received but no result data yet (mesh routing - data coming from different DNS server)\n", taskID)
-				// Leave task in "exfiltrating" status - will be completed when data arrives
-				return nil
+				var resultSizeZero int
+				err2 := d.db.QueryRow(`
+					SELECT LENGTH(result_data) FROM task_results
+					WHERE task_id = ? AND chunk_index = 1 AND total_chunks = 0
+					LIMIT 1
+				`, taskID).Scan(&resultSizeZero)
+
+				if err2 == nil {
+					// Found chunk with total_chunks=0, update it to total_chunks=1
+					fmt.Printf("[Master DB] Found chunk with total_chunks=0, updating to total_chunks=1\n")
+					_, updateErr := d.db.Exec(`
+						UPDATE task_results 
+						SET total_chunks = 1, is_complete = 1
+						WHERE task_id = ? AND chunk_index = 1 AND total_chunks = 0
+					`, taskID)
+
+					if updateErr != nil {
+						return fmt.Errorf("failed to update chunk total_chunks: %w", updateErr)
+					}
+
+					resultSize = resultSizeZero
+				} else {
+					// No chunk found at all - data coming from different DNS server
+					fmt.Printf("[Master DB] Task %s completion received but no result data yet (mesh routing - data coming from different DNS server)\n", taskID)
+					// Leave task in "exfiltrating" status - will be completed when data arrives
+					return nil
+				}
+			} else {
+				return fmt.Errorf("failed to verify single-chunk result: %w", err)
 			}
-			return fmt.Errorf("failed to verify single-chunk result: %w", err)
 		}
 
 		// Mark task as complete (result is in task_results table)
