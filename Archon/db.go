@@ -673,17 +673,43 @@ func (d *MasterDatabase) RegisterDNSServer(id, domain, address, apiKey string) e
 
 	now := time.Now().Unix()
 
-	// Use INSERT OR REPLACE to handle domain uniqueness constraint
-	// Note: Set last_checkin to 0 initially so first checkin can be detected
+	// Check if server already exists by ID (same server restarting)
+	var existingDomain string
+	err = d.db.QueryRow(`SELECT domain FROM dns_servers WHERE id = ?`, id).Scan(&existingDomain)
+
+	if err == sql.ErrNoRows {
+		// New DNS server - insert it
+		// Note: Set last_checkin to 0 initially so first checkin can be detected
+		_, err = d.db.Exec(`
+			INSERT INTO dns_servers (id, domain, address, api_key_hash, status, first_seen, last_checkin, created_at, updated_at)
+			VALUES (?, ?, ?, ?, 'active', ?, 0, ?, ?)
+		`, id, domain, address, string(apiKeyHash), now, now, now)
+
+		if err != nil {
+			// Check if it's a domain conflict
+			if strings.Contains(err.Error(), "UNIQUE constraint failed: dns_servers.domain") {
+				// Domain already exists with different ID - this shouldn't happen in normal operation
+				// but could occur if DNS server was rebuilt with new ID
+				// Update the existing record with the new ID
+				_, err = d.db.Exec(`
+					UPDATE dns_servers 
+					SET id = ?, address = ?, api_key_hash = ?, updated_at = ?
+					WHERE domain = ?
+				`, id, address, string(apiKeyHash), now, domain)
+			}
+		}
+
+		return err
+	} else if err != nil {
+		return fmt.Errorf("failed to check existing server: %w", err)
+	}
+
+	// Server exists - update it (e.g., server restart with same ID)
 	_, err = d.db.Exec(`
-		INSERT INTO dns_servers (id, domain, address, api_key_hash, status, first_seen, last_checkin, created_at, updated_at)
-		VALUES (?, ?, ?, ?, 'active', ?, 0, ?, ?)
-		ON CONFLICT(domain) DO UPDATE SET
-			id = excluded.id,
-			address = excluded.address,
-			api_key_hash = excluded.api_key_hash,
-			updated_at = excluded.updated_at
-	`, id, domain, address, string(apiKeyHash), now, now, now)
+		UPDATE dns_servers 
+		SET domain = ?, address = ?, api_key_hash = ?, updated_at = ?
+		WHERE id = ?
+	`, domain, address, string(apiKeyHash), now, id)
 
 	return err
 }
@@ -2926,7 +2952,7 @@ func (d *MasterDatabase) MarkTaskCompleteFromBeacon(taskID, beaconID string, tot
 	if totalChunks > 1 {
 		var chunkCount int
 		err = d.db.QueryRow(`
-			SELECT COUNT(*) FROM result_chunks
+			SELECT COUNT(*) FROM task_results
 			WHERE task_id = ? AND chunk_index > 0
 		`, taskID).Scan(&chunkCount)
 
@@ -2942,7 +2968,7 @@ func (d *MasterDatabase) MarkTaskCompleteFromBeacon(taskID, beaconID string, tot
 
 			// Fetch all chunks in order
 			rows, err := d.db.Query(`
-				SELECT data FROM result_chunks 
+				SELECT result_data FROM task_results 
 				WHERE task_id = ? AND chunk_index > 0 
 				ORDER BY chunk_index ASC
 			`, taskID)
@@ -2970,9 +2996,9 @@ func (d *MasterDatabase) MarkTaskCompleteFromBeacon(taskID, beaconID string, tot
 
 			// Store assembled result (chunkIndex=0 indicates final assembled result)
 			_, err = d.db.Exec(`
-				INSERT INTO result_chunks (task_id, beacon_id, chunk_index, total_chunks, data, received_at)
-				VALUES (?, ?, 0, ?, ?, ?)
-			`, taskID, beaconID, totalChunks, assembledResult, time.Now().Unix())
+				INSERT INTO task_results (task_id, beacon_id, dns_server_id, result_data, received_at, chunk_index, total_chunks, is_complete)
+				VALUES (?, ?, 'beacon-complete', ?, ?, 0, ?, 1)
+			`, taskID, beaconID, assembledResult, time.Now().Unix(), totalChunks)
 
 			if err != nil {
 				return fmt.Errorf("failed to store assembled result: %w", err)
