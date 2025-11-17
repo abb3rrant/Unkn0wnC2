@@ -3086,13 +3086,13 @@ func (d *MasterDatabase) MarkTaskCompleteFromBeacon(taskID, beaconID string, tot
 				return fmt.Errorf("failed to store assembled result: %w", err)
 			}
 
-			// Update task with result and mark complete
+			// Mark task as complete (result is in task_results table)
 			now := time.Now().Unix()
 			_, err = d.db.Exec(`
 				UPDATE tasks 
-				SET result = ?, status = 'completed', completed_at = ?, updated_at = ?
+				SET status = 'completed', completed_at = ?, updated_at = ?, result_size = ?, chunk_count = ?
 				WHERE id = ?
-			`, assembledResult, now, now, taskID)
+			`, now, now, len(assembledResult), totalChunks, taskID)
 
 			if err != nil {
 				return fmt.Errorf("failed to update task: %w", err)
@@ -3105,33 +3105,33 @@ func (d *MasterDatabase) MarkTaskCompleteFromBeacon(taskID, beaconID string, tot
 			return nil
 		}
 	} else {
-		// Single-chunk result: fetch from task_results and update tasks table
-		fmt.Printf("[Master DB] Single-chunk result for task %s, fetching result data\n", taskID)
+		// Single-chunk result: verify it exists in task_results, then mark task complete
+		fmt.Printf("[Master DB] Single-chunk result for task %s, verifying result exists\n", taskID)
 
-		var resultData string
+		var resultSize int
 		err = d.db.QueryRow(`
-			SELECT result_data FROM task_results
+			SELECT LENGTH(result_data) FROM task_results
 			WHERE task_id = ? AND chunk_index = 1 AND total_chunks = 1
 			LIMIT 1
-		`, taskID).Scan(&resultData)
+		`, taskID).Scan(&resultSize)
 
 		if err != nil {
-			return fmt.Errorf("failed to fetch single-chunk result: %w", err)
+			return fmt.Errorf("failed to verify single-chunk result: %w", err)
 		}
 
-		// Update task with result and mark complete
+		// Mark task as complete (result is in task_results table)
 		now := time.Now().Unix()
 		_, err = d.db.Exec(`
 			UPDATE tasks 
-			SET result = ?, status = 'completed', completed_at = ?, updated_at = ?
+			SET status = 'completed', completed_at = ?, updated_at = ?, result_size = ?, chunk_count = 1
 			WHERE id = ?
-		`, resultData, now, now, taskID)
+		`, now, now, resultSize, taskID)
 
 		if err != nil {
-			return fmt.Errorf("failed to update task with result: %w", err)
+			return fmt.Errorf("failed to update task status: %w", err)
 		}
 
-		fmt.Printf("[Master DB] ✓ Task %s marked as completed with result (%d bytes)\n", taskID, len(resultData))
+		fmt.Printf("[Master DB] ✓ Task %s marked as completed (%d bytes)\n", taskID, resultSize)
 	}
 
 	return nil
