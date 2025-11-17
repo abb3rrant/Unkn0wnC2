@@ -1078,9 +1078,14 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 	// DNS server will be registered on first check-in or can be added manually
 
 	// Log chunk receipt for debugging premature completion issues
-	if totalChunks != 1 && !strings.HasPrefix(taskID, "D") {
-		fmt.Printf("[Master DB] SaveResultChunk: taskID=%s, chunkIndex=%d, totalChunks=%d, dataLen=%d\n",
-			taskID, chunkIndex, totalChunks, len(data))
+	if !strings.HasPrefix(taskID, "D") {
+		if totalChunks == 1 {
+			fmt.Printf("[Master DB] SaveResultChunk - SINGLE CHUNK: taskID=%s, chunkIndex=%d, totalChunks=%d, dataLen=%d\n",
+				taskID, chunkIndex, totalChunks, len(data))
+		} else {
+			fmt.Printf("[Master DB] SaveResultChunk - MULTI CHUNK: taskID=%s, chunkIndex=%d, totalChunks=%d, dataLen=%d\n",
+				taskID, chunkIndex, totalChunks, len(data))
+		}
 	}
 
 	var err error

