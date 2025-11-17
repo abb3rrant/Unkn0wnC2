@@ -17,7 +17,7 @@ import (
 
 const (
 	// MasterDatabaseSchemaVersion tracks the current schema version
-	MasterDatabaseSchemaVersion = 5
+	MasterDatabaseSchemaVersion = 6
 )
 
 // MasterDatabase wraps the SQL database connection for the master server
@@ -156,6 +156,13 @@ func (d *MasterDatabase) applyMigrations(fromVersion int) error {
 	if fromVersion < 5 {
 		if err := d.migration5AddBinaryChecksum(); err != nil {
 			return fmt.Errorf("migration 5 failed: %w", err)
+		}
+	}
+
+	// Migration 6: Remove FK constraint from beacons.dns_server_id
+	if fromVersion < 6 {
+		if err := d.migration6RemoveBeaconsFKConstraint(); err != nil {
+			return fmt.Errorf("migration 6 failed: %w", err)
 		}
 	}
 
@@ -655,6 +662,81 @@ func (d *MasterDatabase) migration5AddBinaryChecksum() error {
 	}
 
 	fmt.Println("[Master DB] Migration 5 complete: sha256_checksum column added to client_binaries table")
+	return nil
+}
+
+// migration6RemoveBeaconsFKConstraint removes foreign key constraint from beacons.dns_server_id
+// This prevents beacon registration failures when DNS server hasn't registered yet
+// The dns_server_id field becomes metadata only, similar to task_results table
+func (d *MasterDatabase) migration6RemoveBeaconsFKConstraint() error {
+	fmt.Println("[Master DB] Migration 6: Removing FK constraint from beacons.dns_server_id")
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Create new beacons table without FK constraint
+	_, err = tx.Exec(`
+		CREATE TABLE IF NOT EXISTS beacons_new (
+			id TEXT PRIMARY KEY,
+			hostname TEXT NOT NULL,
+			username TEXT NOT NULL,
+			os TEXT NOT NULL,
+			arch TEXT NOT NULL,
+			ip_address TEXT,
+			dns_server_id TEXT NOT NULL,
+			first_seen INTEGER NOT NULL,
+			last_seen INTEGER NOT NULL,
+			status TEXT DEFAULT 'active',
+			metadata TEXT,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to create new beacons table: %w", err)
+	}
+
+	// Copy all data from old table
+	_, err = tx.Exec(`
+		INSERT INTO beacons_new (id, hostname, username, os, arch, ip_address, dns_server_id, first_seen, last_seen, status, metadata, created_at, updated_at)
+		SELECT id, hostname, username, os, arch, ip_address, dns_server_id, first_seen, last_seen, status, metadata, created_at, updated_at
+		FROM beacons
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to copy beacon data: %w", err)
+	}
+
+	// Drop old table
+	_, err = tx.Exec(`DROP TABLE beacons`)
+	if err != nil {
+		return fmt.Errorf("failed to drop old beacons table: %w", err)
+	}
+
+	// Rename new table
+	_, err = tx.Exec(`ALTER TABLE beacons_new RENAME TO beacons`)
+	if err != nil {
+		return fmt.Errorf("failed to rename table: %w", err)
+	}
+
+	// Recreate indexes
+	_, err = tx.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_beacons_dns_server ON beacons(dns_server_id);
+		CREATE INDEX IF NOT EXISTS idx_beacons_last_seen ON beacons(last_seen);
+		CREATE INDEX IF NOT EXISTS idx_beacons_status ON beacons(status);
+		CREATE INDEX IF NOT EXISTS idx_beacons_hostname ON beacons(hostname);
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to recreate indexes: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	fmt.Println("[Master DB] Migration 6 complete: beacons.dns_server_id FK constraint removed")
 	return nil
 }
 
