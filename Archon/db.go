@@ -1077,6 +1077,12 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 	// This allows result storage even if DNS server not yet registered
 	// DNS server will be registered on first check-in or can be added manually
 
+	// Log chunk receipt for debugging premature completion issues
+	if totalChunks != 1 && !strings.HasPrefix(taskID, "D") {
+		fmt.Printf("[Master DB] SaveResultChunk: taskID=%s, chunkIndex=%d, totalChunks=%d, dataLen=%d\n",
+			taskID, chunkIndex, totalChunks, len(data))
+	}
+
 	var err error
 
 	// Determine if this is a complete result
@@ -1163,10 +1169,9 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 	}
 
 	// If this was a complete single-chunk result, mark task as completed
-	// Only mark complete for: single-chunk results (chunkIndex=1, totalChunks=1) OR assembled results (chunkIndex=0, totalChunks>1)
-	// NOT for individual chunks of multi-chunk results
-	// CRITICAL: totalChunks must be known (> 0) to mark complete
-	if isComplete == 1 && totalChunks > 0 && !(totalChunks > 1 && chunkIndex > 0) {
+	if isComplete == 1 {
+		fmt.Printf("[Master DB] Marking task %s as completed: isComplete=%d, totalChunks=%d, chunkIndex=%d\n",
+			taskID, isComplete, totalChunks, chunkIndex)
 		d.markTaskCompleted(taskID)
 	}
 
