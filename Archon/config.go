@@ -242,14 +242,14 @@ func GenerateSecureSecret(length int) (string, error) {
 func GenerateExampleConfig(path string) error {
 	cfg := DefaultConfig()
 
-	// Add example DNS servers
+	// Add example DNS servers (disabled by default)
 	cfg.DNSServers = []DNSServerAuth{
 		{
 			ID:      "dns1",
 			Domain:  "example.net",
 			APIKey:  "example-api-key-dns1-CHANGE-ME",
 			Address: "1.2.3.4",
-			Enabled: true,
+			Enabled: false,
 		},
 		{
 			ID:      "dns2",
