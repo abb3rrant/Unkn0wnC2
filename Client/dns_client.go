@@ -148,6 +148,9 @@ func (c *DNSClient) selectDomain(taskID string) (string, error) {
 		}
 	}
 
+	// DEBUG: Log domain selection for troubleshooting
+	fmt.Printf("[DNS] Selected: %s (prev: %s, available: %v, mode: %s)\n", selectedDomain, lastUsed, availableDomains, mode)
+
 	// Store the selected domain as the last used
 	c.mutex.Lock()
 	c.lastDomain = selectedDomain
