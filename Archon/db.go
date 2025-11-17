@@ -1163,9 +1163,10 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 	}
 
 	// If this was a complete single-chunk result, mark task as completed
-	// Only mark complete for: single-chunk results (chunkIndex=1, totalChunks=1)
+	// Only mark complete for: single-chunk results (chunkIndex=1, totalChunks=1) OR assembled results (chunkIndex=0, totalChunks>1)
 	// NOT for individual chunks of multi-chunk results
-	if isComplete == 1 && !(totalChunks > 1 && chunkIndex > 0) {
+	// CRITICAL: totalChunks must be known (> 0) to mark complete
+	if isComplete == 1 && totalChunks > 0 && !(totalChunks > 1 && chunkIndex > 0) {
 		d.markTaskCompleted(taskID)
 	}
 
