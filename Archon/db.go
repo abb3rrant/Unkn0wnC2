@@ -1163,7 +1163,9 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 	}
 
 	// If this was a complete single-chunk result, mark task as completed
-	if isComplete == 1 {
+	// Only mark complete for: single-chunk results (chunkIndex=1, totalChunks=1)
+	// NOT for individual chunks of multi-chunk results
+	if isComplete == 1 && !(totalChunks > 1 && chunkIndex > 0) {
 		d.markTaskCompleted(taskID)
 	}
 
@@ -2534,8 +2536,8 @@ func (d *MasterDatabase) GetAllTasksPaginated(limit, offset int) ([]map[string]i
 			task["os"] = os.String
 		}
 
-		// Add progress for exfiltrating tasks
-		if status == "exfiltrating" {
+		// Add progress for in-progress tasks (sent/exfiltrating)
+		if status == "sent" || status == "exfiltrating" {
 			progress, err := d.GetTaskProgressFromResults(id)
 			if err == nil && progress != nil {
 				task["progress"] = progress
