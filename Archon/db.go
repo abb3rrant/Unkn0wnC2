@@ -2624,10 +2624,10 @@ func (d *MasterDatabase) GetTaskWithResult(taskID string) (map[string]interface{
 			task["result"] = result
 			task["result_size"] = len(result)
 		}
-	} else if status == "sent" {
+	} else if status == "sent" || status == "exfiltrating" {
 		// Task is in progress, calculate progress from actual received chunks
 		progress, err := d.GetTaskProgressFromResults(taskID)
-		if err == nil {
+		if err == nil && progress != nil {
 			task["progress"] = progress
 		}
 	}
