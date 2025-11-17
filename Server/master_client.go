@@ -456,9 +456,13 @@ func (mc *MasterClient) MarkTaskComplete(taskID, beaconID string, totalChunks in
 // This prevents other DNS servers from delivering the same task (Shadow Mesh coordination)
 func (mc *MasterClient) MarkTaskDelivered(taskID string) error {
 	req := struct {
-		TaskID string `json:"task_id"`
+		DNSServerID string `json:"dns_server_id"`
+		APIKey      string `json:"api_key"`
+		TaskID      string `json:"task_id"`
 	}{
-		TaskID: taskID,
+		DNSServerID: mc.serverID,
+		APIKey:      mc.apiKey,
+		TaskID:      taskID,
 	}
 
 	respData, err := mc.doRequest("POST", "/api/dns-server/tasks/delivered", req)

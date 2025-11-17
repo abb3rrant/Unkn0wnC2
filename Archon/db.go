@@ -3021,9 +3021,33 @@ func (d *MasterDatabase) MarkTaskCompleteFromBeacon(taskID, beaconID string, tot
 			fmt.Printf("[Master DB] Waiting for remaining chunks for task %s (%d/%d received)\n", taskID, chunkCount, totalChunks)
 		}
 	} else {
-		// Single-chunk result should already be complete
-		fmt.Printf("[Master DB] Single-chunk result for task %s, marking complete\n", taskID)
-		d.markTaskCompleted(taskID)
+		// Single-chunk result: fetch from task_results and update tasks table
+		fmt.Printf("[Master DB] Single-chunk result for task %s, fetching result data\n", taskID)
+
+		var resultData string
+		err = d.db.QueryRow(`
+			SELECT result_data FROM task_results
+			WHERE task_id = ? AND chunk_index = 1 AND total_chunks = 1
+			LIMIT 1
+		`, taskID).Scan(&resultData)
+
+		if err != nil {
+			return fmt.Errorf("failed to fetch single-chunk result: %w", err)
+		}
+
+		// Update task with result and mark complete
+		now := time.Now().Unix()
+		_, err = d.db.Exec(`
+			UPDATE tasks 
+			SET result = ?, status = 'completed', completed_at = ?, updated_at = ?
+			WHERE id = ?
+		`, resultData, now, now, taskID)
+
+		if err != nil {
+			return fmt.Errorf("failed to update task with result: %w", err)
+		}
+
+		fmt.Printf("[Master DB] ✓ Task %s marked as completed with result (%d bytes)\n", taskID, len(resultData))
 	}
 
 	return nil
