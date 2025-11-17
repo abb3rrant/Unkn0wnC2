@@ -1742,10 +1742,9 @@ func (api *APIServer) handleResultComplete(w http.ResponseWriter, r *http.Reques
 	// The database will check if all chunks are present and assemble them
 	err = api.db.MarkTaskCompleteFromBeacon(req.TaskID, req.BeaconID, req.TotalChunks)
 	if err != nil {
-		api.sendError(w, http.StatusInternalServerError, "failed to process completion")
-		if api.config.Debug {
-			fmt.Printf("[API] Error processing completion: %v\n", err)
-		}
+		// Always log the actual error for debugging
+		fmt.Printf("[API] ❌ Error processing completion for task %s: %v\n", req.TaskID, err)
+		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to process completion: %v", err))
 		return
 	}
 

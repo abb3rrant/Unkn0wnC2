@@ -3101,6 +3101,8 @@ func (d *MasterDatabase) MarkTaskCompleteFromBeacon(taskID, beaconID string, tot
 			fmt.Printf("[Master DB] ✓ Task %s assembled and marked as completed (%d bytes)\n", taskID, len(assembledResult))
 		} else {
 			fmt.Printf("[Master DB] Waiting for remaining chunks for task %s (%d/%d received)\n", taskID, chunkCount, totalChunks)
+			// Return success - we'll wait for more chunks to arrive
+			return nil
 		}
 	} else {
 		// Single-chunk result: fetch from task_results and update tasks table
