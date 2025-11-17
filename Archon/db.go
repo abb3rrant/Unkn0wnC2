@@ -1120,10 +1120,15 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 				`, taskID, beaconID, dnsServerID, data, now, totalChunks)
 
 				if err == nil {
-					fmt.Printf("[Master DB] Received complete assembled result from %s: task %s, %d chunks, %d bytes\n",
+					fmt.Printf("[Master DB] Received complete assembled result from %s: task %s, %d chunks, %d bytes (waiting for RESULT_COMPLETE)\n",
 						dnsServerID, taskID, totalChunks, len(data))
-					// Mark task as completed (markTaskCompleted checks if already completed)
-					d.markTaskCompleted(taskID)
+					// Update task with result but don't mark complete - wait for RESULT_COMPLETE signal
+					_, updateErr := d.db.Exec(`
+						UPDATE tasks SET result = ?, updated_at = ? WHERE id = ?
+					`, data, now, taskID)
+					if updateErr != nil {
+						fmt.Printf("[Master DB] Error updating task with assembled result: %v\n", updateErr)
+					}
 				} else {
 					fmt.Printf("[Master DB] Error saving assembled result: %v\n", err)
 				}
@@ -1173,11 +1178,11 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 		}
 	}
 
-	// If this was a complete single-chunk result, mark task as completed
-	if isComplete == 1 {
-		fmt.Printf("[Master DB] Marking task %s as completed: isComplete=%d, totalChunks=%d, chunkIndex=%d\n",
-			taskID, isComplete, totalChunks, chunkIndex)
-		d.markTaskCompleted(taskID)
+	// NEW THREE-PHASE PROTOCOL: Do NOT mark task as completed here
+	// Only the RESULT_COMPLETE message (via MarkTaskCompleteFromBeacon) should mark tasks complete
+	// This prevents premature completion when failure messages arrive before real results
+	if isComplete == 1 && !strings.HasPrefix(taskID, "D") {
+		fmt.Printf("[Master DB] Stored complete chunk for task %s (waiting for RESULT_COMPLETE signal)\n", taskID)
 	}
 
 	// SHADOW MESH: Handle chunks from DNS servers that didn't receive META
@@ -2932,11 +2937,60 @@ func (d *MasterDatabase) MarkTaskCompleteFromBeacon(taskID, beaconID string, tot
 		fmt.Printf("[Master DB] Task %s has %d/%d chunks\n", taskID, chunkCount, totalChunks)
 
 		if chunkCount == totalChunks {
-			// All chunks present, trigger reassembly
-			fmt.Printf("[Master DB] All chunks present for task %s, triggering reassembly\n", taskID)
-			d.mutex.Unlock() // Release lock before async operation
-			go d.reassembleChunkedResult(taskID, beaconID, totalChunks)
-			d.mutex.Lock()
+			// All chunks present, trigger reassembly synchronously (we already have the mutex)
+			fmt.Printf("[Master DB] All chunks present for task %s, assembling result\n", taskID)
+
+			// Fetch all chunks in order
+			rows, err := d.db.Query(`
+				SELECT data FROM result_chunks 
+				WHERE task_id = ? AND chunk_index > 0 
+				ORDER BY chunk_index ASC
+			`, taskID)
+
+			if err != nil {
+				return fmt.Errorf("failed to fetch chunks: %w", err)
+			}
+			defer rows.Close()
+
+			var chunks []string
+			for rows.Next() {
+				var chunk string
+				if err := rows.Scan(&chunk); err != nil {
+					return fmt.Errorf("failed to scan chunk: %w", err)
+				}
+				chunks = append(chunks, chunk)
+			}
+
+			if len(chunks) != totalChunks {
+				return fmt.Errorf("chunk count mismatch: expected %d, got %d", totalChunks, len(chunks))
+			}
+
+			// Assemble result
+			assembledResult := strings.Join(chunks, "")
+
+			// Store assembled result (chunkIndex=0 indicates final assembled result)
+			_, err = d.db.Exec(`
+				INSERT INTO result_chunks (task_id, beacon_id, chunk_index, total_chunks, data, received_at)
+				VALUES (?, ?, 0, ?, ?, ?)
+			`, taskID, beaconID, totalChunks, assembledResult, time.Now().Unix())
+
+			if err != nil {
+				return fmt.Errorf("failed to store assembled result: %w", err)
+			}
+
+			// Update task with result and mark complete
+			now := time.Now().Unix()
+			_, err = d.db.Exec(`
+				UPDATE tasks 
+				SET result = ?, status = 'completed', completed_at = ?, updated_at = ?
+				WHERE id = ?
+			`, assembledResult, now, now, taskID)
+
+			if err != nil {
+				return fmt.Errorf("failed to update task: %w", err)
+			}
+
+			fmt.Printf("[Master DB] ✓ Task %s assembled and marked as completed (%d bytes)\n", taskID, len(assembledResult))
 		} else {
 			fmt.Printf("[Master DB] Waiting for remaining chunks for task %s (%d/%d received)\n", taskID, chunkCount, totalChunks)
 		}
