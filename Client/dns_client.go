@@ -22,6 +22,7 @@ type DNSClient struct {
 	failedDomains map[string]time.Time     // Tracks temporarily failed domains
 	domainLatency map[string]time.Duration // Tracks domain response times for weighted selection
 	successCounts map[string]int           // Tracks successful queries per domain
+	failureCounts map[string]int           // Tracks consecutive failures per domain
 	mutex         sync.RWMutex
 }
 
@@ -39,6 +40,7 @@ func newDNSClient() *DNSClient {
 		failedDomains: make(map[string]time.Time),
 		domainLatency: make(map[string]time.Duration),
 		successCounts: make(map[string]int),
+		failureCounts: make(map[string]int),
 	}
 }
 
@@ -60,12 +62,13 @@ func (c *DNSClient) selectDomain(taskID string) (string, error) {
 		return domains[0], nil
 	}
 
-	// Clean up expired failed domains (retry after 5 minutes)
+	// Clean up expired failed domains (retry after 2 minutes)
 	c.mutex.Lock()
 	now := time.Now()
 	for domain, failTime := range c.failedDomains {
-		if now.Sub(failTime) > 5*time.Minute {
+		if now.Sub(failTime) > 2*time.Minute {
 			delete(c.failedDomains, domain)
+			delete(c.failureCounts, domain) // Reset failure count
 		}
 	}
 	c.mutex.Unlock()
@@ -345,11 +348,23 @@ func (c *DNSClient) sendDNSQueryWithDepth(command string, taskID string, depth i
 	if err == nil {
 		latency := time.Since(queryStart)
 		c.updateDomainMetrics(domain, latency)
+		// Reset failure count on success
+		c.mutex.Lock()
+		delete(c.failureCounts, domain)
+		c.mutex.Unlock()
 	}
 
-	// If all retries failed, mark domain as failed and try another domain
+	// If all retries failed, increment failure count and mark as failed after 2 consecutive failures
 	if err != nil {
-		c.markDomainFailed(domain)
+		c.mutex.Lock()
+		c.failureCounts[domain]++
+		failCount := c.failureCounts[domain]
+		c.mutex.Unlock()
+
+		// Only mark as failed after 2 consecutive failures (more resilient)
+		if failCount >= 2 {
+			c.markDomainFailed(domain)
+		}
 
 		// Try one more time with a different domain (failover)
 		// Depth counter prevents infinite recursion when all domains are failing
