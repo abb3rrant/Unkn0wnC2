@@ -18,6 +18,16 @@ With those two gaps addressed, the goal of Unkn0wnC2 is to enable adversary emul
 
 > Further details on how Unkn0wnC2 works can be found below at [🏗️ Protocol Architecture](#🏗️-Protocol-Architecture)
 
+Future Features:
+* Add functionality to unkn0wnc2 binary to build components from commandline without standing up webui. 
+* Improved Client with syscalls for information gathering instead of command execution.
+* Exfil command for exfiltrating files instead of using cat.
+* BoF execution
+* In memory execution
+* CNAME DNS Communication instead of TXT and possiblt use other DNS fields for comms.
+* All the bug fixes.
+* Dockerize
+
 ![Unkn0wnC2](assets/unkn0wnc2.png)
 
 
