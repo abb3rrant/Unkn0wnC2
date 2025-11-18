@@ -46,6 +46,30 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+# Ensure cargo/rustup installed under either root or the invoking sudo user are in PATH
+maybe_source_cargo_env() {
+    local env_file="$1"
+    if [ -f "$env_file" ]; then
+        # shellcheck disable=SC1090
+        . "$env_file"
+    fi
+}
+
+append_path_if_dir() {
+    local dir="$1"
+    if [ -d "$dir" ] && [[ ":$PATH:" != *":$dir:"* ]]; then
+        PATH="$dir:$PATH"
+    fi
+}
+
+maybe_source_cargo_env "/root/.cargo/env"
+append_path_if_dir "/root/.cargo/bin"
+
+if [ -n "$SUDO_USER" ]; then
+    maybe_source_cargo_env "/home/$SUDO_USER/.cargo/env"
+    append_path_if_dir "/home/$SUDO_USER/.cargo/bin"
+fi
+
 echo -e "${YELLOW}[0/5] Checking build dependencies...${NC}"
 
 # Check for required commands
