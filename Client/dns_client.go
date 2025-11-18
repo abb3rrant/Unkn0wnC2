@@ -149,7 +149,7 @@ func (c *DNSClient) selectDomain(taskID string) (string, error) {
 	}
 
 	// DEBUG: Log domain selection for troubleshooting
-	fmt.Printf("[DNS] Selected: %s (prev: %s, available: %v, mode: %s)\n", selectedDomain, lastUsed, availableDomains, mode)
+	//fmt.Printf("[DNS] Selected: %s (prev: %s, available: %v, mode: %s)\n", selectedDomain, lastUsed, availableDomains, mode)
 
 	// Store the selected domain as the last used
 	c.mutex.Lock()
@@ -300,7 +300,7 @@ func (c *DNSClient) sendDNSQueryWithDepth(command string, taskID string, depth i
 	queryName := fmt.Sprintf("%s.%s", strings.Join(labels, "."), domain)
 
 	// DEBUG: Log the actual query being sent
-	fmt.Printf("[DNS] Querying: %s (selected domain: %s)\n", queryName, domain)
+	//fmt.Printf("[DNS] Querying: %s (selected domain: %s)\n", queryName, domain)
 
 	var result string
 	queryStart := time.Now() // Track query latency
