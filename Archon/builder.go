@@ -30,6 +30,60 @@ var (
 	buildMutex sync.Mutex
 )
 
+func resolveBinary(binName string, hints []string) (string, error) {
+	for _, candidate := range hints {
+		if candidate == "" {
+			continue
+		}
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate, nil
+		}
+	}
+	path, err := exec.LookPath(binName)
+	if err != nil {
+		return "", fmt.Errorf("%s not found in PATH. Install Rust toolchain via https://rustup.rs and ensure %s is available", binName, binName)
+	}
+	return path, nil
+}
+
+func gatherBinaryHints(binName string) []string {
+	seen := make(map[string]struct{})
+	var hints []string
+	add := func(path string) {
+		if path == "" {
+			return
+		}
+		if _, exists := seen[path]; exists {
+			return
+		}
+		seen[path] = struct{}{}
+		hints = append(hints, path)
+	}
+
+	if cargoHome := os.Getenv("CARGO_HOME"); cargoHome != "" {
+		add(filepath.Join(cargoHome, "bin", binName))
+	}
+
+	if home := os.Getenv("HOME"); home != "" {
+		add(filepath.Join(home, ".cargo", "bin", binName))
+	}
+
+	if sudoUser := os.Getenv("SUDO_USER"); sudoUser != "" {
+		add(filepath.Join("/home", sudoUser, ".cargo", "bin", binName))
+	}
+
+	add(filepath.Join("/root", ".cargo", "bin", binName))
+	return hints
+}
+
+func resolveCargoBinary() (string, error) {
+	return resolveBinary("cargo", gatherBinaryHints("cargo"))
+}
+
+func resolveRustupBinary() (string, error) {
+	return resolveBinary("rustup", gatherBinaryHints("rustup"))
+}
+
 // Builder request structures
 type DNSServerBuildRequest struct {
 	Domain        string `json:"domain"`
@@ -981,7 +1035,12 @@ func buildExfilClient(req ExfilClientBuildRequest, sourceRoot, encryptionKey str
 		return "", err
 	}
 
-	cmd := exec.Command("cargo", args...)
+	cargoPath, err := resolveCargoBinary()
+	if err != nil {
+		return "", err
+	}
+
+	cmd := exec.Command(cargoPath, args...)
 	cmd.Dir = buildDir
 	cmd.Env = os.Environ()
 
@@ -1288,8 +1347,8 @@ func resolveRustTargetConfig(platform, arch string) (rustTargetConfig, error) {
 }
 
 func ensureExfilBuildDependencies(cfg rustTargetConfig) error {
-	if _, err := exec.LookPath("cargo"); err != nil {
-		return fmt.Errorf("cargo not found in PATH. Install Rust toolchain via https://rustup.rs and ensure cargo is available")
+	if _, err := resolveCargoBinary(); err != nil {
+		return err
 	}
 
 	if cfg.requiredHost != "" && runtime.GOOS != cfg.requiredHost {
@@ -1315,11 +1374,12 @@ func ensureRustTargetInstalled(target string) error {
 	if target == "" {
 		return nil
 	}
-	if _, err := exec.LookPath("rustup"); err != nil {
-		return fmt.Errorf("rustup not found. Install the Rust toolchain via https://rustup.rs to manage targets")
+	rustupPath, err := resolveRustupBinary()
+	if err != nil {
+		return err
 	}
 
-	cmd := exec.Command("rustup", "target", "list", "--installed")
+	cmd := exec.Command(rustupPath, "target", "list", "--installed")
 	cmd.Env = os.Environ()
 	output, err := cmd.Output()
 	if err != nil {
