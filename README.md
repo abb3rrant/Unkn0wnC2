@@ -109,6 +109,7 @@ sudo unkn0wnc2 --bind-addr <interface IP to bind to> --bind-port <port>
 >                       i686-pc-windows-gnu
 >   ```
 > - Matching cross linkers in PATH (Debian/Ubuntu packages: `gcc-multilib`, `gcc-aarch64-linux-gnu`, `gcc-arm-linux-gnueabihf`, `mingw-w64`, etc.)
+> - `build.sh` now verifies these targets/toolchains and runs `cargo fetch --locked` under `/opt/unkn0wnc2/src/exfil-client` so the first builder run does not stall downloading crates.
 > - Windows ARM targets (`aarch64/arm`) must be built from a Windows host with Visual Studio Build Tools so that MSVC linkers are available.
 > If a dependency is missing the builder now aborts with a clear error explaining what to install.
 

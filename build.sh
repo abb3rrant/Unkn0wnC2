@@ -50,10 +50,20 @@ echo -e "${YELLOW}[0/5] Checking build dependencies...${NC}"
 
 # Check for required commands
 MISSING_DEPS=()
+NEEDS_RUSTUP=false
 
 # Go compiler
 if ! command -v go &> /dev/null; then
     MISSING_DEPS+=("go (Go compiler)")
+fi
+
+# Rust toolchain
+if ! command -v cargo &> /dev/null; then
+    MISSING_DEPS+=("cargo (Rust toolchain)")
+fi
+if ! command -v rustup &> /dev/null; then
+    MISSING_DEPS+=("rustup (Rust toolchain manager)")
+    NEEDS_RUSTUP=true
 fi
 
 # GCC for Linux stager builds
@@ -110,6 +120,9 @@ if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
                 *"Go compiler"*)
                     PACKAGES+=("golang-go")
                     ;;
+                *"Rust toolchain"*)
+                    PACKAGES+=("cargo")
+                    ;;
                 *"GNU C compiler"*)
                     PACKAGES+=("gcc" "build-essential")
                     ;;
@@ -142,12 +155,24 @@ if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
         echo -e "${YELLOW}  Please install the missing dependencies using your system's package manager${NC}"
     fi
     
+    if [ "$NEEDS_RUSTUP" = true ]; then
+        echo ""
+        echo -e "${YELLOW}Rustup is required to manage the cross-compilation targets.${NC}"
+        echo -e "${YELLOW}Install it with:${NC} ${GREEN}curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh${NC}"
+    fi
+
     echo ""
     exit 1
 fi
 
 echo -e "${GREEN}✓ All build dependencies present${NC}"
 echo -e "${GREEN}  - Go compiler: $(go version | awk '{print $3}')${NC}"
+if command -v cargo &> /dev/null; then
+    echo -e "${GREEN}  - Cargo: $(cargo --version | awk '{print $2}')${NC}"
+fi
+if command -v rustup &> /dev/null; then
+    echo -e "${GREEN}  - Rustup: $(rustup --version | awk '{print $2}')${NC}"
+fi
 echo -e "${GREEN}  - GCC: $(gcc --version | head -1 | awk '{print $NF}')${NC}"
 if command -v x86_64-w64-mingw32-gcc &> /dev/null; then
     echo -e "${GREEN}  - MinGW (64-bit): $(x86_64-w64-mingw32-gcc --version | head -1 | awk '{print $NF}')${NC}"
@@ -165,6 +190,42 @@ echo -e "${GREEN}  - OpenSSL: $(openssl version | awk '{print $2}')${NC}"
 echo -e "${GREEN}  - zlib: available${NC}"
 echo ""
 
+REQUIRED_RUST_TARGETS=(
+    "x86_64-unknown-linux-gnu"
+    "i686-unknown-linux-gnu"
+    "aarch64-unknown-linux-gnu"
+    "armv7-unknown-linux-gnueabihf"
+    "arm-unknown-linux-gnueabihf"
+    "x86_64-pc-windows-gnu"
+    "i686-pc-windows-gnu"
+)
+
+if command -v rustup &> /dev/null; then
+    echo -e "${YELLOW}Validating Rust targets...${NC}"
+    INSTALLED_TARGETS=$(rustup target list --installed)
+    MISSING_RUST_TARGETS=()
+
+    for target in "${REQUIRED_RUST_TARGETS[@]}"; do
+        if ! grep -Fqx "$target" <<< "$INSTALLED_TARGETS"; then
+            MISSING_RUST_TARGETS+=("$target")
+        fi
+    done
+
+    if [ ${#MISSING_RUST_TARGETS[@]} -gt 0 ]; then
+        echo -e "${RED}✗ Missing Rust targets:${NC}"
+        for target in "${MISSING_RUST_TARGETS[@]}"; do
+            echo -e "${RED}  - ${target}${NC}"
+        done
+        echo ""
+        echo -e "${YELLOW}Install them with:${NC} ${GREEN}rustup target add ${MISSING_RUST_TARGETS[*]}${NC}"
+        echo ""
+        exit 1
+    fi
+
+    echo -e "${GREEN}✓ All required Rust targets installed${NC}"
+    echo ""
+fi
+
 # Build flags
 LDFLAGS="-s -w -X main.version=${VERSION} -X main.buildDate=${BUILD_DATE} -X main.gitCommit=${GIT_COMMIT}"
 BUILDFLAGS="-trimpath"
@@ -180,7 +241,7 @@ echo -e "${GREEN}✓ Archon server compiled: $(du -h unkn0wnc2 | cut -f1)${NC}"
 echo ""
 
 echo -e "${YELLOW}[2/7] Creating directory structure...${NC}"
-mkdir -p /opt/unkn0wnc2/{certs,web,configs,builders,builds/dns-server,builds/client,builds/stager,src}
+mkdir -p /opt/unkn0wnc2/{certs,web,configs,builders,builds/dns-server,builds/client,builds/stager,builds/exfil,src}
 echo -e "${GREEN}✓ Created /opt/unkn0wnc2/${NC}"
 echo ""
 
@@ -196,8 +257,21 @@ echo -e "${GREEN}✓ Copied web interface files${NC}"
 
 # Copy source files for building components
 cd ..
-cp -r Server Client Stager /opt/unkn0wnc2/src/
+cp -r Server Client Stager exfil-client /opt/unkn0wnc2/src/
 echo -e "${GREEN}✓ Copied source files for builder${NC}"
+if command -v cargo &> /dev/null; then
+    echo -e "${YELLOW}  ↳ Priming Rust crate cache (cargo fetch --locked)${NC}"
+    if pushd /opt/unkn0wnc2/src/exfil-client > /dev/null; then
+        if cargo fetch --locked; then
+            echo -e "${GREEN}  ✓ Rust dependencies prefetched${NC}"
+        else
+            echo -e "${RED}  ✗ Failed to prefetch Rust dependencies${NC}"
+            popd > /dev/null
+            exit 1
+        fi
+        popd > /dev/null
+    fi
+fi
 cd Archon
 
 # Generate secure credentials
@@ -267,7 +341,7 @@ echo -e "${YELLOW}[6/7] Verifying builder environment...${NC}"
 
 # Verify source files are in place
 SOURCE_CHECK=true
-for component in Server Client Stager; do
+for component in Server Client Stager exfil-client; do
     if [ ! -d "/opt/unkn0wnc2/src/${component}" ]; then
         echo -e "${RED}✗ Missing source: ${component}${NC}"
         SOURCE_CHECK=false
@@ -277,7 +351,7 @@ for component in Server Client Stager; do
 done
 
 # Verify build directories exist
-for build_type in dns-server client stager; do
+for build_type in dns-server client stager exfil; do
     if [ ! -d "/opt/unkn0wnc2/builds/${build_type}" ]; then
         echo -e "${RED}✗ Missing build directory: ${build_type}${NC}"
         SOURCE_CHECK=false
