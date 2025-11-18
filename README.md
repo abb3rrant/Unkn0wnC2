@@ -98,7 +98,7 @@ sudo unkn0wnc2 --bind-addr <interface IP to bind to> --bind-port <port>
 
 ### Shadow Mesh
 
-A huge feature of Unkn0wnC2 is Shadow Mesh. Unkn0wnC2 can be used with 1 domain or many. If a domain is *burned* then you can stand up a new DNS-server under a new domain and existing beacons will automicatically be updated with the new domain. Currently, the amount of domains supported is as many as you can fit within the TXT field in a DNS TXT Request. Since domain names vary, a specific number of supported domains has not been tested. Future updates may include a "chunked" domain delivery to allow for many domains.
+A huge feature of Unkn0wnC2 is Shadow Mesh. Unkn0wnC2 can be used with 1 domain or multiple. This helps spread out DNS traffic to multiple domains in an attempt to allow for more throughput, avoid alerts, and dynamically add/remove domains. If a domain is *burned*, you can stand up a new DNS-server under a new domain and existing beacons will automicatically be updated with the new domain. Currently, the amount of domains supported is as many as you can fit within the TXT field in a DNS TXT Request. Since domain names vary, a specific number of supported domains has not been tested. Future updates may include a "chunked" domain delivery to allow for many domains.
 
 ```mermaid
 flowchart TB
