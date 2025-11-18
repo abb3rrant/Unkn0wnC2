@@ -77,13 +77,14 @@ impl Config {
     }
 
     pub fn from_file(path: &str) -> Result<Self, String> {
-        let data = fs::read_to_string(path).map_err(|e| format!("failed to read config {path}: {e}"))?;
+        let data =
+            fs::read_to_string(path).map_err(|e| format!("failed to read config {path}: {e}"))?;
         Self::from_json(&data)
     }
 
     pub fn from_json(json: &str) -> Result<Self, String> {
-        let parsed: FileConfig = serde_json::from_str(json)
-            .map_err(|e| format!("invalid config json: {e}"))?;
+        let parsed: FileConfig =
+            serde_json::from_str(json).map_err(|e| format!("invalid config json: {e}"))?;
         Ok(parsed.into())
     }
 }

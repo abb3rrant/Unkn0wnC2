@@ -1,4 +1,7 @@
-use aes_gcm::{aead::{Aead, KeyInit}, Aes256Gcm, Nonce};
+use aes_gcm::{
+    aead::{Aead, KeyInit},
+    Aes256Gcm, Nonce,
+};
 use pbkdf2::pbkdf2_hmac;
 use rand::RngCore;
 use sha2::Sha256;
@@ -29,8 +32,7 @@ pub fn derive_key(passphrase: &str) -> [u8; KEY_SIZE] {
 }
 
 pub fn encrypt(data: &[u8], key: &[u8; KEY_SIZE]) -> Result<Vec<u8>, CryptoError> {
-    let cipher = Aes256Gcm::new_from_slice(key)
-        .map_err(|e| CryptoError::Encrypt(e.to_string()))?;
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| CryptoError::Encrypt(e.to_string()))?;
 
     let mut nonce_bytes = [0u8; NONCE_SIZE];
     rand::thread_rng().fill_bytes(&mut nonce_bytes);
@@ -51,8 +53,7 @@ pub fn decrypt(data: &[u8], key: &[u8; KEY_SIZE]) -> Result<Vec<u8>, CryptoError
     }
 
     let (nonce_bytes, payload) = data.split_at(NONCE_SIZE);
-    let cipher = Aes256Gcm::new_from_slice(key)
-        .map_err(|e| CryptoError::Decrypt(e.to_string()))?;
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| CryptoError::Decrypt(e.to_string()))?;
     let nonce = Nonce::from_slice(nonce_bytes);
     cipher
         .decrypt(nonce, payload)

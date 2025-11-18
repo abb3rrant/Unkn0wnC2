@@ -6,7 +6,7 @@ use crate::resolver::ResolverPool;
 use anyhow::{Context, Result};
 use rand::Rng;
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use trust_dns_proto::op::{Edns, Message, MessageType, OpCode, Query};
 use trust_dns_proto::rr::{rdata::opt::EdnsOption, Name, RData, RecordType};
 use trust_dns_proto::serialize::binary::{BinEncodable, BinEncoder};
@@ -64,8 +64,7 @@ impl DnsTransmitter {
         payload: &[u8],
         flags: u8,
     ) -> Result<()> {
-        let ciphertext = encrypt(payload, &self.aes_key)
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let ciphertext = encrypt(payload, &self.aes_key).map_err(|e| anyhow::anyhow!("{e}"))?;
         let encoded = base36::encode(&ciphertext);
         let qname = self.build_name(&encoded)?;
         let metadata = build_metadata(session, chunk_index, payload.len(), flags);
@@ -78,7 +77,8 @@ impl DnsTransmitter {
                 Ok(false) => {
                     last_err = Some(anyhow::anyhow!(
                         "resolver {} rejected chunk (attempt {})",
-                        resolver, attempt + 1
+                        resolver,
+                        attempt + 1
                     ));
                 }
                 Err(e) => last_err = Some(e),
@@ -99,8 +99,7 @@ impl DnsTransmitter {
         let mut edns = Edns::new();
         edns.set_dnssec_ok(false);
         edns.set_max_payload(512);
-        edns
-            .options_mut()
+        edns.options_mut()
             .insert(EdnsOption::Unknown(OPT_CODE, metadata.to_vec()));
         msg.set_edns(edns);
 
@@ -138,13 +137,8 @@ impl DnsTransmitter {
         if labels.is_empty() {
             labels.push("0");
         }
-        let ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-
         let domain = self.select_domain();
-        let fqdn = format!("{}.{}.{}", labels.join("."), ts, domain);
+        let fqdn = format!("{}.{}", labels.join("."), domain);
         Name::from_ascii(fqdn).context("invalid query name")
     }
 
