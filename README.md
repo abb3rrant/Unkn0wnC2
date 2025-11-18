@@ -12,17 +12,16 @@ This framework was created to address two specific gaps in traditional DNS C2 pr
 2. Beacons are usually limited to a single domain.  
    Most C2 frameworks restrict beacons to a single domain or IP. Allowing beacons to use multiple domains can improve throughput and make traffic patterns more flexible.
 
-   > Unkn0wnC2 supports single- or multi-domain beacons. New domains can be added to an active beacon as new DNS servers are brought online, so existing beacons can begin using additional domains without restarting.
+   > Unkn0wnC2 supports single or multi-domain beacons. New domains can be added to an active beacon as new DNS servers are brought online, so existing beacons can begin using additional domains without restarting.
 
 With those two gaps addressed, the goal of Unkn0wnC2 is to enable adversary emulation in highly restrictive environments — for example, cloud VPCs that allow only DNS to the Internet. Like many DNS-based C2 frameworks, Unkn0wnC2 relies on standard DNS resolution behavior: beacons resolve through the target's configured DNS infrastructure rather than querying Unkn0wnC2 servers directly.
 
 > Further details on how Unkn0wnC2 works can be found below at [🏗️ Protocol Architecture](#🏗️-Protocol-Architecture)
 
 Future Features:
-* Exfil only client
+* Exfil only client - Utilizing A records
 * Add functionality to unkn0wnc2 binary to build components from commandline without standing up webui. 
 * Improved Client with syscalls for information gathering instead of command execution.
-* Exfil command for exfiltrating files instead of using cat.
 * BoF execution
 * In memory execution
 * CNAME DNS Communication instead of TXT and possiblt use other DNS fields for comms.
@@ -31,6 +30,9 @@ Future Features:
 
 ![Unkn0wnC2](assets/unkn0wnc2.png)
 
+> [!DISCLAIMER]
+> This has been HEAVILY vibe coded. While I am not a developer, the use of AI coding Agents greatly increases what a Red Teamer can do and build. As I learn and improve, components will be refactored by myself or other contributers willing to help.
+> This framework has also been tested heavily and communications are validated through packet captures.
 
 > [!CAUTION]
 > FOR AUTHORIZED SECURITY TESTING ONLY
@@ -91,6 +93,24 @@ sudo unkn0wnc2 --bind-addr <interface IP to bind to> --bind-port <port>
 8. **Build components (DNS servers, clients, stagers) through the web interface.**
 
 ![WebUI Login](assets/WebUI/builder.png)
+
+> [!TIP]
+> ### Exfil builder prerequisites
+> The Rust exfiltration client builder invokes `cargo` and cross-compiles to the same OS/architecture matrix as the full beacon. Make sure the master host has:
+> - Rust toolchain with `cargo` and `rustup` (`curl https://sh.rustup.rs -sSf | sh`)
+> - Required cargo targets installed, e.g.
+>   ```bash
+>   rustup target add x86_64-unknown-linux-gnu \
+>                       i686-unknown-linux-gnu \
+>                       aarch64-unknown-linux-gnu \
+>                       armv7-unknown-linux-gnueabihf \
+>                       arm-unknown-linux-gnueabihf \
+>                       x86_64-pc-windows-gnu \
+>                       i686-pc-windows-gnu
+>   ```
+> - Matching cross linkers in PATH (Debian/Ubuntu packages: `gcc-multilib`, `gcc-aarch64-linux-gnu`, `gcc-arm-linux-gnueabihf`, `mingw-w64`, etc.)
+> - Windows ARM targets (`aarch64/arm`) must be built from a Windows host with Visual Studio Build Tools so that MSVC linkers are available.
+> If a dependency is missing the builder now aborts with a clear error explaining what to install.
 
 9. Deploy DNS-Servers, ensure port 53 is unbound, you may need to stop the systemd-resolved service. To run the DNS-Servers, simply run the binary as sudo or create/start a service for it.
 ```bash
@@ -356,6 +376,10 @@ How the pieces interact (approximate calculations):
   - Example (exfil defaults, 100 chunks): avg_jitter = 20 s, burst pause = 120 s → per-burst pause ≈ 140 s
     - bursts = 20 → pause_time ≈ 2800 s (~46 min 40 s)
     - transfer_time ≈ 100 s → total ≈ 2900 s (~48 min 20 s)
+
+### Exfil Specific Client
+
+
 
 ---
 

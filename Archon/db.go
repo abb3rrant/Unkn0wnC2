@@ -17,7 +17,7 @@ import (
 
 const (
 	// MasterDatabaseSchemaVersion tracks the current schema version
-	MasterDatabaseSchemaVersion = 7
+	MasterDatabaseSchemaVersion = 9
 )
 
 // MasterDatabase wraps the SQL database connection for the master server
@@ -170,6 +170,18 @@ func (d *MasterDatabase) applyMigrations(fromVersion int) error {
 	if fromVersion < 7 {
 		if err := d.migration7AddPendingCompletionTable(); err != nil {
 			return fmt.Errorf("migration 7 failed: %w", err)
+		}
+	}
+
+	if fromVersion < 8 {
+		if err := d.migration8AddExfilTables(); err != nil {
+			return fmt.Errorf("migration 8 failed: %w", err)
+		}
+	}
+
+	if fromVersion < 9 {
+		if err := d.migration9AddExfilBuildTable(); err != nil {
+			return fmt.Errorf("migration 9 failed: %w", err)
 		}
 	}
 
@@ -1880,6 +1892,120 @@ func (d *MasterDatabase) GetClientBinary(id string) (map[string]interface{}, err
 		"created_at":      createdAt,
 		"created_by":      createdBy,
 	}, nil
+}
+
+// Exfil client build records
+
+type ExfilClientBuildRecord struct {
+	ID             string
+	Filename       string
+	OS             string
+	Arch           string
+	Domains        string
+	Resolvers      string
+	ServerIP       string
+	ChunkBytes     int
+	JitterMinMs    int
+	JitterMaxMs    int
+	ChunksPerBurst int
+	BurstPauseMs   int
+	FilePath       string
+	FileSize       int64
+}
+
+// SaveExfilClientBuild persists metadata about a compiled exfil client binary
+func (d *MasterDatabase) SaveExfilClientBuild(record *ExfilClientBuildRecord) error {
+	if record == nil {
+		return fmt.Errorf("nil exfil client build record")
+	}
+
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	_, err := d.db.Exec(`
+		INSERT INTO exfil_client_builds (
+			id, filename, os, arch, domains, resolvers, server_ip,
+			chunk_bytes, jitter_min_ms, jitter_max_ms, chunks_per_burst,
+			burst_pause_ms, file_path, file_size, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		record.ID,
+		record.Filename,
+		record.OS,
+		record.Arch,
+		record.Domains,
+		record.Resolvers,
+		record.ServerIP,
+		record.ChunkBytes,
+		record.JitterMinMs,
+		record.JitterMaxMs,
+		record.ChunksPerBurst,
+		record.BurstPauseMs,
+		record.FilePath,
+		record.FileSize,
+		time.Now().Unix(),
+	)
+
+	return err
+}
+
+// ListExfilClientBuilds returns recent exfil client builds for operator visibility
+func (d *MasterDatabase) ListExfilClientBuilds(limit int) ([]map[string]interface{}, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	rows, err := d.db.Query(`
+		SELECT id, filename, os, arch, domains, resolvers, server_ip,
+		       chunk_bytes, jitter_min_ms, jitter_max_ms, chunks_per_burst,
+		       burst_pause_ms, file_path, file_size, created_at
+		FROM exfil_client_builds
+		ORDER BY created_at DESC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var builds []map[string]interface{}
+	for rows.Next() {
+		var (
+			id, filename, osName, arch, domains, resolvers, serverIP, filePath string
+			chunkBytes, jitterMin, jitterMax, chunksPerBurst, burstPause       int
+			fileSize                                                           int64
+			createdAt                                                          int64
+		)
+
+		if err := rows.Scan(&id, &filename, &osName, &arch, &domains, &resolvers, &serverIP,
+			&chunkBytes, &jitterMin, &jitterMax, &chunksPerBurst, &burstPause,
+			&filePath, &fileSize, &createdAt); err != nil {
+			return nil, err
+		}
+
+		builds = append(builds, map[string]interface{}{
+			"id":               id,
+			"filename":         filename,
+			"os":               osName,
+			"arch":             arch,
+			"domains":          domains,
+			"resolvers":        resolvers,
+			"server_ip":        serverIP,
+			"chunk_bytes":      chunkBytes,
+			"jitter_min_ms":    jitterMin,
+			"jitter_max_ms":    jitterMax,
+			"chunks_per_burst": chunksPerBurst,
+			"burst_pause_ms":   burstPause,
+			"file_path":        filePath,
+			"file_size":        fileSize,
+			"created_at":       createdAt,
+		})
+	}
+
+	return builds, rows.Err()
 }
 
 // DeleteClientBinary removes a client binary

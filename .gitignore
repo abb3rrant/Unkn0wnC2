@@ -86,3 +86,5 @@ desktop.ini
 # Internal documentation (keep public docs)
 copilot-instructions.md
 agent_docs/
+
+exfil-client/target/

