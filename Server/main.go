@@ -732,7 +732,11 @@ func main() {
 
 	// Register with Master and retrieve active domain list
 	fmt.Println("Registering with Master Server...")
-	activeDomains, err := masterClient.RegisterWithMaster(cfg.Domain, cfg.BindAddr)
+	registrationAddr := strings.TrimSpace(cfg.SvrAddr)
+	if registrationAddr == "" {
+		registrationAddr = cfg.BindAddr
+	}
+	activeDomains, err := masterClient.RegisterWithMaster(cfg.Domain, registrationAddr)
 	if err != nil {
 		fmt.Printf("WARNING: Failed to register with Master Server: %v\n", err)
 		fmt.Println("Continuing with local configuration")
@@ -750,6 +754,7 @@ func main() {
 	stats := map[string]interface{}{
 		"domain":       cfg.Domain,
 		"bind_addr":    cfg.BindAddr,
+		"server_addr":  cfg.SvrAddr,
 		"beacon_count": 0,
 		"startup_time": time.Now().Unix(),
 	}
@@ -768,6 +773,7 @@ func main() {
 		return map[string]interface{}{
 			"domain":       cfg.Domain,
 			"bind_addr":    cfg.BindAddr,
+			"server_addr":  cfg.SvrAddr,
 			"beacon_count": len(beacons),
 			"uptime":       time.Since(serverStart).Seconds(),
 		}
