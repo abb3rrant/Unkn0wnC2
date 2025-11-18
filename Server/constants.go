@@ -43,6 +43,9 @@ const (
 	// TaskCounterStart is the starting ID for task numbering
 	TaskCounterStart = 1000
 
+	// DomainTaskCounterStart is the starting ID for domain update tasks (D-prefixed)
+	DomainTaskCounterStart = 0
+
 	// ResultPreviewMaxLength is the maximum length of result previews in logs
 	ResultPreviewMaxLength = 200
 

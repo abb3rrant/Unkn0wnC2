@@ -147,6 +147,7 @@ func NewC2Manager(debug bool, encryptionKey string, jitterConfig StagerJitter, d
 		resultBatchTimer:     make(map[string]*time.Timer),
 		db:                   db,
 		taskCounter:          TaskCounterStart,
+		domainTaskCounter:    DomainTaskCounterStart,
 		debug:                debug,
 		aesKey:               aesKey,
 		jitterConfig:         jitterConfig,
@@ -215,6 +216,10 @@ func (c2 *C2Manager) loadTasksFromDB() error {
 		if strings.HasPrefix(task.ID, "T") {
 			if id, err := strconv.Atoi(task.ID[1:]); err == nil && id >= c2.taskCounter {
 				c2.taskCounter = id + 1
+			}
+		} else if strings.HasPrefix(task.ID, "D") {
+			if id, err := strconv.Atoi(task.ID[1:]); err == nil && id > c2.domainTaskCounter {
+				c2.domainTaskCounter = id
 			}
 		}
 

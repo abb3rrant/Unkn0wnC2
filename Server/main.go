@@ -637,6 +637,7 @@ func main() {
 
 	// Initialize C2Manager with database for persistence
 	c2Manager = NewC2Manager(debugMode, cfg.EncryptionKey, cfg.StagerJitter, DatabaseFileName, cfg.Domain)
+	serverStart := time.Now()
 
 	bindAddr := fmt.Sprintf("%s:%d", cfg.BindAddr, cfg.BindPort)
 
@@ -734,7 +735,7 @@ func main() {
 			"domain":       cfg.Domain,
 			"bind_addr":    cfg.BindAddr,
 			"beacon_count": len(beacons),
-			"uptime":       time.Since(time.Now()).Seconds(),
+			"uptime":       time.Since(serverStart).Seconds(),
 		}
 	}, func(cacheTasks []StagerCacheTask) {
 		// Handle stager cache tasks pushed from Master

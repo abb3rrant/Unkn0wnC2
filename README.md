@@ -42,13 +42,16 @@ Future Features:
 
 ## 🚀 Quick Deployment
 
-1. **Clone this repo**
+1. Setup Glue Records for DNS-Servers
+Each domain used will need NS1 and NS2 records setup. These records will point toward the IP of each DNS-Server.
+
+2. **Clone this repo**
 ```bash
 git clone https://github.com/abb3rrant/Unkn0wnC2
 cd Unkn0wnC2
 ```
 
-2. **Run the build script**
+3. **Run the build script**
 ```bash
 sudo chmod +x build.sh
 sudo ./build.sh
@@ -60,9 +63,9 @@ sudo ./build.sh
 > - Install all dependencies for building and Archon WebUI to `/opt/unkn0wnc2/`
 > - Create service file for the Archon server at /etc/systemd/system/unkn0wnc2.service
 
-3. **Save the admin password in the build scripts output, this will be used to access the WebUI.**
+4. **Save the admin password in the build scripts output, this will be used to access the WebUI.**
 
-4. **Start the Archon Server**
+5. **Start the Archon Server**
 
 * Service
 ```bash
@@ -75,23 +78,28 @@ sudo systemctl enable --now unkn0wnc2
 sudo unkn0wnc2 --bind-addr <interface IP to bind to> --bind-port <port>
 ```
 
-5. **Access web UI: `https://<server-ip>:<port>/`**  
+6. **Access web UI: `https://<server-ip>:<port>/`**  
 
 ![WebUI Login](assets/WebUI/login.png)
 
-6. **Change admin password and create operators**
+7. **Change admin password and create operators**
 
 ![WebUI Login](assets/WebUI/user_management.png)
 
-7. **Build components (DNS servers, clients, stagers) through the web interface.**
+8. **Build components (DNS servers, clients, stagers) through the web interface.**
 
 ![WebUI Login](assets/WebUI/builder.png)
+
+9. Deploy DNS-Servers, ensure port 53 is unbound, you may need to stop the systemd-resolved service.
 
 ---
 
 ## 🏗️ Protocol Architecture
 
 ### Shadow Mesh
+
+A huge feature of Unkn0wnC2 is Shadow Mesh. Unkn0wnC2 can be used with 1 domain or many. If a domain is *burned* then you can stand up a new DNS-server under a new domain and existing beacons will automicatically be updated with the new domain. Currently, the amount of domains supported is as many as you can fit within the TXT field in a DNS TXT Request. Since domain names vary, a specific number of supported domains has not been tested. Future updates may include a "chunked" domain delivery to allow for many domains.
+
 ```mermaid
 flowchart TB
 
@@ -140,9 +148,36 @@ classDef animate stroke-dasharray: 9,5,stroke-dashoffset: 900,animation: dash 25
 class e1,e2,e3,e4,e5,e6,e7,e8,e9 animate
 ```
 
+### Authoritative DNS
+
+Unkn0wnC2 relies on typical DNS resolutions for domains, this means that when any request for one of your subdomain's is made, it does not go directly to you DNS servers. The request is first routed through the victems local DNS resolver and then pushed to root DNS, like Google. Google will push this question to the TLD of your domain such as .com or .net and then to your DNS server configured at your NS records. This server will act as the authoirty for the configured domain, meaning any subdomain is handled by you. If any subdomain is requested and it is not C2 traffic, the DNS-servers are configured to respond with a set of random IPs. If the DNS-server is used to resolve DNS requests, then the DNS-server will forward the request to 8.8.8.8 and respond with 8.8.8.8's answer. This keeps the DNS-server acting as if it were a real DNS-server.
+
+
+```mermaid
+flowchart TD
+    A[Is it within your domain?] -.->|Yes| B(Is it a long subdomain?)
+    A -.->|No| C(Resolve through Google)
+    C ==> D[Respond]
+    B -.->|Yes| E(Does it look like Base36?)
+    E -.->|No| F
+    B -.->|No| F(Give a random IP)
+    F ==> D
+    E -.->|Yes| G(Decode)
+    G ==> H(Is it encrypted?)
+    H -.->|No| I(Probably a Stager, process as a stager)
+    H -.->|Yes| J(Decrypt)
+    J ==> K(Process Beacon Checkin)
+    K ==> D
+```
+
+
 ## Encryption & Encoding Pipeline
 
-### Outbound (Plaintext → DNS Query)
+> [!NOTE]
+> Beacon communications utilizes AES-GCM Encryption and then encodes the encrypted data with Base36 encoding. Base36 is a non-standard encoding protocol that is comprised of the lowercase English alphabet (a-z), and numbers (0-9).
+
+
+#### Outbound (Plaintext → DNS Query)
 
 ```
 ┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
@@ -153,7 +188,7 @@ class e1,e2,e3,e4,e5,e6,e7,e8,e9 animate
   "CHK|abc"          [encrypted bytes]     "3g7k2m..."      "3g7k2m.abc.com"
 ```
 
-### Inbound (DNS Response → Plaintext)
+#### Inbound (DNS Response → Plaintext)
 
 ```
 ┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
@@ -258,10 +293,10 @@ sequenceDiagram
 | Message Type | Format | Description | Example |
 |--------------|--------|-------------|---------|
 | **CHECKIN/CHK** | `CHK\|beaconID\|hostname\|username\|os\|arch` | Beacon check-in to register and poll for tasks | `CHK\|abc123\|WORKSTATION1\|jsmith\|windows\|amd64` |
-| **RESULT** | `RESULT\|beaconID\|taskID\|<result_data>` | Submit complete task result (small results) | `RESULT\|abc123\|task001\|Command output here` |
-| **RESULT_META** | `RESULT_META\|beaconID\|taskID\|totalSize\|totalChunks` | Announce incoming chunked result (phase 1) | `RESULT_META\|abc123\|task001\|524288\|10` |
-| **DATA** | `DATA\|beaconID\|taskID\|chunkIndex\|<chunk_data>` | Submit result chunk (phase 2) | `DATA\|abc123\|task001\|0\|<base64_chunk>` |
-
+| **RESULT** | `RESULT\|beaconID\|taskID\|<result_data>` | Submit complete task result (small results) | `RESULT\|abc123\|task1001\|Command output here` |
+| **RESULT_META** | `RESULT_META\|beaconID\|taskID\|totalSize\|totalChunks` | Announce incoming chunked result (phase 1) | `RESULT_META\|abc123\|task1001\|524288\|10` |
+| **DATA** | `DATA\|beaconID\|taskID\|chunkIndex\|<chunk_data>` | Submit result chunk (phase 2) | `DATA\|abc123\|task1001\|0\|<base64_chunk>` |
+| RESULT_COMPLETE| `RESULT_COMPLETE\|beaconID\|taskID\|totalChunks` | Declare task exfiltration complete (phase 3) | `RESULT_COMPLETE\|abc123\|task1001\|10` |
 ### Stager → DNS Server Messages
 
 | Message Type | Format | Description | Example |
@@ -274,7 +309,7 @@ sequenceDiagram
 
 | Response Type | Format | Description | Example |
 |---------------|--------|-------------|---------|
-| **Task Delivery** | `TASK\|taskID\|command` | Deliver task to beacon | `TASK\|task001\|whoami` |
+| **Task Delivery** | `TASK\|taskID\|command` | Deliver task to beacon | `TASK\|task1001\|whoami` |
 | **ACK** | `ACK` | Acknowledge message receipt | `ACK` |
 | **Chunk Data** | `<base36_encoded_chunk>` | Binary chunk for stager | `3g7k2m...` |
 | **Session Info** | `sessionID\|totalChunks` | Response to STG request | `sess_abc123\|15` |
@@ -282,7 +317,7 @@ sequenceDiagram
 
 ### Malleable Timing (stager / client / exfil)
 
-This project exposes several timing parameters that are intentionally malleable to tune stealth vs throughput. Defaults are set in build_config.json and in the Stager build defaults.
+This project exposes several timing parameters that are intentionally malleable to tune stealth vs throughput. These are adjusted through the Builder page within the Archon server's WebUI.
 
 Key parameters and defaults (units):
 

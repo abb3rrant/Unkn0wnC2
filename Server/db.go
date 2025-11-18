@@ -218,6 +218,20 @@ func (d *Database) SaveBeacon(beacon *Beacon) error {
 
 	now := time.Now().Unix()
 
+	firstSeen := beacon.FirstSeen
+	if firstSeen.IsZero() {
+		// Fall back to last seen or now so we always persist something sensible
+		firstSeen = beacon.LastSeen
+		if firstSeen.IsZero() {
+			firstSeen = time.Unix(now, 0)
+		}
+	}
+
+	lastSeen := beacon.LastSeen
+	if lastSeen.IsZero() {
+		lastSeen = time.Unix(now, 0)
+	}
+
 	// Serialize metadata to JSON
 	metadata := "{}"
 	if beacon.TaskQueue != nil {
@@ -238,7 +252,7 @@ func (d *Database) SaveBeacon(beacon *Beacon) error {
 			status = 'active',
 			updated_at = excluded.updated_at
 	`, beacon.ID, beacon.Hostname, beacon.Username, beacon.OS, beacon.Arch,
-		beacon.IPAddress, beacon.LastSeen.Unix(), beacon.LastSeen.Unix(),
+		beacon.IPAddress, firstSeen.Unix(), lastSeen.Unix(),
 		metadata, now, now)
 
 	return err
@@ -252,12 +266,13 @@ func (d *Database) GetBeacon(id string) (*Beacon, error) {
 	var beacon Beacon
 	var firstSeen, lastSeen, createdAt, updatedAt int64
 	var metadata string
+	var status string
 
 	err := d.db.QueryRow(`
 		SELECT id, hostname, username, os, arch, ip_address, first_seen, last_seen, status, metadata, created_at, updated_at
 		FROM beacons WHERE id = ?
 	`, id).Scan(&beacon.ID, &beacon.Hostname, &beacon.Username, &beacon.OS, &beacon.Arch,
-		&beacon.IPAddress, &firstSeen, &lastSeen, &metadata, &metadata, &createdAt, &updatedAt)
+		&beacon.IPAddress, &firstSeen, &lastSeen, &status, &metadata, &createdAt, &updatedAt)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -266,6 +281,7 @@ func (d *Database) GetBeacon(id string) (*Beacon, error) {
 		return nil, err
 	}
 
+	beacon.FirstSeen = time.Unix(firstSeen, 0)
 	beacon.LastSeen = time.Unix(lastSeen, 0)
 	beacon.TaskQueue = []Task{} // Initialize empty task queue
 
