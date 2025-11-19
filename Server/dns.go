@@ -150,15 +150,21 @@ func parseExfilMetadataPayload(payload []byte) (*ExfilMetadata, error) {
 	return meta, nil
 }
 
-// extractExfilPayloadFromQName removes the domain/timestamp labels and returns the base36 blob.
-func extractExfilPayloadFromQName(qname string) (string, bool) {
-	normalized := strings.TrimSuffix(strings.ToLower(qname), ".")
-	parts := strings.Split(normalized, ".")
-	if len(parts) < 3 {
+// extractExfilPayloadFromQName removes the configured domain/timestamp labels and returns the base36 blob.
+func extractExfilPayloadFromQName(qname, domain string) (string, bool) {
+	normalizedName := strings.TrimSuffix(strings.ToLower(qname), ".")
+	normalizedDomain := strings.TrimSuffix(strings.ToLower(domain), ".")
+	if normalizedName == "" || normalizedDomain == "" {
 		return "", false
 	}
-	labels := make([]string, len(parts)-2)
-	copy(labels, parts[:len(parts)-2])
+
+	nameParts := strings.Split(normalizedName, ".")
+	domainParts := strings.Split(normalizedDomain, ".")
+	if len(nameParts) <= len(domainParts) || !labelsHaveSuffix(nameParts, domainParts) {
+		return "", false
+	}
+
+	labels := append([]string(nil), nameParts[:len(nameParts)-len(domainParts)]...)
 	if len(labels) == 0 {
 		return "", false
 	}
@@ -171,11 +177,43 @@ func extractExfilPayloadFromQName(qname string) (string, bool) {
 		return "", false
 	}
 
-	encoded := strings.Join(labels, "")
-	if !looksLikeBase36(encoded) {
-		return "", false
+	for _, label := range labels {
+		if !isBase36Label(label) {
+			return "", false
+		}
 	}
-	return encoded, true
+
+	encoded := strings.Join(labels, "")
+	return encoded, encoded != ""
+}
+
+func labelsHaveSuffix(nameParts, domainParts []string) bool {
+	if len(domainParts) == 0 || len(domainParts) > len(nameParts) {
+		return false
+	}
+	nameIdx := len(nameParts) - len(domainParts)
+	for i := range domainParts {
+		if domainParts[i] != nameParts[nameIdx+i] {
+			return false
+		}
+	}
+	return true
+}
+
+func isBase36Label(label string) bool {
+	if label == "" {
+		return false
+	}
+	for _, ch := range label {
+		if ch >= '0' && ch <= '9' {
+			continue
+		}
+		if ch >= 'a' && ch <= 'z' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func isLikelyTimestampLabel(label string) bool {
