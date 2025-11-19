@@ -229,38 +229,18 @@ func (api *APIServer) handleBuildDNSServer(w http.ResponseWriter, r *http.Reques
 	filename := fmt.Sprintf("dns-server-%s-%d", req.Domain, time.Now().Unix())
 	savedPath, err := api.saveBuild(binaryPath, filename, "dns-server")
 	if err != nil {
-		// Log but don't fail - still send the binary
-		fmt.Printf("Warning: failed to save build: %v\n", err)
-	} else {
-		fmt.Printf("✓ Build saved to: %s\n", savedPath)
+		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to save build: %v", err))
+		return
 	}
+	fmt.Printf("✓ Build saved to: %s\n", savedPath)
 
-	// Get file info for Content-Length header
-	fileInfo, err := os.Stat(binaryPath)
+	artifact, err := newBuildArtifact("dns-server", filename, savedPath)
 	if err != nil {
-		api.sendError(w, http.StatusInternalServerError, "failed to stat binary")
+		api.sendError(w, http.StatusInternalServerError, "failed to prepare build metadata")
 		return
 	}
 
-	// Send binary as download with proper headers
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"dns-server-%s\"", req.Domain))
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", fileInfo.Size()))
-
-	file, err := os.Open(binaryPath)
-	if err != nil {
-		api.sendError(w, http.StatusInternalServerError, "failed to read binary")
-		return
-	}
-	defer file.Close()
-
-	written, err := io.Copy(w, file)
-	if err != nil {
-		fmt.Printf("Error streaming binary: %v\n", err)
-		return
-	}
-
-	fmt.Printf("✓ Binary sent successfully: %d bytes\n", written)
+	api.sendSuccess(w, "DNS server build saved", artifact)
 }
 
 // handleBuildClient builds a client binary with provided configuration
@@ -318,10 +298,10 @@ func (api *APIServer) handleBuildClient(w http.ResponseWriter, r *http.Request) 
 	filename := fmt.Sprintf("beacon-%s-%s-%d%s", req.Platform, req.Architecture, time.Now().Unix(), ext)
 	savedPath, err := api.saveBuild(binaryPath, filename, "client")
 	if err != nil {
-		fmt.Printf("Warning: failed to save build: %v\n", err)
-	} else {
-		fmt.Printf("Build saved to: %s\n", savedPath)
+		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to save build: %v", err))
+		return
 	}
+	fmt.Printf("Build saved to: %s\n", savedPath)
 
 	// Store client binary in database for stager use
 	if err := api.storeClientBinaryForStager(binaryPath, filename, req, savedPath); err != nil {
@@ -329,18 +309,13 @@ func (api *APIServer) handleBuildClient(w http.ResponseWriter, r *http.Request) 
 		// Continue anyway - binary is still saved to disk
 	}
 
-	// Send binary as download
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"beacon-%s-%s%s\"", req.Platform, req.Architecture, ext))
-
-	file, err := os.Open(binaryPath)
+	artifact, err := newBuildArtifact("client", filename, savedPath)
 	if err != nil {
-		api.sendError(w, http.StatusInternalServerError, "failed to read binary")
+		api.sendError(w, http.StatusInternalServerError, "failed to prepare build metadata")
 		return
 	}
-	defer file.Close()
 
-	io.Copy(w, file)
+	api.sendSuccess(w, "Client build saved", artifact)
 }
 
 // handleBuildExfilClient builds the dedicated Rust exfil client with embedded configuration
@@ -446,12 +421,13 @@ func (api *APIServer) handleBuildExfilClient(w http.ResponseWriter, r *http.Requ
 	filename := fmt.Sprintf("exfil-%s-%s-%d%s", req.Platform, req.Architecture, time.Now().Unix(), ext)
 	savedPath, err := api.saveBuild(binaryPath, filename, "exfil")
 	if err != nil {
-		fmt.Printf("[Builder] Failed to save exfil build: %v\n", err)
+		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to save exfil build: %v", err))
+		return
 	}
-
-	fileInfo, err := os.Stat(binaryPath)
+	fmt.Printf("[Builder] Exfil build saved to: %s\n", savedPath)
+	artifact, err := newBuildArtifact("exfil", filename, savedPath)
 	if err != nil {
-		api.sendError(w, http.StatusInternalServerError, "failed to stat build output")
+		api.sendError(w, http.StatusInternalServerError, "failed to prepare build metadata")
 		return
 	}
 
@@ -470,26 +446,12 @@ func (api *APIServer) handleBuildExfilClient(w http.ResponseWriter, r *http.Requ
 		ChunksPerBurst: req.ChunksPerBurst,
 		BurstPauseMs:   req.BurstPauseMs,
 		FilePath:       savedPath,
-		FileSize:       fileInfo.Size(),
+		FileSize:       artifact.Size,
 	}); err != nil {
 		fmt.Printf("[Builder] Failed to record exfil build metadata: %v\n", err)
 	}
 
-	// Stream binary to client
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", fileInfo.Size()))
-
-	file, err := os.Open(binaryPath)
-	if err != nil {
-		api.sendError(w, http.StatusInternalServerError, "failed to read build output")
-		return
-	}
-	defer file.Close()
-
-	if _, err := io.Copy(w, file); err != nil {
-		fmt.Printf("[Builder] Error streaming exfil client: %v\n", err)
-	}
+	api.sendSuccess(w, "Exfil client build saved", artifact)
 }
 
 // handleBuildStager builds a stager binary with provided configuration
@@ -599,10 +561,10 @@ func (api *APIServer) handleBuildStager(w http.ResponseWriter, r *http.Request) 
 	filename := fmt.Sprintf("stager-%s-%s-%d%s", req.Platform, req.Architecture, time.Now().Unix(), ext)
 	savedPath, err := api.saveBuild(binaryPath, filename, "stager")
 	if err != nil {
-		fmt.Printf("Warning: failed to save build: %v\n", err)
-	} else {
-		fmt.Printf("Build saved to: %s\n", savedPath)
+		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to save build: %v", err))
+		return
 	}
+	fmt.Printf("Build saved to: %s\n", savedPath)
 
 	// Queue cache for DNS servers (so they have the beacon ready when stager runs)
 	clientBinaryID := req.ClientBinaryID
@@ -692,18 +654,13 @@ func (api *APIServer) handleBuildStager(w http.ResponseWriter, r *http.Request) 
 		fmt.Printf("[Builder]  No client binary ID - skipping cache queue\n")
 	}
 
-	// Send binary as download
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"stager-%s-%s%s\"", req.Platform, req.Architecture, ext))
-
-	file, err := os.Open(binaryPath)
+	artifact, err := newBuildArtifact("stager", filename, savedPath)
 	if err != nil {
-		api.sendError(w, http.StatusInternalServerError, "failed to read binary")
+		api.sendError(w, http.StatusInternalServerError, "failed to prepare build metadata")
 		return
 	}
-	defer file.Close()
 
-	io.Copy(w, file)
+	api.sendSuccess(w, "Stager build saved", artifact)
 }
 
 // buildDNSServer compiles a DNS server with embedded configuration
@@ -1530,6 +1487,29 @@ func (api *APIServer) saveBuild(sourcePath, filename, buildType string) (string,
 	return destPath, nil
 }
 
+func relativeBuildPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	if rel, err := filepath.Rel(buildsDir, path); err == nil {
+		return rel
+	}
+	return path
+}
+
+func newBuildArtifact(buildType, filename, savedPath string) (*BuildArtifact, error) {
+	info, err := os.Stat(savedPath)
+	if err != nil {
+		return nil, err
+	}
+	return &BuildArtifact{
+		Filename:     filename,
+		Type:         buildType,
+		Size:         info.Size(),
+		DownloadPath: relativeBuildPath(savedPath),
+	}, nil
+}
+
 // storeClientBinaryForStager compresses, encodes, chunks, and stores client binary for stager deployment
 func (api *APIServer) storeClientBinaryForStager(binaryPath, filename string, req ClientBuildRequest, savedPath string) error {
 	// Read binary file
@@ -1599,6 +1579,13 @@ type Build struct {
 	Size      int64     `json:"size"`
 	Timestamp time.Time `json:"timestamp"`
 	Path      string    `json:"path"`
+}
+
+type BuildArtifact struct {
+	Filename     string `json:"filename"`
+	Type         string `json:"type"`
+	Size         int64  `json:"size"`
+	DownloadPath string `json:"download_path"`
 }
 
 // handleListBuilds returns a list of all saved builds

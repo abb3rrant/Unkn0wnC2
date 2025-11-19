@@ -18,6 +18,7 @@ pub struct ExfilSession {
     pub job: ExfilJobContext,
     pub session_id: u32,
     pub next_chunk: usize,
+    metadata_frames: usize,
 }
 
 #[derive(Debug, Error)]
@@ -62,11 +63,12 @@ impl ExfilSession {
             job,
             session_id,
             next_chunk: 0,
+            metadata_frames: 1,
         }
     }
 
     pub fn total_frames(&self) -> usize {
-        self.job.total_chunks + 1 // include metadata chunk
+        self.job.total_chunks + self.metadata_frames()
     }
 
     pub fn resume(job: &ExfilJobContext, hex_id: String) -> Result<Self, SessionError> {
@@ -76,6 +78,7 @@ impl ExfilSession {
             job: job.clone(),
             session_id,
             next_chunk: 0,
+            metadata_frames: 1,
         })
     }
 
@@ -90,5 +93,13 @@ impl ExfilSession {
             end = self.job.total_size;
         }
         (start, end)
+    }
+
+    pub fn set_metadata_frames(&mut self, frames: usize) {
+        self.metadata_frames = frames.max(1);
+    }
+
+    pub fn metadata_frames(&self) -> usize {
+        self.metadata_frames.max(1)
     }
 }

