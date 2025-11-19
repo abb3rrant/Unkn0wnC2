@@ -28,23 +28,26 @@ import (
 
 // APIServer wraps the HTTP server and provides API functionality
 type APIServer struct {
-	db          *MasterDatabase
-	config      Config
-	jwtSecret   []byte
-	authLimiter *RateLimiter // Rate limiter for auth endpoints
-	apiLimiter  *RateLimiter // Rate limiter for API endpoints
-	dnsLimiter  *RateLimiter // Rate limiter for DNS server endpoints
+	db             *MasterDatabase
+	config         Config
+	jwtSecret      []byte
+	authLimiter    *RateLimiter // Rate limiter for auth endpoints
+	apiLimiter     *RateLimiter // Rate limiter for API endpoints
+	dnsLimiter     *RateLimiter // Rate limiter for DNS server endpoints
+	exfilJobsMu    sync.RWMutex
+	exfilBuildJobs map[string]*ExfilBuildJob
 }
 
 // NewAPIServer creates a new API server instance
 func NewAPIServer(db *MasterDatabase, config Config) *APIServer {
 	return &APIServer{
-		db:          db,
-		config:      config,
-		jwtSecret:   []byte(config.JWTSecret),
-		authLimiter: NewRateLimiter(5, time.Minute),    // 5 login attempts per minute
-		apiLimiter:  NewRateLimiter(100, time.Minute),  // 100 API requests per minute
-		dnsLimiter:  NewRateLimiter(1000, time.Minute), // 1000 DNS server API calls per minute
+		db:             db,
+		config:         config,
+		jwtSecret:      []byte(config.JWTSecret),
+		authLimiter:    NewRateLimiter(5, time.Minute),    // 5 login attempts per minute
+		apiLimiter:     NewRateLimiter(100, time.Minute),  // 100 API requests per minute
+		dnsLimiter:     NewRateLimiter(1000, time.Minute), // 1000 DNS server API calls per minute
+		exfilBuildJobs: make(map[string]*ExfilBuildJob),
 	}
 }
 
@@ -2637,6 +2640,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	operatorRouter.HandleFunc("/builder/dns-server", api.handleBuildDNSServer).Methods("POST")
 	operatorRouter.HandleFunc("/builder/client", api.handleBuildClient).Methods("POST")
 	operatorRouter.HandleFunc("/builder/exfil-client", api.handleBuildExfilClient).Methods("POST")
+	operatorRouter.HandleFunc("/builder/exfil-client/jobs/{id}", api.handleGetExfilBuildJob).Methods("GET")
 	operatorRouter.HandleFunc("/builder/exfil-client/builds", api.handleListExfilClientBuilds).Methods("GET")
 	operatorRouter.HandleFunc("/builder/client-binaries", api.handleListClientBinaries).Methods("GET")
 	operatorRouter.HandleFunc("/builder/stager", api.handleBuildStager).Methods("POST")

