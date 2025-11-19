@@ -2,6 +2,8 @@ use once_cell::sync::{Lazy, OnceCell};
 use serde::Deserialize;
 use std::{env, fs};
 
+use crate::limits::max_supported_chunk_bytes;
+
 #[derive(Clone)]
 pub struct Config {
     pub encryption_key: &'static str,
@@ -128,67 +130,6 @@ fn tune_chunk_bytes(mut cfg: Config) -> Config {
 
     let _ = ADJUSTMENT.set(adjustment);
     cfg
-}
-
-const DNS_MAX_NAME: usize = 253;
-const DATA_LABEL_SPLIT: usize = 62;
-const AES_GCM_OVERHEAD: usize = 28;
-const LOG36_OF_2: f64 = 0.193_426_403_617_270_83; // log_base36(2)
-const MAX_CHUNK_PROBE: usize = 512;
-const METADATA_LABELS: usize = 2;
-const SESSION_TAG_LEN: usize = 6;
-const CHUNK_FIELD_WIDTH: usize = 5;
-const METADATA_PHASE2_PREFIX: usize = 2 + 1 + SESSION_TAG_LEN + 1 + CHUNK_FIELD_WIDTH + 1; // EX-ID-CHUNK-
-
-fn max_supported_chunk_bytes(domains: &[&str]) -> usize {
-    let longest = domains
-        .iter()
-        .map(|d| d.trim().trim_end_matches('.').len())
-        .max()
-        .unwrap_or(0);
-
-    let payload_budget = metadata_payload_budget(longest);
-    if payload_budget == 0 {
-        return 0;
-    }
-
-    let mut best = 0usize;
-    for chunk in 1..=MAX_CHUNK_PROBE {
-        if chunk_fits_budget(chunk, payload_budget) {
-            best = chunk;
-        } else {
-            break;
-        }
-    }
-    best
-}
-
-fn metadata_payload_budget(longest_domain: usize) -> usize {
-    let by_label = METADATA_LABELS * DATA_LABEL_SPLIT;
-    let reserved = longest_domain + METADATA_LABELS;
-    if DNS_MAX_NAME <= reserved || by_label <= METADATA_PHASE2_PREFIX {
-        return 0;
-    }
-    let by_dns = DNS_MAX_NAME - reserved;
-    if by_dns <= METADATA_PHASE2_PREFIX {
-        return 0;
-    }
-    let allowed = by_label.min(by_dns);
-    allowed.saturating_sub(METADATA_PHASE2_PREFIX)
-}
-
-fn chunk_fits_budget(chunk_bytes: usize, payload_budget: usize) -> bool {
-    let cipher_len = chunk_bytes + AES_GCM_OVERHEAD;
-    let encoded_len = estimate_base36_len(cipher_len);
-    encoded_len <= payload_budget
-}
-
-fn estimate_base36_len(bytes: usize) -> usize {
-    if bytes == 0 {
-        return 1;
-    }
-    let bits = (bytes * 8) as f64;
-    (bits * LOG36_OF_2).ceil() as usize
 }
 
 fn leak_vec(items: Vec<String>) -> &'static [&'static str] {

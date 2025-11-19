@@ -3,6 +3,7 @@ mod chunker;
 mod config;
 mod crypto;
 mod dns;
+mod limits;
 mod metadata;
 mod resolver;
 

