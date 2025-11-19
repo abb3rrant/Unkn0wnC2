@@ -7,7 +7,6 @@ use anyhow::{Context, Result};
 use rand::Rng;
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::time::Duration;
-use std::time::Duration;
 use trust_dns_proto::op::{Edns, Message, MessageType, OpCode, Query};
 use trust_dns_proto::rr::{rdata::opt::EdnsOption, Name, RData, RecordType};
 use trust_dns_proto::serialize::binary::{BinEncodable, BinEncoder};
@@ -140,7 +139,6 @@ impl DnsTransmitter {
         }
 
         let domain = self.select_domain();
-        let fqdn = format!("{}.{}", labels.join("."), domain);
         let fqdn = format!("{}.{}", labels.join("."), domain);
         Name::from_ascii(fqdn).context("invalid query name")
     }

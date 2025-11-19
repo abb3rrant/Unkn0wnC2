@@ -2585,6 +2585,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	router.HandleFunc("/dns-servers", api.handleDNSServersPage).Methods("GET")
 	router.HandleFunc("/builder", api.handleBuilderPage).Methods("GET")
 	router.HandleFunc("/stager", api.handleStagerPage).Methods("GET")
+	router.HandleFunc("/exfils", api.handleExfilsPage).Methods("GET")
 	router.HandleFunc("/users", api.handleUsersPage).Methods("GET")
 
 	// Serve static files (CSS, JS, images)
@@ -2706,4 +2707,8 @@ func (api *APIServer) handleUsersPage(w http.ResponseWriter, r *http.Request) {
 
 func (api *APIServer) handleStagerPage(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, filepath.Join(api.config.WebRoot, "stager.html"))
+}
+
+func (api *APIServer) handleExfilsPage(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, filepath.Join(api.config.WebRoot, "exfils.html"))
 }

@@ -1,0 +1,837 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Unkn0wnC2 - Exfil Sessions</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            color-scheme: dark;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: radial-gradient(circle at top, #1a1a1a 0%, #0a0a0a 35%, #050505 100%);
+            color: #f5f5f5;
+            min-height: 100vh;
+        }
+
+        .navbar {
+            background: rgba(8, 8, 8, 0.98);
+            border-bottom: 1px solid rgba(255, 51, 51, 0.2);
+            padding: 15px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+
+        .navbar-brand {
+            font-size: 30px;
+            font-weight: 700;
+            letter-spacing: 4px;
+            color: rgba(255, 51, 51, 0.8);
+            text-shadow: 0 0 15px rgba(255, 51, 51, 0.25);
+        }
+
+        .navbar-right {
+            display: flex;
+            gap: 16px;
+            align-items: center;
+            font-size: 14px;
+        }
+
+        .btn-logout {
+            padding: 8px 18px;
+            background: rgba(255, 51, 51, 0.08);
+            border: 1px solid rgba(255, 51, 51, 0.35);
+            color: #ff6666;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .btn-logout:hover {
+            background: rgba(255, 51, 51, 0.18);
+        }
+
+        .nav-menu {
+            display: flex;
+            justify-content: center;
+            gap: 12px;
+            padding: 16px 0;
+            border-bottom: 1px solid rgba(255, 51, 51, 0.05);
+            background: rgba(2, 2, 2, 0.85);
+            position: sticky;
+            top: 64px;
+            z-index: 900;
+        }
+
+        .nav-btn {
+            padding: 10px 26px;
+            border: 1px solid transparent;
+            text-decoration: none;
+            color: #ccc;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+            transition: all 0.2s ease;
+            position: relative;
+        }
+
+        .nav-btn::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border: 1px solid rgba(255, 51, 51, 0.1);
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+
+        .nav-btn:hover::before,
+        .nav-btn.active::before {
+            opacity: 1;
+        }
+
+        .nav-btn.active {
+            color: #ff6666;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 30px auto 80px;
+            padding: 0 24px 60px;
+        }
+
+        .page-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .page-header h1 {
+            margin: 0;
+            font-size: 32px;
+        }
+
+        .page-subtitle {
+            color: #8a8a8a;
+            margin-top: 6px;
+            font-size: 14px;
+        }
+
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .refresh-btn {
+            padding: 10px 16px;
+            background: rgba(255, 51, 51, 0.1);
+            border: 1px solid rgba(255, 51, 51, 0.35);
+            color: #ff8585;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .auto-refresh {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #777;
+            font-size: 13px;
+        }
+
+        .toggle-switch {
+            width: 46px;
+            height: 24px;
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 12px;
+            position: relative;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .toggle-switch.active {
+            background: rgba(255, 51, 51, 0.35);
+        }
+
+        .toggle-slider {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #fff;
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            transition: transform 0.2s;
+        }
+
+        .toggle-switch.active .toggle-slider {
+            transform: translateX(22px);
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            padding: 18px;
+            border-radius: 12px;
+        }
+
+        .stat-label {
+            color: #929292;
+            text-transform: uppercase;
+            font-size: 12px;
+            letter-spacing: 1px;
+        }
+
+        .stat-value {
+            font-size: 28px;
+            font-weight: 600;
+            margin-top: 6px;
+        }
+
+        .stat-note {
+            color: #606060;
+            font-size: 12px;
+            margin-top: 4px;
+        }
+
+        .cards-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 18px;
+        }
+
+        .transfer-card {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.07);
+            border-radius: 16px;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .transfer-card::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: 16px;
+            border: 1px solid rgba(255, 51, 51, 0.08);
+            opacity: 0;
+            transition: opacity 0.2s;
+            pointer-events: none;
+        }
+
+        .transfer-card:hover::after {
+            opacity: 1;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+        }
+
+        .file-name {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .file-meta {
+            color: #8a8a8a;
+            font-size: 13px;
+        }
+
+        .status-badge {
+            padding: 6px 12px;
+            border-radius: 999px;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            align-self: flex-start;
+        }
+
+        .status-receiving {
+            background: rgba(255, 153, 51, 0.15);
+            color: #ffb066;
+        }
+
+        .status-assembling {
+            background: rgba(78, 80, 255, 0.18);
+            color: #a5b4ff;
+        }
+
+        .status-complete {
+            background: rgba(46, 204, 113, 0.15);
+            color: #8be9a7;
+        }
+
+        .status-failed {
+            background: rgba(255, 77, 77, 0.2);
+            color: #ff9b9b;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 10px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.08);
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            border-radius: inherit;
+            background: linear-gradient(90deg, rgba(255, 51, 51, 0.7), rgba(255, 110, 80, 0.9));
+            transition: width 0.4s ease;
+        }
+
+        .progress-meta {
+            display: flex;
+            justify-content: space-between;
+            font-size: 13px;
+            color: #8c8c8c;
+            margin-top: 6px;
+        }
+
+        .meta-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .meta-label {
+            color: #777;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+        }
+
+        .meta-value {
+            color: #f1f1f1;
+            font-size: 14px;
+            margin-top: 2px;
+            word-break: break-all;
+        }
+
+        .card-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .download-btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 999px;
+            background: linear-gradient(120deg, rgba(255, 51, 51, 0.9), rgba(255, 117, 80, 0.9));
+            color: #fff;
+            font-weight: 600;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: opacity 0.2s ease;
+        }
+
+        .download-btn.disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .timestamp {
+            font-size: 12px;
+            color: #a1a1a1;
+        }
+
+        .empty-state {
+            grid-column: 1 / -1;
+            text-align: center;
+            padding: 80px 20px;
+            border: 1px dashed rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            background: rgba(255, 255, 255, 0.02);
+            color: #777;
+        }
+
+        .empty-state-icon {
+            font-size: 48px;
+            margin-bottom: 12px;
+        }
+
+        .error-banner {
+            border: 1px solid rgba(255, 99, 99, 0.4);
+            background: rgba(255, 49, 49, 0.08);
+            color: #ff9f9f;
+            padding: 14px 18px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .loading-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(5, 5, 5, 0.65);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1500;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s ease;
+        }
+
+        .loading-overlay.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .spinner {
+            width: 48px;
+            height: 48px;
+            border: 4px solid rgba(255, 255, 255, 0.15);
+            border-top-color: #ff6666;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        @media (max-width: 640px) {
+            .meta-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .card-footer {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .controls {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="spinner"></div>
+    </div>
+
+    <nav class="navbar">
+        <div class="navbar-brand">Unkn0wnC2</div>
+        <div class="navbar-right">
+            <div class="user-info">Logged in as <strong id="username">admin</strong></div>
+            <button class="btn-logout" onclick="logout()">Logout</button>
+        </div>
+    </nav>
+
+    <div class="nav-menu">
+        <a href="/dashboard" class="nav-btn">Dashboard</a>
+        <a href="/builder" class="nav-btn">Builder</a>
+        <a href="/stager" class="nav-btn">Stager Sessions</a>
+        <a href="/exfils" class="nav-btn active">Exfils</a>
+        <a href="/users" class="nav-btn" id="usersNavBtn">Users</a>
+    </div>
+
+    <div class="container">
+        <div id="errorBanner" class="error-banner"></div>
+
+        <div class="page-header">
+            <div>
+                <h1>Exfil Sessions</h1>
+                <div class="page-subtitle">Track incoming artifacts, watch chunk progress, and pull completed files.</div>
+            </div>
+            <div class="controls">
+                <div class="auto-refresh">
+                    <span>Auto-refresh</span>
+                    <div class="toggle-switch" id="autoRefreshToggle" onclick="toggleAutoRefresh()">
+                        <div class="toggle-slider"></div>
+                    </div>
+                </div>
+                <button class="refresh-btn" onclick="loadExfilTransfers(true)">Refresh</button>
+            </div>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Total Sessions</div>
+                <div class="stat-value" id="statTotal">0</div>
+                <div class="stat-note">Last 100 rows</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Receiving</div>
+                <div class="stat-value" id="statReceiving">0</div>
+                <div class="stat-note">Actively ingesting chunks</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Assembling</div>
+                <div class="stat-value" id="statAssembling">0</div>
+                <div class="stat-note">Waiting on artifact build</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Completed</div>
+                <div class="stat-value" id="statCompleted">0</div>
+                <div class="stat-note">Ready for download</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Total Data</div>
+                <div class="stat-value" id="statData">0 B</div>
+                <div class="stat-note">Size reported by clients</div>
+            </div>
+        </div>
+
+        <div class="cards-grid" id="cardsGrid">
+            <div class="empty-state" id="emptyState">
+                <div class="empty-state-icon">📂</div>
+                <div>No exfil sessions yet</div>
+                <div style="margin-top: 8px; font-size: 13px; color: #555;">
+                    Transfers will appear as soon as DNS servers stream chunks.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin;
+        let autoRefreshEnabled = false;
+        let autoRefreshInterval = null;
+
+        function getCookie(name) {
+            const value = `; ${document.cookie}`;
+            const parts = value.split(`; ${name}=`);
+            if (parts.length === 2) return parts.pop().split(';').shift();
+            return null;
+        }
+
+        async function authFetch(url, options = {}) {
+            const headers = {
+                ...(options.headers || {})
+            };
+
+            if (options.method && options.method !== 'GET' && !headers['Content-Type']) {
+                headers['Content-Type'] = 'application/json';
+            }
+
+            if (options.method && options.method !== 'GET') {
+                const csrfToken = getCookie('csrf_token');
+                if (csrfToken) {
+                    headers['X-CSRF-Token'] = csrfToken;
+                }
+            }
+
+            const response = await fetch(API_BASE + url, {
+                ...options,
+                headers,
+                credentials: 'include'
+            });
+
+            if (response.status === 401 || response.status === 403) {
+                window.location.href = '/login';
+                return null;
+            }
+
+            return response;
+        }
+
+        function setLoading(active) {
+            const overlay = document.getElementById('loadingOverlay');
+            if (!overlay) return;
+            if (active) {
+                overlay.classList.add('active');
+            } else {
+                overlay.classList.remove('active');
+            }
+        }
+
+        function showError(message) {
+            const banner = document.getElementById('errorBanner');
+            if (!banner) return;
+            banner.textContent = message;
+            banner.style.display = 'block';
+        }
+
+        function clearError() {
+            const banner = document.getElementById('errorBanner');
+            if (!banner) return;
+            banner.style.display = 'none';
+            banner.textContent = '';
+        }
+
+        function formatBytes(bytes) {
+            if (!bytes || bytes <= 0) return '0 B';
+            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+            const index = Math.floor(Math.log(bytes) / Math.log(1024));
+            return `${(bytes / Math.pow(1024, index)).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+        }
+
+        function formatTimestamp(value) {
+            if (!value) return '—';
+            const date = new Date(value);
+            if (isNaN(date.getTime())) return '—';
+            return date.toLocaleString();
+        }
+
+        function formatRelative(value) {
+            if (!value) return 'unknown';
+            const date = new Date(value);
+            if (isNaN(date.getTime())) return 'unknown';
+            const diff = Date.now() - date.getTime();
+            const seconds = Math.floor(diff / 1000);
+            if (seconds < 60) return `${seconds}s ago`;
+            const minutes = Math.floor(seconds / 60);
+            if (minutes < 60) return `${minutes}m ago`;
+            const hours = Math.floor(minutes / 60);
+            if (hours < 24) return `${hours}h ago`;
+            const days = Math.floor(hours / 24);
+            return `${days}d ago`;
+        }
+
+        function formatDuration(seconds) {
+            if (!seconds || seconds <= 0) return '—';
+            const mins = Math.floor(seconds / 60);
+            if (mins < 1) return `${seconds}s`;
+            const hrs = Math.floor(mins / 60);
+            if (hrs < 1) return `${mins}m`;
+            const remMins = mins % 60;
+            return `${hrs}h ${remMins}m`;
+        }
+
+        function getStatusClass(status) {
+            switch ((status || '').toLowerCase()) {
+                case 'complete':
+                    return 'status-complete';
+                case 'assembling':
+                    return 'status-assembling';
+                case 'failed':
+                case 'error':
+                    return 'status-failed';
+                default:
+                    return 'status-receiving';
+            }
+        }
+
+        function computeEta(transfer, rate) {
+            const total = transfer.total_chunks || 0;
+            const received = transfer.received_chunks || 0;
+            if ((transfer.status || '').toLowerCase() === 'complete') {
+                return 'Ready';
+            }
+            if (!total || total <= received || rate <= 0) {
+                return '—';
+            }
+            const remaining = total - received;
+            return formatDuration(Math.round(remaining / rate));
+        }
+
+        function renderTransfers(transfers) {
+            const grid = document.getElementById('cardsGrid');
+            if (!grid) return;
+
+            if (!transfers || transfers.length === 0) {
+                grid.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📂</div>
+                        <div>No exfil sessions yet</div>
+                        <div style="margin-top: 8px; font-size: 13px; color: #555;">
+                            Transfers will appear as soon as DNS servers stream chunks.
+                        </div>
+                    </div>`;
+                return;
+            }
+
+            const cards = transfers.map(transfer => {
+                const totalChunks = transfer.total_chunks || transfer.received_chunks || 0;
+                const received = transfer.received_chunks || 0;
+                const percent = totalChunks > 0 ? Math.min(100, Math.round((received / totalChunks) * 100)) : 0;
+                const chunkSummary = totalChunks > 0 ? `${received}/${totalChunks}` : `${received} / ?`;
+
+                let startTs = Date.now();
+                if (transfer.created_at) {
+                    const parsed = new Date(transfer.created_at).getTime();
+                    if (!Number.isNaN(parsed)) {
+                        startTs = parsed;
+                    }
+                }
+
+                let referenceTs = Date.now();
+                const statusValue = (transfer.status || 'receiving').toLowerCase();
+                if (statusValue === 'complete' && transfer.completed_at) {
+                    const completed = new Date(transfer.completed_at).getTime();
+                    if (!Number.isNaN(completed)) {
+                        referenceTs = completed;
+                    }
+                }
+
+                const elapsedSeconds = Math.max(1, Math.floor((referenceTs - startTs) / 1000));
+                const chunkRate = received > 0 ? received / elapsedSeconds : 0;
+                const eta = computeEta(transfer, chunkRate);
+                const safeSession = transfer.session_id || '';
+                const canDownload = Boolean(safeSession) && statusValue === 'complete';
+                const shortSession = safeSession ? safeSession.slice(0, 12) : 'unknown';
+
+                return `
+                    <div class="transfer-card">
+                        <div class="card-header">
+                            <div>
+                                <div class="file-name">${transfer.file_name || 'Unknown Artifact'}</div>
+                                <div class="file-meta">${formatBytes(transfer.file_size)} • Session <code style="color: rgba(255,255,255,0.7);">${shortSession}</code></div>
+                            </div>
+                            <span class="status-badge ${getStatusClass(transfer.status)}">${statusValue.toUpperCase()}</span>
+                        </div>
+                        <div>
+                            <div class="progress-bar">
+                                <div class="progress-fill" style="width: ${percent}%"></div>
+                            </div>
+                            <div class="progress-meta">
+                                <span>Chunks ${chunkSummary}</span>
+                                <span>${percent}%</span>
+                            </div>
+                        </div>
+                        <div class="meta-grid">
+                            <div>
+                                <div class="meta-label">Source DNS</div>
+                                <div class="meta-value">${transfer.source_dns || 'Unknown'}</div>
+                            </div>
+                            <div>
+                                <div class="meta-label">Job ID</div>
+                                <div class="meta-value">${transfer.job_id || 'N/A'}</div>
+                            </div>
+                            <div>
+                                <div class="meta-label">Last Chunk</div>
+                                <div class="meta-value">${formatTimestamp(transfer.last_chunk_at)}</div>
+                            </div>
+                            <div>
+                                <div class="meta-label">ETA</div>
+                                <div class="meta-value">${eta}</div>
+                            </div>
+                        </div>
+                        <div class="card-footer">
+                            <button class="download-btn ${canDownload ? '' : 'disabled'}" ${canDownload ? '' : 'disabled'} onclick="downloadArtifact('${safeSession}', ${canDownload})">
+                                ${canDownload ? 'Download Artifact' : 'Waiting on Completion'}
+                            </button>
+                            <div class="timestamp">
+                                Updated ${formatRelative(transfer.updated_at)}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            grid.innerHTML = cards;
+        }
+
+        async function loadExfilTransfers(showSpinner = false) {
+            try {
+                if (showSpinner) setLoading(true);
+                clearError();
+
+                const response = await authFetch('/api/exfil/transfers?limit=200');
+                if (!response) return;
+                if (!response.ok) {
+                    const text = await response.text();
+                    throw new Error(text || `Request failed with ${response.status}`);
+                }
+
+                const payload = await response.json();
+                const transfers = (payload && payload.data && Array.isArray(payload.data.transfers))
+                    ? payload.data.transfers
+                    : [];
+
+                updateStats(transfers);
+                renderTransfers(transfers);
+            } catch (err) {
+                console.error('Failed to load exfil transfers', err);
+                showError(err.message || 'Failed to load exfil transfers');
+            } finally {
+                if (showSpinner) setLoading(false);
+            }
+        }
+
+        function updateStats(transfers) {
+            const total = transfers.length;
+            const receiving = transfers.filter(t => (t.status || '').toLowerCase() === 'receiving').length;
+            const assembling = transfers.filter(t => (t.status || '').toLowerCase() === 'assembling').length;
+            const completed = transfers.filter(t => (t.status || '').toLowerCase() === 'complete').length;
+            const bytes = transfers.reduce((sum, t) => sum + (t.file_size || 0), 0);
+
+            const setText = (id, value) => {
+                const el = document.getElementById(id);
+                if (el) el.textContent = value;
+            };
+
+            setText('statTotal', total);
+            setText('statReceiving', receiving);
+            setText('statAssembling', assembling);
+            setText('statCompleted', completed);
+            setText('statData', formatBytes(bytes));
+        }
+
+        function toggleAutoRefresh() {
+            autoRefreshEnabled = !autoRefreshEnabled;
+            const toggle = document.getElementById('autoRefreshToggle');
+
+            if (autoRefreshEnabled) {
+                if (toggle) toggle.classList.add('active');
+                if (autoRefreshInterval) clearInterval(autoRefreshInterval);
+                autoRefreshInterval = setInterval(() => loadExfilTransfers(false), 5000);
+            } else {
+                if (toggle) toggle.classList.remove('active');
+                if (autoRefreshInterval) {
+                    clearInterval(autoRefreshInterval);
+                    autoRefreshInterval = null;
+                }
+            }
+        }
+
+        function downloadArtifact(sessionId, allowed) {
+            if (!allowed) return;
+            window.location.href = `/api/exfil/transfers/${sessionId}/download`;
+        }
+
+        function logout() {
+            try {
+                localStorage.removeItem('token');
+            } catch (e) {
+                console.warn('Unable to clear token from localStorage', e);
+            }
+            window.location.href = '/login';
+        }
+
+        loadExfilTransfers(true);
+    </script>
+</body>
+</html>
