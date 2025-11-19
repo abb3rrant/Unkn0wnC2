@@ -65,6 +65,10 @@ impl ExfilSession {
         }
     }
 
+    pub fn total_frames(&self) -> usize {
+        self.job.total_chunks + 1 // include metadata chunk
+    }
+
     pub fn resume(job: &ExfilJobContext, hex_id: String) -> Result<Self, SessionError> {
         let session_id = u32::from_str_radix(hex_id.trim_start_matches("0x"), 16)
             .map_err(|_| SessionError::InvalidSession)?;

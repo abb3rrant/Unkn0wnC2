@@ -324,6 +324,7 @@ sequenceDiagram
 | **RESULT_META** | `RESULT_META\|beaconID\|taskID\|totalSize\|totalChunks` | Announce incoming chunked result (phase 1) | `RESULT_META\|abc123\|task1001\|524288\|10` |
 | **DATA** | `DATA\|beaconID\|taskID\|chunkIndex\|<chunk_data>` | Submit result chunk (phase 2) | `DATA\|abc123\|task1001\|0\|<base64_chunk>` |
 | RESULT_COMPLETE| `RESULT_COMPLETE\|beaconID\|taskID\|totalChunks` | Declare task exfiltration complete (phase 3) | `RESULT_COMPLETE\|abc123\|task1001\|10` |
+
 ### Stager → DNS Server Messages
 
 | Message Type | Format | Description | Example |
@@ -331,6 +332,15 @@ sequenceDiagram
 | **STG** | `STG\|clientIP\|os\|arch` | Initial stager request to start session | `STG\|192.168.1.100\|windows\|amd64` |
 | **CHUNK** | `CHUNK\|chunkIndex\|clientIP\|sessionID` | Request specific beacon chunk | `CHUNK\|0\|192.168.1.100\|sess_abc123` |
 | **ACK** | `ACK\|chunkIndex\|clientIP\|sessionID` | (DEPRECATED) Old stager acknowledgment | `ACK\|5\|192.168.1.100\|sess_abc123` |
+
+### Exfil Client → DNS Server Messages
+
+| Message Type | Format | Description | Example |
+|--------------|--------|-------------|---------|
+| **EX** | `EX\|ID\|totalChunks\|` | Initial exfil request to start session | `EX\|E2\|9402` |
+| **EX DATA** | `EX\|ID\|chunkIndex\|<result_data>` | Sending specific exfil data chunk | `EX\|E2\|3\|<result_data>` |
+| **EX COMPLETE** | `EX\|ID\|COMPLETE` | Signaling exfil is complete | `EX\|E2\|COMPLETE` |
+
 
 ### DNS Server → Beacon/Stager Responses
 

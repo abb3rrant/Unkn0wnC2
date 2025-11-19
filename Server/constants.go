@@ -28,6 +28,18 @@ const (
 	// ExfilHeaderChunkIndex is the sentinel chunk index used for metadata-only frames
 	ExfilHeaderChunkIndex uint32 = 0xFFFFFFFF
 
+	// ExfilSessionTagWidth is the fixed width for session tags encoded in DNS labels
+	ExfilSessionTagWidth = 6
+
+	// ExfilChunkCounterWidth is the fixed width for chunk counters encoded in DNS labels
+	ExfilChunkCounterWidth = 5
+
+	// ExfilFramePrefix marks DNS labels that carry dedicated exfil traffic
+	ExfilFramePrefix = "EX-"
+
+	// ExfilCompleteToken marks completion frames emitted by the exfil client
+	ExfilCompleteToken = "COMPLETE"
+
 	// DNSLabelMaxLength is the maximum length for a single DNS label
 	DNSLabelMaxLength = 62
 

@@ -135,6 +135,10 @@ const DATA_LABEL_SPLIT: usize = 62;
 const AES_GCM_OVERHEAD: usize = 28;
 const LOG36_OF_2: f64 = 0.193_426_403_617_270_83; // log_base36(2)
 const MAX_CHUNK_PROBE: usize = 512;
+const METADATA_LABELS: usize = 2;
+const SESSION_TAG_LEN: usize = 6;
+const CHUNK_FIELD_WIDTH: usize = 5;
+const METADATA_PHASE2_PREFIX: usize = 2 + 1 + SESSION_TAG_LEN + 1 + CHUNK_FIELD_WIDTH + 1; // EX-ID-CHUNK-
 
 fn max_supported_chunk_bytes(domains: &[&str]) -> usize {
     let longest = domains
@@ -143,14 +147,14 @@ fn max_supported_chunk_bytes(domains: &[&str]) -> usize {
         .max()
         .unwrap_or(0);
 
-    if DNS_MAX_NAME <= longest + 1 {
+    let payload_budget = metadata_payload_budget(longest);
+    if payload_budget == 0 {
         return 0;
     }
 
-    let available = DNS_MAX_NAME - (longest + 1);
     let mut best = 0usize;
     for chunk in 1..=MAX_CHUNK_PROBE {
-        if name_fits(chunk, available) {
+        if chunk_fits_budget(chunk, payload_budget) {
             best = chunk;
         } else {
             break;
@@ -159,12 +163,24 @@ fn max_supported_chunk_bytes(domains: &[&str]) -> usize {
     best
 }
 
-fn name_fits(chunk_bytes: usize, available: usize) -> bool {
+fn metadata_payload_budget(longest_domain: usize) -> usize {
+    let by_label = METADATA_LABELS * DATA_LABEL_SPLIT;
+    let reserved = longest_domain + METADATA_LABELS;
+    if DNS_MAX_NAME <= reserved || by_label <= METADATA_PHASE2_PREFIX {
+        return 0;
+    }
+    let by_dns = DNS_MAX_NAME - reserved;
+    if by_dns <= METADATA_PHASE2_PREFIX {
+        return 0;
+    }
+    let allowed = by_label.min(by_dns);
+    allowed.saturating_sub(METADATA_PHASE2_PREFIX)
+}
+
+fn chunk_fits_budget(chunk_bytes: usize, payload_budget: usize) -> bool {
     let cipher_len = chunk_bytes + AES_GCM_OVERHEAD;
     let encoded_len = estimate_base36_len(cipher_len);
-    let labels = (encoded_len + DATA_LABEL_SPLIT - 1) / DATA_LABEL_SPLIT;
-    let data_len = encoded_len + labels.saturating_sub(1);
-    data_len <= available
+    encoded_len <= payload_budget
 }
 
 fn estimate_base36_len(bytes: usize) -> usize {
