@@ -38,6 +38,12 @@ struct Args {
 fn main() -> Result<()> {
     let args = Args::parse();
     let cfg = Config::load();
+    if let Some((requested, adjusted)) = Config::chunk_adjustment() {
+        eprintln!(
+            "[!] Requested chunk size {} bytes exceeded DNS limit; using {} bytes",
+            requested, adjusted
+        );
+    }
     let mut buffer = Vec::new();
 
     if let Some(path) = args.file.as_deref() {

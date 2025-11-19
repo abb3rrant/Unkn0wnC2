@@ -566,6 +566,7 @@
                     <label class="form-label">Chunk Size (bytes)</label>
                     <input type="number" id="exfilChunkBytes" class="form-input" value="180" min="64" max="220">
                     <div class="help-text">Payload per DNS answer. 180 bytes is a safe default.</div>
+                    <div class="help-text" id="exfilChunkHint"></div>
                 </div>
 
                 <div class="form-group">
@@ -776,6 +777,96 @@
             document.getElementById('loadingOverlay').classList.remove('show');
         }
 
+        function computeMaxChunkBytes(domains) {
+            const DNS_MAX_NAME = 253;
+            const DATA_LABEL_SPLIT = 62;
+            const AES_GCM_OVERHEAD = 28;
+            const MAX_CHUNK_PROBE = 512;
+            const LOG36_OF_2 = Math.log(2) / Math.log(36);
+
+            const cleaned = (domains || [])
+                .map(domain => domain.trim().replace(/\.$/, ''))
+                .filter(Boolean);
+            if (cleaned.length === 0) {
+                return 0;
+            }
+
+            let longest = 0;
+            cleaned.forEach(domain => {
+                if (domain.length > longest) {
+                    longest = domain.length;
+                }
+            });
+
+            if (DNS_MAX_NAME <= longest + 1) {
+                return 0;
+            }
+
+            const available = DNS_MAX_NAME - (longest + 1);
+
+            const estimateBase36Len = bytes => {
+                if (bytes <= 0) {
+                    return 1;
+                }
+                const bits = bytes * 8;
+                return Math.ceil(bits * LOG36_OF_2);
+            };
+
+            const nameFits = chunkBytes => {
+                const cipherLen = chunkBytes + AES_GCM_OVERHEAD;
+                const encodedLen = estimateBase36Len(cipherLen);
+                const labels = Math.ceil(encodedLen / DATA_LABEL_SPLIT);
+                let dataLen = encodedLen;
+                if (labels > 1) {
+                    dataLen += labels - 1;
+                }
+                return dataLen <= available;
+            };
+
+            let best = 0;
+            for (let chunk = 1; chunk <= MAX_CHUNK_PROBE; chunk += 1) {
+                if (nameFits(chunk)) {
+                    best = chunk;
+                } else {
+                    break;
+                }
+            }
+            return best;
+        }
+
+        function updateExfilChunkHint(servers) {
+            const hint = document.getElementById('exfilChunkHint');
+            if (!hint) {
+                return;
+            }
+
+            const activeDomains = (servers || [])
+                .filter(server => server.status === 'active')
+                .map(server => (server.domain || '').trim())
+                .filter(Boolean);
+
+            if (activeDomains.length === 0) {
+                hint.textContent = 'No active DNS servers yet; chunk size will be normalized at runtime.';
+                return;
+            }
+
+            const maxChunk = computeMaxChunkBytes(activeDomains);
+            if (maxChunk <= 0) {
+                hint.textContent = 'Current domain names leave no room for data chunks. Shorten them before building.';
+                return;
+            }
+
+            hint.innerHTML = `Max safe chunk size for these domains: <strong>${maxChunk} bytes</strong>. Larger values will be clamped automatically.`;
+
+            const chunkInput = document.getElementById('exfilChunkBytes');
+            if (chunkInput) {
+                const current = parseInt(chunkInput.value, 10);
+                if (!Number.isNaN(current) && current > maxChunk) {
+                    chunkInput.value = maxChunk;
+                }
+            }
+        }
+
         async function loadDNSServers() {
             try {
                 const response = await authFetch('/api/dns-servers');
@@ -786,6 +877,7 @@
 
                 // Store servers globally for buildClient
                 window.availableDNSServers = servers;
+                updateExfilChunkHint(servers);
 
                 // Update client DNS servers display
                 const clientList = document.getElementById('clientDNSServersList');
