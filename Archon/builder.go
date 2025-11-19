@@ -1299,14 +1299,11 @@ func collectActiveDomains(servers []map[string]interface{}) []string {
 }
 
 const (
-	dnsMaxName           = 253
-	dataLabelSplit       = 62
-	aesGCMOverhead       = 28
-	maxChunkProbe        = 512
-	metadataLabels       = 2
-	sessionTagLen        = 6
-	chunkFieldWidth      = 5
-	metadataPhase2Prefix = 2 + 1 + sessionTagLen + 1 + chunkFieldWidth + 1 // EX-ID-CHUNK-
+	dnsMaxName     = 253
+	dataLabelSplit = 62
+	aesGCMOverhead = 28
+	maxChunkProbe  = 512
+	metadataLabels = 2
 )
 
 var log36Of2 = math.Log(2) / math.Log(36)
@@ -1344,18 +1341,10 @@ func clampExfilChunkBytes(req *ExfilClientBuildRequest) (before int, limit int) 
 }
 
 func maxChunkBytesForDomains(domains []string) int {
-	longest := 0
-	for _, domain := range domains {
-		trimmed := strings.TrimSpace(domain)
-		trimmed = strings.TrimSuffix(trimmed, ".")
-		if l := len(trimmed); l > longest {
-			longest = l
-		}
-	}
-	payloadBudget := metadataPayloadBudget(longest)
-	if payloadBudget <= 0 {
+	if !domainsFitLimits(domains) {
 		return 0
 	}
+	payloadBudget := dataLabelSplit
 	best := 0
 	for chunk := 1; chunk <= maxChunkProbe; chunk++ {
 		if chunkFitsBudget(chunk, payloadBudget) {
@@ -1367,25 +1356,17 @@ func maxChunkBytesForDomains(domains []string) int {
 	return best
 }
 
-func metadataPayloadBudget(longestDomain int) int {
-	byLabel := metadataLabels * dataLabelSplit
-	reserved := longestDomain + metadataLabels
-	if dnsMaxName <= reserved || byLabel <= metadataPhase2Prefix {
-		return 0
+func domainsFitLimits(domains []string) bool {
+	longest := 0
+	for _, domain := range domains {
+		trimmed := strings.TrimSpace(domain)
+		trimmed = strings.TrimSuffix(trimmed, ".")
+		if l := len(trimmed); l > longest {
+			longest = l
+		}
 	}
-	byDNS := dnsMaxName - reserved
-	if byDNS <= metadataPhase2Prefix {
-		return 0
-	}
-	allowed := byLabel
-	if byDNS < allowed {
-		allowed = byDNS
-	}
-	budget := allowed - metadataPhase2Prefix
-	if budget < 0 {
-		return 0
-	}
-	return budget
+	required := metadataLabels*dataLabelSplit + 2 + longest
+	return required < dnsMaxName
 }
 
 func chunkFitsBudget(chunkBytes, payloadBudget int) bool {

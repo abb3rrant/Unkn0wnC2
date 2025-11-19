@@ -3,17 +3,13 @@
 pub const DNS_MAX_NAME: usize = 253;
 pub const LABEL_CAP: usize = 62;
 pub const FRAME_LABELS: usize = 2;
-pub const SESSION_TAG_WIDTH: usize = 3; // "E" + two base36 digits
-pub const CHUNK_COUNTER_WIDTH: usize = 5;
-pub const FRAME_PREFIX_LEN: usize = 2 + 1 + SESSION_TAG_WIDTH + 1 + CHUNK_COUNTER_WIDTH + 1; // EX-ID-CHUNK-
-pub const FRAME_CHAR_BUDGET: usize = LABEL_CAP * FRAME_LABELS;
 pub const AES_GCM_OVERHEAD: usize = 28;
 const LOG36_OF_2: f64 = 0.193_426_403_617_270_83;
 const MAX_CHUNK_PROBE: usize = 512;
 
-/// Maximum number of base36 characters available for payload data inside a frame.
+/// Maximum number of base36 characters available for payload data inside a single label.
 pub fn chunk_payload_budget_chars() -> usize {
-    FRAME_CHAR_BUDGET.saturating_sub(FRAME_PREFIX_LEN)
+    LABEL_CAP
 }
 
 /// Estimate the number of base36 characters necessary to encode `bytes`.
@@ -44,28 +40,13 @@ fn longest_domain_length(domains: &[&str]) -> usize {
         .unwrap_or(0)
 }
 
-/// Compute the metadata payload budget for the longest configured domain.
-pub fn metadata_payload_budget(longest_domain: usize) -> usize {
-    let reserved = longest_domain + FRAME_LABELS; // dot separators between labels + domain
-    if DNS_MAX_NAME <= reserved || FRAME_CHAR_BUDGET <= FRAME_PREFIX_LEN {
-        return 0;
-    }
-    let by_dns = DNS_MAX_NAME - reserved;
-    if by_dns <= FRAME_PREFIX_LEN {
-        return 0;
-    }
-    let allowed = FRAME_CHAR_BUDGET.min(by_dns);
-    allowed.saturating_sub(FRAME_PREFIX_LEN)
-}
-
 /// Compute the largest safe chunk size (in plaintext bytes) for the provided domains.
 pub fn max_supported_chunk_bytes(domains: &[&str]) -> usize {
-    let longest = longest_domain_length(domains);
-    let payload_budget = metadata_payload_budget(longest);
-    if payload_budget == 0 {
+    if !domains_fit_limits(domains) {
         return 0;
     }
 
+    let payload_budget = chunk_payload_budget_chars();
     let mut best = 0usize;
     for chunk in 1..=MAX_CHUNK_PROBE {
         if chunk_fits_budget(chunk, payload_budget) {
@@ -75,4 +56,15 @@ pub fn max_supported_chunk_bytes(domains: &[&str]) -> usize {
         }
     }
     best
+}
+
+fn domains_fit_limits(domains: &[&str]) -> bool {
+    let longest = longest_domain_length(domains);
+    if longest == 0 {
+        return true;
+    }
+
+    // metadata label + data label + two dots + domain must be <= DNS max length.
+    let required = LABEL_CAP * FRAME_LABELS + 2 + longest;
+    required < DNS_MAX_NAME
 }
