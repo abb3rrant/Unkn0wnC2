@@ -233,6 +233,9 @@ func interpretExfilFrameString(frame string) (*ExfilFrame, error) {
 	if len(sessionTag) != ExfilSessionTagWidth {
 		return nil, fmt.Errorf("invalid session tag length: %s", sessionTag)
 	}
+	if !strings.HasPrefix(sessionTag, ExfilSessionTagPrefix) {
+		return nil, fmt.Errorf("invalid session tag prefix: %s", sessionTag)
+	}
 
 	completionToken := strings.ToUpper(ExfilCompleteToken)
 	switch {

