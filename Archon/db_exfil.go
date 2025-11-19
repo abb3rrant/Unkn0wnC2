@@ -307,6 +307,7 @@ func (d *MasterDatabase) ListExfilTransfers(limit, offset int) ([]ExfilTransfer,
 	for rows.Next() {
 		var t ExfilTransfer
 		var created, updated int64
+		var note sql.NullString
 		var lastChunk, completed sql.NullInt64
 		if err := rows.Scan(
 			&t.SessionID,
@@ -317,13 +318,18 @@ func (d *MasterDatabase) ListExfilTransfers(limit, offset int) ([]ExfilTransfer,
 			&t.TotalChunks,
 			&t.ReceivedChunks,
 			&t.Status,
-			&t.Note,
+			&note,
 			&created,
 			&updated,
 			&lastChunk,
 			&completed,
 		); err != nil {
 			return nil, err
+		}
+		if note.Valid {
+			t.Note = note.String
+		} else {
+			t.Note = ""
 		}
 		t.CreatedAt = time.Unix(created, 0)
 		t.UpdatedAt = time.Unix(updated, 0)
@@ -356,6 +362,7 @@ func (d *MasterDatabase) GetExfilTransfer(sessionID string) (*ExfilTransfer, err
 
 	var t ExfilTransfer
 	var created, updated int64
+	var note sql.NullString
 	var lastChunk, completed sql.NullInt64
 	if err := row.Scan(
 		&t.SessionID,
@@ -366,7 +373,7 @@ func (d *MasterDatabase) GetExfilTransfer(sessionID string) (*ExfilTransfer, err
 		&t.TotalChunks,
 		&t.ReceivedChunks,
 		&t.Status,
-		&t.Note,
+		&note,
 		&created,
 		&updated,
 		&lastChunk,
@@ -376,6 +383,12 @@ func (d *MasterDatabase) GetExfilTransfer(sessionID string) (*ExfilTransfer, err
 			return nil, fmt.Errorf("exfil transfer not found")
 		}
 		return nil, err
+	}
+
+	if note.Valid {
+		t.Note = note.String
+	} else {
+		t.Note = ""
 	}
 
 	t.CreatedAt = time.Unix(created, 0)
@@ -625,6 +638,7 @@ func (d *MasterDatabase) fetchExfilTransferTx(tx *sql.Tx, sessionID string) (*Ex
 
 	var t ExfilTransfer
 	var created, updated int64
+	var note sql.NullString
 	var lastChunk, completed sql.NullInt64
 	if err := row.Scan(
 		&t.SessionID,
@@ -635,13 +649,18 @@ func (d *MasterDatabase) fetchExfilTransferTx(tx *sql.Tx, sessionID string) (*Ex
 		&t.TotalChunks,
 		&t.ReceivedChunks,
 		&t.Status,
-		&t.Note,
+		&note,
 		&created,
 		&updated,
 		&lastChunk,
 		&completed,
 	); err != nil {
 		return nil, err
+	}
+	if note.Valid {
+		t.Note = note.String
+	} else {
+		t.Note = ""
 	}
 
 	t.CreatedAt = time.Unix(created, 0)
