@@ -792,59 +792,11 @@
             </div>
         </div>
 
-        <h1 class="section-title" style="margin-top: 40px;">Exfil Build Queue</h1>
-        <div class="builder-card" style="max-width: 100%;">
-            <div class="builder-description">
-                Monitor the asynchronous exfil client builds kicked off above. Jobs disappear automatically once finished.
-            </div>
-            <div id="exfilJobsContainer" style="margin-top: 20px;">
-                <div style="text-align: center; color: #444; padding: 20px;">No exfil build jobs in progress.</div>
-            </div>
-        </div>
-
-        <h1 class="section-title" style="margin-top: 40px;">Exfil Job History</h1>
-        <div class="builder-card" style="max-width: 100%;">
-            <div class="builder-description">
-                Persisted exfil build jobs survive restarts. Filter by status, review errors, and grab artifacts directly from prior runs.
-            </div>
-            <div class="job-controls">
-                <div>
-                    <label class="form-label" style="text-transform: none;">Status Filter</label>
-                    <select id="exfilJobStatusFilter" class="form-select" style="max-width: 220px;" onchange="onExfilJobStatusFilterChange(this.value)">
-                        <option value="">All statuses</option>
-                        <option value="queued">Queued</option>
-                        <option value="running">Running</option>
-                        <option value="completed">Completed</option>
-                        <option value="failed">Failed</option>
-                    </select>
-                </div>
-                <button class="btn-build" style="width: auto; min-width: 180px;" onclick="refreshExfilJobHistory({ resetOffset: true })">
-                    Refresh Jobs
-                </button>
-            </div>
-            <div class="job-pagination">
-                <button class="pagination-btn" id="exfilJobPrevBtn" onclick="changeExfilJobPage(-1)">Previous</button>
-                <span id="exfilJobPageInfo">Page 1 of 1</span>
-                <button class="pagination-btn" id="exfilJobNextBtn" onclick="changeExfilJobPage(1)">Next</button>
-            </div>
-            <div id="exfilJobHistoryContainer" style="margin-top: 20px;">
-                <div style="text-align: center; color: #444; padding: 20px;">Loading job history...</div>
-            </div>
-        </div>
-
-        <h1 class="section-title" style="margin-top: 40px;">Exfil Build History</h1>
-        <div class="builder-card" style="max-width: 100%;">
-            <div class="builder-description">
-                Track recent exfil client builds, their embedded domains, and download saved binaries.
-            </div>
-            <div id="exfilBuildsContainer" style="margin-top: 20px;">
-                <div style="text-align: center; color: #444; padding: 20px;">Loading exfil builds...</div>
-            </div>
-        </div>
     </div>
 
     <script>
         const API_BASE = window.location.origin;
+        const BUILD_TYPES_WITH_TIMING = new Set(['client', 'stager', 'exfil']);
 
         // Helper to get cookie
         function getCookie(name) {
@@ -888,28 +840,6 @@
             }
         }
 
-        const EXFIL_JOB_POLL_INTERVAL_MS = 4000;
-        const EXFIL_JOB_REMOVAL_DELAY_MS = 15000;
-        const exfilJobState = {
-            jobs: new Map(),
-            timers: new Map()
-        };
-        const ACTIVE_EXFIL_JOB_STATUSES = new Set(['queued', 'running']);
-        const TERMINAL_EXFIL_JOB_STATUSES = new Set(['completed', 'failed']);
-        const EXFIL_JOB_HISTORY_PAGE_SIZE = 10;
-        const exfilJobHistoryState = {
-            jobs: [],
-            limit: EXFIL_JOB_HISTORY_PAGE_SIZE,
-            offset: 0,
-            total: 0,
-            status: '',
-            loading: false,
-        };
-
-        function escapeDownloadPath(path) {
-            return (path || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-        }
-
         function escapeHTML(value) {
             if (value === null || value === undefined) {
                 return '';
@@ -922,438 +852,58 @@
                 .replace(/'/g, '&#39;');
         }
 
-        function normalizeStringArray(value) {
-            if (!value) {
-                return [];
-            }
-            if (Array.isArray(value)) {
-                return value.map(entry => typeof entry === 'string' ? entry.trim() : `${entry}`).filter(Boolean);
-            }
-            if (typeof value === 'string') {
-                return value.split(',').map(part => part.trim()).filter(Boolean);
-            }
-            return [];
-        }
-
-        function summarizeList(values, maxItems = 3) {
-            if (!Array.isArray(values) || values.length === 0) {
+        function formatRangeLabel(label, min, max, unit) {
+            const safeMin = Number.isFinite(min) ? min : 0;
+            const safeMax = Number.isFinite(max) ? max : 0;
+            if (safeMin <= 0 && safeMax <= 0) {
                 return '';
             }
-            const subset = values.slice(0, maxItems);
-            let summary = subset.join(', ');
-            if (values.length > maxItems) {
-                summary += ` (+${values.length - maxItems} more)`;
-            }
-            return summary;
-        }
-
-        function toNumber(value, fallback = 0) {
-            if (typeof value === 'number' && !Number.isNaN(value)) {
-                return value;
-            }
-            if (typeof value === 'string' && value.trim() !== '') {
-                const parsed = Number(value);
-                if (!Number.isNaN(parsed)) {
-                    return parsed;
+            if (safeMin > 0 && safeMax > 0) {
+                if (safeMin === safeMax) {
+                    return `${label} ${safeMin}${unit}`;
                 }
+                return `${label} ${safeMin}-${safeMax}${unit}`;
             }
-            return fallback;
+            const value = safeMin > 0 ? safeMin : safeMax;
+            return `${label} ${value}${unit}`;
         }
 
-        function normalizeExfilJob(job) {
-            if (!job) return null;
-            const normalized = { ...job };
-            normalized.id = job.id || job.ID || job.Id || null;
-            const rawStatus = job.status || job.Status || '';
-            normalized.status = typeof rawStatus === 'string' && rawStatus ? rawStatus.toLowerCase() : 'queued';
-            normalized.message = job.message || job.Message || '';
-            normalized.error = job.error || job.Error || '';
-            normalized.artifact = job.artifact || job.Artifact || null;
-            normalized.created_at = job.created_at || job.CreatedAt || job.createdAt || null;
-            normalized.updated_at = job.updated_at || job.UpdatedAt || job.updatedAt || null;
-            normalized.completed_at = job.completed_at || job.CompletedAt || job.completedAt || null;
-            normalized.platform = job.platform || job.Platform || '';
-            normalized.architecture = job.architecture || job.Architecture || '';
-            normalized.chunk_bytes = toNumber(job.chunk_bytes != null ? job.chunk_bytes : job.ChunkBytes);
-            normalized.jitter_min_ms = toNumber(job.jitter_min_ms != null ? job.jitter_min_ms : job.JitterMinMs);
-            normalized.jitter_max_ms = toNumber(job.jitter_max_ms != null ? job.jitter_max_ms : job.JitterMaxMs);
-            normalized.chunks_per_burst = toNumber(job.chunks_per_burst != null ? job.chunks_per_burst : job.ChunksPerBurst);
-            normalized.burst_pause_ms = toNumber(job.burst_pause_ms != null ? job.burst_pause_ms : job.BurstPauseMs);
-            normalized.server_ip = job.server_ip || job.ServerIP || '';
-            normalized.domains = normalizeStringArray(job.domains || job.Domains);
-            normalized.resolvers = normalizeStringArray(job.resolvers || job.Resolvers);
-
-            if (normalized.artifact) {
-                normalized.artifact = { ...normalized.artifact };
-                normalized.artifact.download_path = normalized.artifact.download_path || normalized.artifact.DownloadPath || normalized.artifact.downloadPath || '';
-                normalized.artifact.filename = normalized.artifact.filename || normalized.artifact.Filename || normalized.artifact.fileName || '';
-                normalized.artifact.size = toNumber(normalized.artifact.size != null ? normalized.artifact.size : normalized.artifact.Size);
+        function renderTimingLabel(build) {
+            if (!build) {
+                return '';
             }
-            return normalized;
-        }
-
-        function setExfilJob(job) {
-            const normalized = normalizeExfilJob(job);
-            if (!normalized || !normalized.id) {
-                return null;
+            if (build.timing) {
+                return build.timing;
             }
-            exfilJobState.jobs.set(normalized.id, normalized);
-            renderExfilJobs();
-            return normalized;
-        }
-
-        function trackActiveExfilJob(job, pollDelay = EXFIL_JOB_POLL_INTERVAL_MS) {
-            const normalized = setExfilJob(job);
-            if (!normalized) {
-                return;
-            }
-            if (!ACTIVE_EXFIL_JOB_STATUSES.has(normalized.status)) {
-                return;
-            }
-            if (!exfilJobState.timers.has(normalized.id)) {
-                scheduleExfilJobPoll(normalized.id, pollDelay);
-            }
-        }
-
-        function clearExfilJob(jobId) {
-            if (!jobId) return;
-            const existingTimer = exfilJobState.timers.get(jobId);
-            if (existingTimer) {
-                clearTimeout(existingTimer);
-                exfilJobState.timers.delete(jobId);
-            }
-            exfilJobState.jobs.delete(jobId);
-            renderExfilJobs();
-        }
-
-        function scheduleExfilJobPoll(jobId, delay = EXFIL_JOB_POLL_INTERVAL_MS) {
-            if (!jobId) return;
-            const existingTimer = exfilJobState.timers.get(jobId);
-            if (existingTimer) {
-                clearTimeout(existingTimer);
-            }
-            const handle = setTimeout(() => pollExfilJob(jobId), delay);
-            exfilJobState.timers.set(jobId, handle);
-        }
-
-        async function pollExfilJob(jobId) {
-            try {
-                const response = await authFetch(`/api/builder/exfil-client/jobs/${jobId}`);
-                if (!response) {
-                    scheduleExfilJobPoll(jobId, EXFIL_JOB_POLL_INTERVAL_MS * 2);
-                    return;
-                }
-
-                if (response.status === 404) {
-                    showAlert(`Exfil build job ${jobId} expired or was not found.`, 'error');
-                    clearExfilJob(jobId);
-                    return;
-                }
-
-                const payload = await response.json();
-                const job = payload && payload.data ? payload.data : payload;
-                const normalized = setExfilJob(job);
-                if (!normalized) {
-                    return;
-                }
-
-                if (['completed', 'failed'].includes(normalized.status)) {
-                    handleTerminalExfilJob(normalized);
-                } else {
-                    scheduleExfilJobPoll(normalized.id);
-                }
-            } catch (error) {
-                console.error('Failed to poll exfil job:', error);
-                scheduleExfilJobPoll(jobId, EXFIL_JOB_POLL_INTERVAL_MS * 2);
-            }
-        }
-
-        function handleTerminalExfilJob(job) {
-            if (!job || !job.id) {
-                return;
+            const metaTiming = build.metadata && build.metadata.timing;
+            if (!metaTiming) {
+                return '';
             }
 
-            if (job.status === 'completed') {
-                const artifactName = job.artifact && job.artifact.filename ? ` (${job.artifact.filename})` : '';
-                showAlert(`Exfil build ${job.id} completed${artifactName}. Download is available below.`, 'success');
-                loadBuilds();
-                loadExfilBuilds();
-            } else if (job.status === 'failed') {
-                const reason = job.error || job.message || 'Unknown error';
-                showAlert(`Exfil build ${job.id} failed: ${reason}`, 'error');
+            const parts = [];
+            const sleepLabel = formatRangeLabel('Sleep', metaTiming.sleep_min_sec, metaTiming.sleep_max_sec, ' s');
+            if (sleepLabel) {
+                parts.push(sleepLabel);
             }
 
-            scheduleJobRemoval(job.id);
-            refreshExfilJobHistory({ silent: true });
-        }
-
-        function scheduleJobRemoval(jobId) {
-            if (!jobId) return;
-            const existing = exfilJobState.timers.get(jobId);
-            if (existing) {
-                clearTimeout(existing);
-            }
-            const handle = setTimeout(() => clearExfilJob(jobId), EXFIL_JOB_REMOVAL_DELAY_MS);
-            exfilJobState.timers.set(jobId, handle);
-        }
-
-        function renderExfilJobs() {
-            const container = document.getElementById('exfilJobsContainer');
-            if (!container) {
-                return;
+            const jitterLabel = formatRangeLabel('Jitter', metaTiming.jitter_min_ms, metaTiming.jitter_max_ms, ' ms');
+            if (jitterLabel) {
+                parts.push(jitterLabel);
             }
 
-            if (exfilJobState.jobs.size === 0) {
-                container.innerHTML = '<div style="text-align: center; color: #444; padding: 20px;">No exfil build jobs in progress.</div>';
-                return;
+            if (Number.isFinite(metaTiming.chunk_bytes) && metaTiming.chunk_bytes > 0) {
+                parts.push(`${metaTiming.chunk_bytes} byte chunks`);
             }
 
-            const jobs = Array.from(exfilJobState.jobs.values()).sort((a, b) => {
-                const aTime = Date.parse(a.updated_at || a.created_at || 0);
-                const bTime = Date.parse(b.updated_at || b.created_at || 0);
-                return bTime - aTime;
-            });
-
-            const rows = jobs.map(job => {
-                const status = job.status || 'queued';
-                const badgeColor = status === 'completed' ? '#28a745' : (status === 'failed' ? '#dc3545' : '#ffc107');
-                const updated = job.updated_at ? new Date(job.updated_at).toLocaleTimeString() : '—';
-                const artifactButton = job.artifact && job.artifact.download_path
-                    ? `<button onclick="downloadBuild('${escapeDownloadPath(job.artifact.download_path)}')" style="background: #28a745; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 11px;">Download</button>`
-                    : '';
-                const detail = job.error ? `<div style="color:#dc3545; font-size: 12px; margin-top: 4px;">${escapeHTML(job.error)}</div>` : '';
-                const jobIdLabel = escapeHTML(job.id || 'job');
-                const messageLabel = escapeHTML(job.message || 'Processing...');
-                const statusLabel = escapeHTML(status);
-
-                return `
-                    <div style="border-bottom: 1px solid rgba(255, 255, 255, 0.05); padding: 12px 0; display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap;">
-                        <div>
-                            <div style="font-weight: 600; color: #ccc;">Job ${jobIdLabel}</div>
-                            <div style="color: #777; font-size: 12px;">${messageLabel} · Updated ${updated}</div>
-                            ${detail}
-                        </div>
-                        <div style="text-align: right;">
-                            <div style="display: inline-block; padding: 4px 10px; border-radius: 12px; font-size: 12px; color: #111; background: ${badgeColor}; text-transform: capitalize;">${statusLabel}</div>
-                            <div style="margin-top: 8px;">${artifactButton}</div>
-                        </div>
-                    </div>
-                `;
-            });
-
-            container.innerHTML = rows.join('');
-        }
-
-        function syncActiveExfilJobsFromHistory(jobs = []) {
-            jobs.forEach(job => {
-                if (!job || !job.id) {
-                    return;
-                }
-                if (!ACTIVE_EXFIL_JOB_STATUSES.has(job.status)) {
-                    return;
-                }
-                trackActiveExfilJob(job);
-            });
-        }
-
-        function formatJobTimestamp(value) {
-            if (!value) {
-                return '—';
-            }
-            const date = new Date(value);
-            if (!Number.isNaN(date.getTime())) {
-                return date.toLocaleString();
-            }
-            const asNumber = Number(value);
-            if (!Number.isNaN(asNumber)) {
-                const unixDate = new Date(asNumber * 1000);
-                if (!Number.isNaN(unixDate.getTime())) {
-                    return unixDate.toLocaleString();
-                }
-            }
-            return value;
-        }
-
-        function updateExfilJobPaginationControls() {
-            const info = document.getElementById('exfilJobPageInfo');
-            const prevBtn = document.getElementById('exfilJobPrevBtn');
-            const nextBtn = document.getElementById('exfilJobNextBtn');
-            const limit = exfilJobHistoryState.limit || EXFIL_JOB_HISTORY_PAGE_SIZE;
-            const offset = exfilJobHistoryState.offset || 0;
-            const total = exfilJobHistoryState.total || exfilJobHistoryState.jobs.length;
-            const currentPage = limit > 0 ? Math.floor(offset / limit) + 1 : 1;
-            const totalPages = limit > 0 ? Math.max(1, Math.ceil(total / limit)) : 1;
-
-            if (info) {
-                info.textContent = `Page ${currentPage} of ${totalPages} (${total} total)`;
-            }
-            if (prevBtn) {
-                prevBtn.disabled = exfilJobHistoryState.loading || offset === 0;
-            }
-            if (nextBtn) {
-                nextBtn.disabled = exfilJobHistoryState.loading || offset + limit >= total;
-            }
-        }
-
-        function renderExfilJobHistory() {
-            const container = document.getElementById('exfilJobHistoryContainer');
-            if (!container) {
-                return;
+            if (Number.isFinite(metaTiming.chunks_per_burst) && metaTiming.chunks_per_burst > 0) {
+                parts.push(`${metaTiming.chunks_per_burst} chunks/burst`);
             }
 
-            if (exfilJobHistoryState.loading) {
-                container.innerHTML = '<div style="text-align: center; color: #555; padding: 20px;">Loading job history...</div>';
-                updateExfilJobPaginationControls();
-                return;
+            if (Number.isFinite(metaTiming.burst_pause_ms) && metaTiming.burst_pause_ms > 0) {
+                parts.push(`pause ${metaTiming.burst_pause_ms} ms`);
             }
 
-            const jobs = exfilJobHistoryState.jobs || [];
-            if (jobs.length === 0) {
-                container.innerHTML = '<div style="text-align: center; color: #444; padding: 20px;">No exfil build jobs match the current filters.</div>';
-                updateExfilJobPaginationControls();
-                return;
-            }
-
-            const rows = jobs.map(job => {
-                const created = formatJobTimestamp(job.created_at);
-                const updated = formatJobTimestamp(job.updated_at);
-                const completed = job.completed_at ? formatJobTimestamp(job.completed_at) : '—';
-                const statusClass = `status-${job.status || 'queued'}`;
-                const statusLabel = escapeHTML(job.status || 'queued');
-                const messageLabel = escapeHTML(job.message || '—');
-                const jobId = escapeHTML(job.id || 'job');
-                const chunkBytesLabel = escapeHTML(String(job.chunk_bytes || '?'));
-                const jitterMinLabel = escapeHTML(String(job.jitter_min_ms || '?'));
-                const jitterMaxLabel = escapeHTML(String(job.jitter_max_ms || '?'));
-                const chunksPerBurstLabel = escapeHTML(String(job.chunks_per_burst || '?'));
-                const burstPauseLabel = escapeHTML(String(job.burst_pause_ms || '?'));
-                const configLines = [];
-                configLines.push(`<div>Platform: ${escapeHTML(job.platform || '?')}/${escapeHTML(job.architecture || '?')} · Chunk ${chunkBytesLabel} bytes</div>`);
-                configLines.push(`<div>Timing: ${jitterMinLabel}-${jitterMaxLabel} ms jitter · ${chunksPerBurstLabel} chunks/burst · pause ${burstPauseLabel} ms</div>`);
-                if (job.server_ip) {
-                    configLines.push(`<div>DNS IP: ${escapeHTML(job.server_ip)}</div>`);
-                }
-                const domainSummary = summarizeList(job.domains);
-                if (domainSummary) {
-                    configLines.push(`<div>Domains: ${escapeHTML(domainSummary)}</div>`);
-                }
-
-                const artifactButton = job.artifact && job.artifact.download_path
-                    ? `<button onclick="downloadBuild('${escapeDownloadPath(job.artifact.download_path)}')" style="background: #28a745; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 11px;">Download</button>`
-                    : '<span style="color: #777; font-size: 12px;">No artifact</span>';
-
-                const errorBlock = job.error
-                    ? `<div class="job-error">${escapeHTML(job.error)}</div>`
-                    : '';
-
-                return `
-                    <div class="job-history-row">
-                        <div style="flex: 1; min-width: 220px;">
-                            <div style="font-weight: 600; color: #ccc;">Job ${jobId}</div>
-                            <div class="job-history-meta">Created ${created} · Updated ${updated}</div>
-                            <div style="color: #bbb; font-size: 12px; margin-top: 6px;">${messageLabel}</div>
-                            ${errorBlock}
-                        </div>
-                        <div style="flex: 1; min-width: 220px; color: #aaa; font-size: 12px;">
-                            ${configLines.join('')}
-                        </div>
-                        <div style="min-width: 170px; text-align: right;">
-                            <div class="status-badge ${statusClass}">${statusLabel}</div>
-                            <div class="job-history-meta">Completed ${completed}</div>
-                            <div style="margin-top: 10px;">${artifactButton}</div>
-                        </div>
-                    </div>
-                `;
-            });
-
-            container.innerHTML = rows.join('');
-            updateExfilJobPaginationControls();
-        }
-
-        function changeExfilJobPage(delta) {
-            if (exfilJobHistoryState.loading) {
-                return;
-            }
-            const limit = exfilJobHistoryState.limit || EXFIL_JOB_HISTORY_PAGE_SIZE;
-            const newOffset = exfilJobHistoryState.offset + delta * limit;
-            if (newOffset < 0) {
-                return;
-            }
-            if (delta > 0 && newOffset >= exfilJobHistoryState.total) {
-                return;
-            }
-            exfilJobHistoryState.offset = newOffset;
-            refreshExfilJobHistory();
-        }
-
-        function onExfilJobStatusFilterChange(value) {
-            exfilJobHistoryState.status = value || '';
-            refreshExfilJobHistory({ resetOffset: true });
-        }
-
-        function refreshExfilJobHistory(options = {}) {
-            return loadPersistedExfilJobs(options);
-        }
-
-        async function loadPersistedExfilJobs({ resetOffset = false, silent = false } = {}) {
-            if (resetOffset) {
-                exfilJobHistoryState.offset = 0;
-            }
-            exfilJobHistoryState.loading = true;
-            renderExfilJobHistory();
-
-            try {
-                const params = new URLSearchParams();
-                params.set('limit', exfilJobHistoryState.limit || EXFIL_JOB_HISTORY_PAGE_SIZE);
-                params.set('offset', exfilJobHistoryState.offset || 0);
-                if (exfilJobHistoryState.status) {
-                    params.set('status', exfilJobHistoryState.status);
-                }
-
-                const response = await authFetch(`/api/builder/exfil-client/jobs?${params.toString()}`);
-                if (!response) {
-                    return;
-                }
-
-                const payload = await response.json().catch(() => ({}));
-                if (!response.ok) {
-                    const message = payload.message || payload.error || `Request failed (${response.status})`;
-                    throw new Error(message);
-                }
-
-                const data = payload && payload.data ? payload.data : payload;
-                const jobsRaw = Array.isArray(data.jobs) ? data.jobs : [];
-                exfilJobHistoryState.jobs = jobsRaw.map(normalizeExfilJob);
-                const pagination = data.pagination || {};
-                if (typeof pagination.limit === 'number' && pagination.limit > 0) {
-                    exfilJobHistoryState.limit = pagination.limit;
-                }
-                if (typeof pagination.offset === 'number' && pagination.offset >= 0) {
-                    exfilJobHistoryState.offset = pagination.offset;
-                }
-                if (typeof pagination.total === 'number' && pagination.total >= 0) {
-                    exfilJobHistoryState.total = pagination.total;
-                } else {
-                    exfilJobHistoryState.total = exfilJobHistoryState.offset + exfilJobHistoryState.jobs.length;
-                }
-                syncActiveExfilJobsFromHistory(exfilJobHistoryState.jobs);
-            } catch (error) {
-                console.error('Failed to load exfil job history:', error);
-                if (!silent) {
-                    showAlert(`Failed to load exfil job history: ${error.message}`, 'error');
-                }
-            } finally {
-                exfilJobHistoryState.loading = false;
-                renderExfilJobHistory();
-            }
-        }
-
-        function registerExfilBuildJob(job) {
-            if (!job) {
-                return;
-            }
-            trackActiveExfilJob(job, 0);
-            refreshExfilJobHistory({ resetOffset: true, silent: true });
+            return parts.join(' · ');
         }
 
         function showAlert(message, type = 'success') {
@@ -1714,14 +1264,9 @@
 
                 if (response.ok) {
                     const payload = await response.json();
-                    const job = payload && payload.data ? payload.data : null;
                     const message = (payload && payload.message) || 'Exfil client build queued.';
-                    if (job && (job.id || job.ID)) {
-                        registerExfilBuildJob(job);
-                        showAlert(`${message} Track progress in the Exfil Build Queue below.`, 'success');
-                    } else {
-                        showAlert(message, 'success');
-                    }
+                    showAlert(`${message} Refresh the saved builds list shortly to download the binary.`, 'success');
+                    await loadBuilds();
                 } else {
                     const error = await response.json().catch(() => ({}));
                     throw new Error(error.message || 'Build failed');
@@ -1796,8 +1341,6 @@
         loadDNSServers();
         loadClientBinaries();
         loadBuilds();
-        loadExfilBuilds();
-        refreshExfilJobHistory({ resetOffset: true });
 
         async function loadBuilds() {
             try {
@@ -1830,6 +1373,7 @@
                 };
 
                 for (const [type, items] of Object.entries(grouped)) {
+                    const includeTiming = BUILD_TYPES_WITH_TIMING.has(type);
                     html += `<div style="margin-bottom: 30px;">
                         <h3 style="color: rgba(255, 51, 51, 0.8); font-size: 18px; margin-bottom: 10px;">${typeNames[type] || type}</h3>
                         <table style="width: 100%; border-collapse: collapse;">
@@ -1837,6 +1381,7 @@
                                 <tr style="background: rgba(255, 51, 51, 0.05); text-align: left;">
                                     <th style="padding: 10px;">Name</th>
                                     <th style="padding: 10px;">Size</th>
+                                    ${includeTiming ? '<th style="padding: 10px;">Timing</th>' : ''}
                                     <th style="padding: 10px;">Date</th>
                                     <th style="padding: 10px; text-align: right;">Actions</th>
                                 </tr>
@@ -1850,19 +1395,23 @@
                         const sizeMB = (build.size / 1024 / 1024).toFixed(2);
                         const sizeStr = build.size > 1024 * 1024 ? `${sizeMB} MB` : `${sizeKB} KB`;
                         const date = new Date(build.timestamp).toLocaleString();
+                        const timingText = includeTiming ? (renderTimingLabel(build) || '') : '';
+                        const downloadArg = JSON.stringify(build.path || '');
+                        const deleteNameArg = JSON.stringify(build.name || '');
 
                         html += `<tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.05);">
-                            <td style="padding: 10px; color: #ccc;">${build.name}</td>
-                            <td style="padding: 10px; color: #555;">${sizeStr}</td>
-                            <td style="padding: 10px; color: #555;">${date}</td>
+                            <td style="padding: 10px; color: #ccc;">${escapeHTML(build.name || '')}</td>
+                            <td style="padding: 10px; color: #555;">${escapeHTML(sizeStr)}</td>
+                            ${includeTiming ? `<td style="padding: 10px; color: #888; font-size: 12px;">${timingText ? escapeHTML(timingText) : '&mdash;'}</td>` : ''}
+                            <td style="padding: 10px; color: #555;">${escapeHTML(date)}</td>
                             <td style="padding: 10px; text-align: right;">
-                                <button onclick="downloadBuild('${build.path.replace(/\\/g, '\\\\')}')" 
-                                    style="background: #28a745; color: white; border: none; padding: 5px 10px; 
+                                <button onclick='downloadBuild(${downloadArg})'
+                                    style="background: #28a745; color: white; border: none; padding: 5px 10px;
                                     border-radius: 4px; cursor: pointer; margin-right: 5px; font-size: 11px;">
                                     Download
                                 </button>
-                                <button onclick="deleteBuild('${build.path.replace(/\\/g, '\\\\')}', '${build.name}')" 
-                                    style="background: #dc3545; color: white; border: none; padding: 5px 10px; 
+                                <button onclick='deleteBuild(${downloadArg}, ${deleteNameArg})'
+                                    style="background: #dc3545; color: white; border: none; padding: 5px 10px;
                                     border-radius: 4px; cursor: pointer; font-size: 11px;">
                                     Delete
                                 </button>
@@ -1878,73 +1427,6 @@
                 console.error('Failed to load builds:', error);
                 document.getElementById('buildsContainer').innerHTML = 
                     '<div style="text-align: center; color: #dc3545; padding: 20px;">Failed to load builds</div>';
-            }
-        }
-
-        async function loadExfilBuilds() {
-            const container = document.getElementById('exfilBuildsContainer');
-            if (!container) return;
-
-            try {
-                const response = await authFetch('/api/builder/exfil-client/builds');
-                if (!response) return;
-
-                const builds = await response.json();
-                if (!Array.isArray(builds) || builds.length === 0) {
-                    container.innerHTML = '<div style="text-align: center; color: #444; padding: 20px;">No exfil builds yet</div>';
-                    return;
-                }
-
-                let html = `<table style="width: 100%; border-collapse: collapse;">
-                    <thead>
-                        <tr style="background: rgba(255, 51, 51, 0.05); text-align: left;">
-                            <th style="padding: 10px;">Build</th>
-                            <th style="padding: 10px;">Domains</th>
-                            <th style="padding: 10px;">Timing</th>
-                            <th style="padding: 10px; text-align: right;">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>`;
-
-                builds.forEach(build => {
-                    const created = build.created_at ? new Date(build.created_at * 1000).toLocaleString() : '—';
-                    const domains = build.domains ? build.domains.split(',').filter(Boolean).join(', ') : '—';
-                    const resolvers = build.resolvers ? `Resolvers: ${build.resolvers}` : '';
-                    const jitter = `${build.jitter_min_ms || '?'}-${build.jitter_max_ms || '?'}`;
-                    const sizeMB = build.file_size ? (build.file_size / 1024 / 1024).toFixed(2) + ' MB' : '—';
-                    const rawPath = build.download_path || '';
-                    const downloadPath = escapeDownloadPath(rawPath);
-                    const downloadBtn = rawPath ? `
-                        <button onclick="downloadBuild('${downloadPath}')" 
-                            style="background: #28a745; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 11px;">
-                            Download
-                        </button>` : '<span style="color: #777;">Not saved</span>';
-
-                    html += `<tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.05);">
-                        <td style="padding: 10px; color: #ccc;">
-                            <div style="font-weight: 600;">${build.filename || build.id}</div>
-                            <div style="color: #777; font-size: 12px;">${(build.os || '?')}/${(build.arch || '?')} · IP ${build.server_ip || '—'}</div>
-                            <div style="color: #555; font-size: 12px;">${created} · ${sizeMB}</div>
-                        </td>
-                        <td style="padding: 10px; color: #ccc;">
-                            ${domains}
-                            ${resolvers ? `<div style="color: #777; font-size: 12px;">${resolvers}</div>` : ''}
-                        </td>
-                        <td style="padding: 10px; color: #ccc; font-size: 12px;">
-                            Chunk ${build.chunk_bytes || '?'} bytes<br>
-                            ${build.chunks_per_burst || '?'} chunks/burst<br>
-                            Burst pause ${build.burst_pause_ms || '?'} ms<br>
-                            Jitter ${jitter} ms
-                        </td>
-                        <td style="padding: 10px; text-align: right;">${downloadBtn}</td>
-                    </tr>`;
-                });
-
-                html += '</tbody></table>';
-                container.innerHTML = html;
-            } catch (error) {
-                console.error('Failed to load exfil builds:', error);
-                container.innerHTML = '<div style="text-align: center; color: #dc3545; padding: 20px;">Failed to load exfil builds</div>';
             }
         }
 

