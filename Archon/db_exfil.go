@@ -131,6 +131,42 @@ func (d *MasterDatabase) migration9AddExfilBuildTable() error {
 	return err
 }
 
+func (d *MasterDatabase) migration10AddExfilBuildJobsTable() error {
+	_, err := d.db.Exec(`
+		CREATE TABLE IF NOT EXISTS exfil_build_jobs (
+			id TEXT PRIMARY KEY,
+			status TEXT NOT NULL,
+			message TEXT,
+			error TEXT,
+			platform TEXT,
+			architecture TEXT,
+			chunk_bytes INTEGER,
+			jitter_min_ms INTEGER,
+			jitter_max_ms INTEGER,
+			chunks_per_burst INTEGER,
+			burst_pause_ms INTEGER,
+			server_ip TEXT,
+			domains TEXT,
+			resolvers TEXT,
+			artifact_filename TEXT,
+			artifact_path TEXT,
+			artifact_download_path TEXT,
+			artifact_size INTEGER,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			completed_at INTEGER
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_exfil_build_jobs_status
+		ON exfil_build_jobs(status);
+
+		CREATE INDEX IF NOT EXISTS idx_exfil_build_jobs_created
+		ON exfil_build_jobs(created_at DESC);
+	`)
+
+	return err
+}
+
 // StoreExfilChunk persists a chunk from a DNS server and updates transfer metadata.
 func (d *MasterDatabase) StoreExfilChunk(req *ExfilChunkStoreRequest) (*ExfilTransfer, bool, error) {
 	if req == nil {

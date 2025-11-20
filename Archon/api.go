@@ -1248,6 +1248,50 @@ func (api *APIServer) handleGetBeacon(w http.ResponseWriter, r *http.Request) {
 	api.sendJSON(w, beacon)
 }
 
+// handleListExfilBuildJobs retrieves a list of exfil build jobs
+func (api *APIServer) handleListExfilBuildJobs(w http.ResponseWriter, r *http.Request) {
+	if api.db == nil {
+		api.sendError(w, http.StatusInternalServerError, "database not initialized")
+		return
+	}
+
+	limit := 25
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if value, err := strconv.Atoi(limitStr); err == nil && value > 0 {
+			limit = value
+			if limit > 200 {
+				limit = 200
+			}
+		}
+	}
+
+	offset := 0
+	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
+		if value, err := strconv.Atoi(offsetStr); err == nil && value >= 0 {
+			offset = value
+		}
+	}
+
+	status := strings.TrimSpace(r.URL.Query().Get("status"))
+	status = strings.ToLower(status)
+
+	jobs, total, err := api.db.ListExfilBuildJobs(limit, offset, status)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to load exfil build jobs")
+		return
+	}
+
+	api.sendSuccess(w, "Exfil build jobs retrieved", map[string]interface{}{
+		"jobs": jobs,
+		"pagination": map[string]interface{}{
+			"limit":  limit,
+			"offset": offset,
+			"total":  total,
+			"count":  len(jobs),
+		},
+	})
+}
+
 // handleGetBeaconDNSContacts returns DNS contact history for a beacon
 func (api *APIServer) handleGetBeaconDNSContacts(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
@@ -2640,6 +2684,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	operatorRouter.HandleFunc("/builder/dns-server", api.handleBuildDNSServer).Methods("POST")
 	operatorRouter.HandleFunc("/builder/client", api.handleBuildClient).Methods("POST")
 	operatorRouter.HandleFunc("/builder/exfil-client", api.handleBuildExfilClient).Methods("POST")
+	operatorRouter.HandleFunc("/builder/exfil-client/jobs", api.handleListExfilBuildJobs).Methods("GET")
 	operatorRouter.HandleFunc("/builder/exfil-client/jobs/{id}", api.handleGetExfilBuildJob).Methods("GET")
 	operatorRouter.HandleFunc("/builder/exfil-client/builds", api.handleListExfilClientBuilds).Methods("GET")
 	operatorRouter.HandleFunc("/builder/client-binaries", api.handleListClientBinaries).Methods("GET")

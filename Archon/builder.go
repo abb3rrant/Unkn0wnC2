@@ -36,49 +36,135 @@ var (
 
 // ExfilBuildJob tracks asynchronous exfil client builds so the UI can poll for status.
 type ExfilBuildJob struct {
-	ID          string         `json:"id"`
-	Status      string         `json:"status"`
-	Message     string         `json:"message"`
-	Error       string         `json:"error,omitempty"`
-	Artifact    *BuildArtifact `json:"artifact,omitempty"`
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
-	CompletedAt *time.Time     `json:"completed_at,omitempty"`
+	ID             string         `json:"id"`
+	Status         string         `json:"status"`
+	Message        string         `json:"message"`
+	Error          string         `json:"error,omitempty"`
+	Artifact       *BuildArtifact `json:"artifact,omitempty"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+	CompletedAt    *time.Time     `json:"completed_at,omitempty"`
+	Platform       string         `json:"platform"`
+	Architecture   string         `json:"architecture"`
+	ChunkBytes     int            `json:"chunk_bytes"`
+	JitterMinMs    int            `json:"jitter_min_ms"`
+	JitterMaxMs    int            `json:"jitter_max_ms"`
+	ChunksPerBurst int            `json:"chunks_per_burst"`
+	BurstPauseMs   int            `json:"burst_pause_ms"`
+	ServerIP       string         `json:"server_ip"`
+	Domains        []string       `json:"domains"`
+	Resolvers      []string       `json:"resolvers"`
 }
 
-func (api *APIServer) createExfilBuildJob() *ExfilBuildJob {
+func cloneExfilBuildJob(job *ExfilBuildJob) *ExfilBuildJob {
+	if job == nil {
+		return nil
+	}
+	clone := *job
+	if len(job.Domains) > 0 {
+		clone.Domains = append([]string(nil), job.Domains...)
+	}
+	if len(job.Resolvers) > 0 {
+		clone.Resolvers = append([]string(nil), job.Resolvers...)
+	}
+	if job.Artifact != nil {
+		artifactCopy := *job.Artifact
+		clone.Artifact = &artifactCopy
+	}
+	return &clone
+}
+
+func (api *APIServer) persistExfilBuildJob(job *ExfilBuildJob, create bool) {
+	if api == nil || api.db == nil || job == nil {
+		return
+	}
+	var err error
+	if create {
+		err = api.db.InsertExfilBuildJob(job)
+	} else {
+		err = api.db.UpdateExfilBuildJob(job)
+	}
+	if err != nil {
+		fmt.Printf("[Builder] Failed to persist exfil build job %s: %v\n", job.ID, err)
+	}
+}
+
+func (api *APIServer) createExfilBuildJob(req *ExfilClientBuildRequest) *ExfilBuildJob {
 	jobID := fmt.Sprintf("exfil_job_%d", time.Now().UnixNano())
+	platform := ""
+	architecture := ""
+	chunkBytes := 0
+	jitterMin := 0
+	jitterMax := 0
+	chunksPerBurst := 0
+	burstPause := 0
+	var domains, resolvers []string
+	serverIP := ""
+	if req != nil {
+		platform = strings.ToLower(strings.TrimSpace(req.Platform))
+		architecture = strings.ToLower(strings.TrimSpace(req.Architecture))
+		chunkBytes = req.ChunkBytes
+		jitterMin = req.JitterMinMs
+		jitterMax = req.JitterMaxMs
+		chunksPerBurst = req.ChunksPerBurst
+		burstPause = req.BurstPauseMs
+		domains = append([]string(nil), filterEmpty(req.Domains)...)
+		resolvers = append([]string(nil), filterEmpty(req.Resolvers)...)
+		serverIP = req.ServerIP
+	}
 	job := &ExfilBuildJob{
-		ID:        jobID,
-		Status:    "queued",
-		Message:   "Waiting for build worker",
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		ID:             jobID,
+		Status:         "queued",
+		Message:        "Waiting for build worker",
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+		Platform:       platform,
+		Architecture:   architecture,
+		ChunkBytes:     chunkBytes,
+		JitterMinMs:    jitterMin,
+		JitterMaxMs:    jitterMax,
+		ChunksPerBurst: chunksPerBurst,
+		BurstPauseMs:   burstPause,
+		ServerIP:       serverIP,
+		Domains:        domains,
+		Resolvers:      resolvers,
 	}
 	api.exfilJobsMu.Lock()
 	api.exfilBuildJobs[jobID] = job
 	api.exfilJobsMu.Unlock()
+	api.persistExfilBuildJob(cloneExfilBuildJob(job), true)
 	return job
 }
 
 func (api *APIServer) updateExfilBuildJob(id string, update func(job *ExfilBuildJob)) {
 	api.exfilJobsMu.Lock()
-	defer api.exfilJobsMu.Unlock()
-	if job, ok := api.exfilBuildJobs[id]; ok {
-		update(job)
-		job.UpdatedAt = time.Now()
+	job, ok := api.exfilBuildJobs[id]
+	if !ok {
+		api.exfilJobsMu.Unlock()
+		return
 	}
+	update(job)
+	job.UpdatedAt = time.Now()
+	snapshot := cloneExfilBuildJob(job)
+	api.exfilJobsMu.Unlock()
+	api.persistExfilBuildJob(snapshot, false)
 }
 
 func (api *APIServer) getExfilBuildJob(id string) (*ExfilBuildJob, bool) {
 	api.exfilJobsMu.RLock()
-	defer api.exfilJobsMu.RUnlock()
-	job, ok := api.exfilBuildJobs[id]
-	if !ok {
+	if job, ok := api.exfilBuildJobs[id]; ok {
+		api.exfilJobsMu.RUnlock()
+		return cloneExfilBuildJob(job), true
+	}
+	api.exfilJobsMu.RUnlock()
+	if api.db == nil {
 		return nil, false
 	}
-	copyJob := *job
-	return &copyJob, true
+	job, err := api.db.GetExfilBuildJob(id)
+	if err != nil || job == nil {
+		return nil, false
+	}
+	return job, true
 }
 
 func (api *APIServer) completeExfilBuildJob(id, message string, artifact *BuildArtifact) {
@@ -417,7 +503,7 @@ func (api *APIServer) handleBuildExfilClient(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	job := api.createExfilBuildJob()
+	job := api.createExfilBuildJob(&req)
 	api.sendSuccess(w, "Exfil client build queued", job)
 
 	go api.executeExfilBuildJob(job.ID, req)
@@ -462,6 +548,12 @@ func (api *APIServer) executeExfilBuildJob(jobID string, req ExfilClientBuildReq
 	req.Resolvers = nil
 
 	api.updateExfilBuildJob(jobID, func(job *ExfilBuildJob) {
+		job.Domains = append([]string(nil), req.Domains...)
+		job.Resolvers = append([]string(nil), filterEmpty(req.Resolvers)...)
+		job.ServerIP = req.ServerIP
+	})
+
+	api.updateExfilBuildJob(jobID, func(job *ExfilBuildJob) {
 		job.Message = "Calculating DNS chunk constraints"
 	})
 
@@ -492,6 +584,16 @@ func (api *APIServer) executeExfilBuildJob(jobID string, req ExfilClientBuildReq
 	if req.BurstPauseMs <= 0 {
 		req.BurstPauseMs = 15000
 	}
+
+	api.updateExfilBuildJob(jobID, func(job *ExfilBuildJob) {
+		job.Platform = req.Platform
+		job.Architecture = req.Architecture
+		job.ChunkBytes = req.ChunkBytes
+		job.JitterMinMs = req.JitterMinMs
+		job.JitterMaxMs = req.JitterMaxMs
+		job.ChunksPerBurst = req.ChunksPerBurst
+		job.BurstPauseMs = req.BurstPauseMs
+	})
 
 	if api.config.EncryptionKey == "" {
 		api.failExfilBuildJob(jobID, fmt.Errorf("master encryption key is not configured"))

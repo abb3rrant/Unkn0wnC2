@@ -17,7 +17,7 @@ import (
 
 const (
 	// MasterDatabaseSchemaVersion tracks the current schema version
-	MasterDatabaseSchemaVersion = 9
+	MasterDatabaseSchemaVersion = 10
 )
 
 // MasterDatabase wraps the SQL database connection for the master server
@@ -182,6 +182,12 @@ func (d *MasterDatabase) applyMigrations(fromVersion int) error {
 	if fromVersion < 9 {
 		if err := d.migration9AddExfilBuildTable(); err != nil {
 			return fmt.Errorf("migration 9 failed: %w", err)
+		}
+	}
+
+	if fromVersion < 10 {
+		if err := d.migration10AddExfilBuildJobsTable(); err != nil {
+			return fmt.Errorf("migration 10 failed: %w", err)
 		}
 	}
 
@@ -1950,6 +1956,61 @@ func (d *MasterDatabase) SaveExfilClientBuild(record *ExfilClientBuildRecord) er
 }
 
 // ListExfilClientBuilds returns recent exfil client builds for operator visibility
+func encodeStringSliceJSON(values []string) string {
+	clean := make([]string, 0, len(values))
+	for _, v := range values {
+		trimmed := strings.TrimSpace(v)
+		if trimmed != "" {
+			clean = append(clean, trimmed)
+		}
+	}
+	if len(clean) == 0 {
+		return "[]"
+	}
+	data, err := json.Marshal(clean)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
+}
+
+func decodeStringSliceJSON(raw string) []string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(trimmed), &values); err == nil {
+		return values
+	}
+	parts := strings.Split(trimmed, ",")
+	var result []string
+	for _, part := range parts {
+		val := strings.TrimSpace(part)
+		if val != "" {
+			result = append(result, val)
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func nullableString(value string) interface{} {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return value
+}
+
+func nullableInt64(value int64) interface{} {
+	if value == 0 {
+		return nil
+	}
+	return value
+}
+
 func (d *MasterDatabase) ListExfilClientBuilds(limit int) ([]map[string]interface{}, error) {
 	if limit <= 0 {
 		limit = 50
@@ -2006,6 +2067,351 @@ func (d *MasterDatabase) ListExfilClientBuilds(limit int) ([]map[string]interfac
 	}
 
 	return builds, rows.Err()
+}
+
+func (d *MasterDatabase) InsertExfilBuildJob(job *ExfilBuildJob) error {
+	if job == nil {
+		return fmt.Errorf("nil exfil build job")
+	}
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	created := job.CreatedAt
+	if created.IsZero() {
+		created = time.Now()
+	}
+	updated := job.UpdatedAt
+	if updated.IsZero() {
+		updated = created
+	}
+
+	var completed interface{}
+	if job.CompletedAt != nil {
+		completed = job.CompletedAt.Unix()
+	}
+
+	var artifactFilename, artifactPath, artifactDownloadPath, artifactSize interface{}
+	if job.Artifact != nil {
+		artifactFilename = nullableString(job.Artifact.Filename)
+		artifactPath = nullableString(job.Artifact.DownloadPath)
+		artifactDownloadPath = nullableString(job.Artifact.DownloadPath)
+		artifactSize = nullableInt64(job.Artifact.Size)
+	}
+
+	status := job.Status
+	if strings.TrimSpace(status) == "" {
+		status = "queued"
+	}
+
+	_, err := d.db.Exec(`
+		INSERT INTO exfil_build_jobs (
+			id, status, message, error, platform, architecture,
+			chunk_bytes, jitter_min_ms, jitter_max_ms, chunks_per_burst,
+			burst_pause_ms, server_ip, domains, resolvers,
+			artifact_filename, artifact_path, artifact_download_path, artifact_size,
+			created_at, updated_at, completed_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		job.ID,
+		status,
+		job.Message,
+		job.Error,
+		job.Platform,
+		job.Architecture,
+		job.ChunkBytes,
+		job.JitterMinMs,
+		job.JitterMaxMs,
+		job.ChunksPerBurst,
+		job.BurstPauseMs,
+		job.ServerIP,
+		encodeStringSliceJSON(job.Domains),
+		encodeStringSliceJSON(job.Resolvers),
+		artifactFilename,
+		artifactPath,
+		artifactDownloadPath,
+		artifactSize,
+		created.Unix(),
+		updated.Unix(),
+		completed,
+	)
+
+	return err
+}
+
+func (d *MasterDatabase) UpdateExfilBuildJob(job *ExfilBuildJob) error {
+	if job == nil {
+		return fmt.Errorf("nil exfil build job")
+	}
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	updated := job.UpdatedAt
+	if updated.IsZero() {
+		updated = time.Now()
+	}
+
+	var completed interface{}
+	if job.CompletedAt != nil {
+		completed = job.CompletedAt.Unix()
+	}
+
+	var artifactFilename, artifactPath, artifactDownloadPath, artifactSize interface{}
+	if job.Artifact != nil {
+		artifactFilename = nullableString(job.Artifact.Filename)
+		artifactPath = nullableString(job.Artifact.DownloadPath)
+		artifactDownloadPath = nullableString(job.Artifact.DownloadPath)
+		artifactSize = nullableInt64(job.Artifact.Size)
+	}
+
+	status := job.Status
+	if strings.TrimSpace(status) == "" {
+		status = "queued"
+	}
+
+	result, err := d.db.Exec(`
+		UPDATE exfil_build_jobs
+		SET status = ?,
+			message = ?,
+			error = ?,
+			platform = ?,
+			architecture = ?,
+			chunk_bytes = ?,
+			jitter_min_ms = ?,
+			jitter_max_ms = ?,
+			chunks_per_burst = ?,
+			burst_pause_ms = ?,
+			server_ip = ?,
+			domains = ?,
+			resolvers = ?,
+			artifact_filename = ?,
+			artifact_path = ?,
+			artifact_download_path = ?,
+			artifact_size = ?,
+			updated_at = ?,
+			completed_at = ?
+		WHERE id = ?
+	`,
+		status,
+		job.Message,
+		job.Error,
+		job.Platform,
+		job.Architecture,
+		job.ChunkBytes,
+		job.JitterMinMs,
+		job.JitterMaxMs,
+		job.ChunksPerBurst,
+		job.BurstPauseMs,
+		job.ServerIP,
+		encodeStringSliceJSON(job.Domains),
+		encodeStringSliceJSON(job.Resolvers),
+		artifactFilename,
+		artifactPath,
+		artifactDownloadPath,
+		artifactSize,
+		updated.Unix(),
+		completed,
+		job.ID,
+	)
+	if err != nil {
+		return err
+	}
+
+	if rows, _ := result.RowsAffected(); rows == 0 {
+		return d.InsertExfilBuildJob(job)
+	}
+
+	return nil
+}
+
+func (d *MasterDatabase) GetExfilBuildJob(id string) (*ExfilBuildJob, error) {
+	if strings.TrimSpace(id) == "" {
+		return nil, fmt.Errorf("job id is required")
+	}
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	row := d.db.QueryRow(`
+		SELECT status, message, error, platform, architecture,
+			chunk_bytes, jitter_min_ms, jitter_max_ms, chunks_per_burst,
+			burst_pause_ms, server_ip, domains, resolvers,
+			artifact_filename, artifact_path, artifact_download_path, artifact_size,
+			created_at, updated_at, completed_at
+		FROM exfil_build_jobs
+		WHERE id = ?
+	`, id)
+
+	var job ExfilBuildJob
+	job.ID = id
+	var domainsJSON, resolversJSON sql.NullString
+	var artifactFilename, artifactPath, artifactDownloadPath sql.NullString
+	var artifactSize sql.NullInt64
+	var createdUnix, updatedUnix int64
+	var completedUnix sql.NullInt64
+
+	if err := row.Scan(
+		&job.Status,
+		&job.Message,
+		&job.Error,
+		&job.Platform,
+		&job.Architecture,
+		&job.ChunkBytes,
+		&job.JitterMinMs,
+		&job.JitterMaxMs,
+		&job.ChunksPerBurst,
+		&job.BurstPauseMs,
+		&job.ServerIP,
+		&domainsJSON,
+		&resolversJSON,
+		&artifactFilename,
+		&artifactPath,
+		&artifactDownloadPath,
+		&artifactSize,
+		&createdUnix,
+		&updatedUnix,
+		&completedUnix,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("exfil build job not found")
+		}
+		return nil, err
+	}
+
+	job.Domains = decodeStringSliceJSON(domainsJSON.String)
+	job.Resolvers = decodeStringSliceJSON(resolversJSON.String)
+	job.CreatedAt = time.Unix(createdUnix, 0)
+	job.UpdatedAt = time.Unix(updatedUnix, 0)
+	if completedUnix.Valid {
+		completed := time.Unix(completedUnix.Int64, 0)
+		job.CompletedAt = &completed
+	}
+	if artifactDownloadPath.Valid || artifactFilename.Valid {
+		artifact := &BuildArtifact{
+			Filename:     artifactFilename.String,
+			Type:         "exfil",
+			Size:         0,
+			DownloadPath: artifactDownloadPath.String,
+		}
+		if artifactSize.Valid {
+			artifact.Size = artifactSize.Int64
+		}
+		job.Artifact = artifact
+	}
+
+	return &job, nil
+}
+
+func (d *MasterDatabase) ListExfilBuildJobs(limit, offset int, status string) ([]*ExfilBuildJob, int, error) {
+	if limit <= 0 {
+		limit = 25
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	args := []interface{}{}
+	where := ""
+	status = strings.TrimSpace(status)
+	if status != "" {
+		where = "WHERE status = ?"
+		args = append(args, status)
+	}
+
+	countQuery := fmt.Sprintf("SELECT COUNT(1) FROM exfil_build_jobs %s", where)
+	var total int
+	if err := d.db.QueryRow(countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	listQuery := fmt.Sprintf(`
+		SELECT id, status, message, error, platform, architecture,
+			chunk_bytes, jitter_min_ms, jitter_max_ms, chunks_per_burst,
+			burst_pause_ms, server_ip, domains, resolvers,
+			artifact_filename, artifact_path, artifact_download_path, artifact_size,
+			created_at, updated_at, completed_at
+		FROM exfil_build_jobs
+		%s
+		ORDER BY created_at DESC
+		LIMIT ? OFFSET ?
+	`, where)
+	listArgs := append(append([]interface{}{}, args...), limit, offset)
+	rows, err := d.db.Query(listQuery, listArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	jobs := []*ExfilBuildJob{}
+	for rows.Next() {
+		var job ExfilBuildJob
+		var id string
+		var domainsJSON, resolversJSON sql.NullString
+		var artifactFilename, artifactPath, artifactDownloadPath sql.NullString
+		var artifactSize sql.NullInt64
+		var createdUnix, updatedUnix int64
+		var completedUnix sql.NullInt64
+
+		if err := rows.Scan(
+			&id,
+			&job.Status,
+			&job.Message,
+			&job.Error,
+			&job.Platform,
+			&job.Architecture,
+			&job.ChunkBytes,
+			&job.JitterMinMs,
+			&job.JitterMaxMs,
+			&job.ChunksPerBurst,
+			&job.BurstPauseMs,
+			&job.ServerIP,
+			&domainsJSON,
+			&resolversJSON,
+			&artifactFilename,
+			&artifactPath,
+			&artifactDownloadPath,
+			&artifactSize,
+			&createdUnix,
+			&updatedUnix,
+			&completedUnix,
+		); err != nil {
+			return nil, 0, err
+		}
+
+		job.ID = id
+		job.Domains = decodeStringSliceJSON(domainsJSON.String)
+		job.Resolvers = decodeStringSliceJSON(resolversJSON.String)
+		job.CreatedAt = time.Unix(createdUnix, 0)
+		job.UpdatedAt = time.Unix(updatedUnix, 0)
+		if completedUnix.Valid {
+			completed := time.Unix(completedUnix.Int64, 0)
+			job.CompletedAt = &completed
+		}
+		if artifactDownloadPath.Valid || artifactFilename.Valid {
+			artifact := &BuildArtifact{
+				Filename:     artifactFilename.String,
+				Type:         "exfil",
+				Size:         0,
+				DownloadPath: artifactDownloadPath.String,
+			}
+			if artifactSize.Valid {
+				artifact.Size = artifactSize.Int64
+			}
+			job.Artifact = artifact
+		}
+
+		jobs = append(jobs, &job)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	return jobs, total, nil
 }
 
 // DeleteClientBinary removes a client binary
