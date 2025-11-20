@@ -31,10 +31,6 @@ struct FileConfig {
     jitter_max_ms: u64,
     chunks_per_burst: usize,
     burst_pause_ms: u64,
-    #[serde(default = "default_chunk_retry_attempts")]
-    chunk_retry_attempts: usize,
-    #[serde(default = "default_chunk_retry_delay_ms")]
-    chunk_retry_delay_ms: u64,
 }
 
 static EMBEDDED: Lazy<Config> = Lazy::new(|| Config {
@@ -160,8 +156,8 @@ impl From<FileConfig> for Config {
             jitter_max_ms: value.jitter_max_ms,
             chunks_per_burst: value.chunks_per_burst,
             burst_pause_ms: value.burst_pause_ms,
-            chunk_retry_attempts: value.chunk_retry_attempts,
-            chunk_retry_delay_ms: value.chunk_retry_delay_ms,
+            chunk_retry_attempts: default_chunk_retry_attempts(),
+            chunk_retry_delay_ms: default_chunk_retry_delay_ms(),
         }
     }
 }
