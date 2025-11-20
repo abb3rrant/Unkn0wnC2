@@ -1451,6 +1451,8 @@ func embedExfilConfig(buildDir string, req ExfilClientBuildRequest, encryptionKe
 	jitter_max_ms: %d,
 	chunks_per_burst: %d,
 	burst_pause_ms: %d,
+	chunk_retry_attempts: default_chunk_retry_attempts(),
+	chunk_retry_delay_ms: default_chunk_retry_delay_ms(),
 });
 
 `,
