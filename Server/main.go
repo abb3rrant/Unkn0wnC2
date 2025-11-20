@@ -264,8 +264,8 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 			} else {
 				err = frameErr
 			}
-			if err != nil && debugMode {
-				logf("[Exfil] Frame processing error: %v", err)
+			if debugMode {
+				logExfilFrameDecision(frame, ack, err)
 			}
 			answers := []DNSResourceRecord{{
 				Name:  q.Name,
@@ -632,6 +632,25 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 	// If forwarding disabled, return REFUSED
 	respMsg := buildResponse(msg, nil, 5 /*REFUSED*/)
 	return serializeMessage(respMsg), nil
+}
+
+// logExfilFrameDecision prints a concise verdict for label-encoded frames when debug logging is enabled.
+func logExfilFrameDecision(frame *ExfilFrame, ack bool, err error) {
+	if frame == nil {
+		return
+	}
+	if ack && err == nil {
+		return
+	}
+	status := "ACK"
+	if !ack {
+		status = "REJECT"
+	}
+	if err != nil {
+		logf("[Exfil] frame=%s tag=%s counter=%d flags=0x%x status=%s err=%v", frame.Phase, frame.SessionTag, frame.Counter, frame.Flags, status, err)
+		return
+	}
+	logf("[Exfil] frame=%s tag=%s counter=%d flags=0x%x status=%s", frame.Phase, frame.SessionTag, frame.Counter, frame.Flags, status)
 }
 
 func main() {

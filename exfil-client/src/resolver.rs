@@ -42,6 +42,10 @@ impl ResolverPool {
         let idx = self.cursor.fetch_add(1, Ordering::Relaxed) % len;
         self.endpoints[idx]
     }
+
+    pub fn len(&self) -> usize {
+        self.endpoints.len()
+    }
 }
 
 fn parse_endpoint(raw: &str) -> Result<Option<SocketAddr>> {
