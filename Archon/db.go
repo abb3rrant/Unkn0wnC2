@@ -17,7 +17,7 @@ import (
 
 const (
 	// MasterDatabaseSchemaVersion tracks the current schema version
-	MasterDatabaseSchemaVersion = 10
+	MasterDatabaseSchemaVersion = 11
 )
 
 // MasterDatabase wraps the SQL database connection for the master server
@@ -188,6 +188,12 @@ func (d *MasterDatabase) applyMigrations(fromVersion int) error {
 	if fromVersion < 10 {
 		if err := d.migration10AddExfilBuildJobsTable(); err != nil {
 			return fmt.Errorf("migration 10 failed: %w", err)
+		}
+	}
+
+	if fromVersion < 11 {
+		if err := d.migration11AddExfilSessionTags(); err != nil {
+			return fmt.Errorf("migration 11 failed: %w", err)
 		}
 	}
 

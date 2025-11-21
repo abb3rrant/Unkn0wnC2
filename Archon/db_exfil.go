@@ -167,6 +167,22 @@ func (d *MasterDatabase) migration10AddExfilBuildJobsTable() error {
 	return err
 }
 
+// migration11AddExfilSessionTags adds a table to map short session tags to full session IDs.
+func (d *MasterDatabase) migration11AddExfilSessionTags() error {
+	_, err := d.db.Exec(`
+		CREATE TABLE IF NOT EXISTS exfil_session_tags (
+			tag TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			FOREIGN KEY (session_id) REFERENCES exfil_transfers(session_id) ON DELETE CASCADE
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_exfil_session_tags_session
+		ON exfil_session_tags(session_id);
+	`)
+	return err
+}
+
 // StoreExfilChunk persists a chunk from a DNS server and updates transfer metadata.
 func (d *MasterDatabase) StoreExfilChunk(req *ExfilChunkStoreRequest) (*ExfilTransfer, bool, error) {
 	if req == nil {
@@ -739,4 +755,62 @@ func (d *MasterDatabase) GetCompletedExfilSessionsForSync(since time.Duration) (
 		sessionIDs = append(sessionIDs, id)
 	}
 	return sessionIDs, nil
+}
+
+// RegisterExfilSessionTag maps a short tag to a full session ID.
+func (d *MasterDatabase) RegisterExfilSessionTag(tag, sessionID string) error {
+	if tag == "" || sessionID == "" {
+		return fmt.Errorf("tag and session_id are required")
+	}
+
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	// Ensure the session exists in exfil_transfers first (create placeholder if needed)
+	// This is needed because of the foreign key constraint
+	var exists int
+	err := d.db.QueryRow("SELECT 1 FROM exfil_transfers WHERE session_id = ?", sessionID).Scan(&exists)
+	if err == sql.ErrNoRows {
+		now := time.Now().Unix()
+		_, err = d.db.Exec(`
+			INSERT INTO exfil_transfers (session_id, status, received_chunks, created_at, updated_at)
+			VALUES (?, 'receiving', 0, ?, ?)
+		`, sessionID, now, now)
+		if err != nil {
+			return fmt.Errorf("failed to create placeholder session: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("failed to check session existence: %w", err)
+	}
+
+	_, err = d.db.Exec(`
+		INSERT INTO exfil_session_tags (tag, session_id, created_at)
+		VALUES (?, ?, ?)
+		ON CONFLICT(tag) DO UPDATE SET
+			session_id = excluded.session_id,
+			created_at = excluded.created_at
+	`, tag, sessionID, time.Now().Unix())
+
+	return err
+}
+
+// GetExfilSessionIDByTag retrieves the full session ID for a given tag.
+func (d *MasterDatabase) GetExfilSessionIDByTag(tag string) (string, error) {
+	if tag == "" {
+		return "", fmt.Errorf("tag is required")
+	}
+
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	var sessionID string
+	err := d.db.QueryRow("SELECT session_id FROM exfil_session_tags WHERE tag = ?", tag).Scan(&sessionID)
+	if err == sql.ErrNoRows {
+		return "", nil // Not found
+	}
+	if err != nil {
+		return "", err
+	}
+
+	return sessionID, nil
 }

