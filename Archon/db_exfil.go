@@ -712,3 +712,31 @@ func (d *MasterDatabase) fetchExfilTransferTx(tx *sql.Tx, sessionID string) (*Ex
 
 	return &t, nil
 }
+
+// GetCompletedExfilSessionsForSync returns a list of session IDs that completed recently.
+// This allows DNS servers to sync their local state.
+func (d *MasterDatabase) GetCompletedExfilSessionsForSync(since time.Duration) ([]string, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	cutoff := time.Now().Add(-since).Unix()
+	rows, err := d.db.Query(`
+		SELECT session_id
+		FROM exfil_transfers
+		WHERE status = 'complete' AND completed_at > ?
+	`, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var sessionIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		sessionIDs = append(sessionIDs, id)
+	}
+	return sessionIDs, nil
+}

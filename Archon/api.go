@@ -1087,13 +1087,23 @@ func (api *APIServer) handleDNSServerCheckin(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
+	// Get recently completed exfil sessions (last 5 minutes) to sync distributed progress
+	completedExfilSessions, err := api.db.GetCompletedExfilSessionsForSync(5 * time.Minute)
+	if err != nil {
+		if api.config.Debug {
+			fmt.Printf("[API] ⚠️  Failed to get completed exfil sessions: %v\n", err)
+		}
+		completedExfilSessions = []string{}
+	}
+
 	// Send response with pending caches and domain updates
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":        true,
-		"message":        "check-in recorded",
-		"pending_caches": cacheTasks,
-		"domain_updates": pendingDomains,
+		"success":                  true,
+		"message":                  "check-in recorded",
+		"pending_caches":           cacheTasks,
+		"domain_updates":           pendingDomains,
+		"completed_exfil_sessions": completedExfilSessions,
 		"data": map[string]interface{}{
 			"dns_server_id":    dnsServerID,
 			"timestamp":        time.Now(),
