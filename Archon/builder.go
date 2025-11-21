@@ -1860,7 +1860,7 @@ func newBuildArtifact(buildType, filename, savedPath string) (*BuildArtifact, er
 	}, nil
 }
 
-func writeBuildMetadata(destPath, metadata *BuildMetadata) error {
+func writeBuildMetadata(destPath string, metadata *BuildMetadata) error {
 	if metadata == nil {
 		return nil
 	}
