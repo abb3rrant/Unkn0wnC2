@@ -40,7 +40,7 @@ pub struct DnsTransmitter {
 
 impl DnsTransmitter {
     pub fn new(cfg: Config, pool: ResolverPool) -> Self {
-        let aes_key = derive_key(cfg.encryption_key);
+        let aes_key = derive_key(&cfg.encryption_key);
         let ack_ip = cfg
             .server_ip()
             .parse::<Ipv4Addr>()
@@ -278,11 +278,11 @@ impl DnsTransmitter {
         }
 
         let mut rng = rand::thread_rng();
-        let mut candidates: Vec<&str> = domains.iter().copied().collect();
+        let mut candidates: Vec<&str> = domains.iter().map(|s| s.as_str()).collect();
         if let Some(last) = &self.last_domain {
-            candidates.retain(|d| d != last);
+            candidates.retain(|d| *d != last.as_str());
             if candidates.is_empty() {
-                candidates = domains.iter().copied().collect();
+                candidates = domains.iter().map(|s| s.as_str()).collect();
             }
         }
 

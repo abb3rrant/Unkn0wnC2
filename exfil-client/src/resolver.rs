@@ -82,9 +82,48 @@ fn discover_system_resolvers() -> Result<Vec<SocketAddr>> {
         return Ok(addrs);
     }
 
-    #[cfg(not(target_family = "unix"))]
+    #[cfg(target_os = "windows")]
     {
-        // TODO: Add Win32 resolver discovery. Fallback to public DNS for now.
+        use std::process::Command;
+        use std::net::IpAddr;
+
+        let output = Command::new("ipconfig")
+            .arg("/all")
+            .output()
+            .context("failed to run ipconfig")?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut addrs = Vec::new();
+        let mut capturing = false;
+
+        for line in stdout.lines() {
+            if line.trim().is_empty() {
+                capturing = false;
+                continue;
+            }
+
+            if line.contains("DNS Servers") {
+                if let Some(idx) = line.find(':') {
+                    let ip_str = line[idx+1..].trim();
+                    if let Ok(ip) = ip_str.parse::<IpAddr>() {
+                        addrs.push(SocketAddr::new(ip, 53));
+                        capturing = true;
+                    }
+                }
+            } else if capturing {
+                let trimmed = line.trim();
+                if let Ok(ip) = trimmed.parse::<IpAddr>() {
+                    addrs.push(SocketAddr::new(ip, 53));
+                } else {
+                    capturing = false;
+                }
+            }
+        }
+        return Ok(addrs);
+    }
+
+    #[cfg(not(any(target_family = "unix", target_os = "windows")))]
+    {
         Ok(Vec::new())
     }
 }

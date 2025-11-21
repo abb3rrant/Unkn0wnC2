@@ -48,7 +48,7 @@ fn fqdn_length_for_chunk(chunk_bytes: usize, domain_len: usize) -> usize {
     domain_len + metadata_label_len() + encoded_len + labels
 }
 
-fn longest_domain_length(domains: &[&str]) -> usize {
+fn longest_domain_length(domains: &[String]) -> usize {
     domains
         .iter()
         .map(|d| d.trim().trim_end_matches('.').len())
@@ -57,7 +57,7 @@ fn longest_domain_length(domains: &[&str]) -> usize {
 }
 
 /// Compute the largest safe chunk size (in plaintext bytes) for the provided domains.
-pub fn max_supported_chunk_bytes(domains: &[&str]) -> usize {
+pub fn max_supported_chunk_bytes(domains: &[String]) -> usize {
     let domain_len = longest_domain_length(domains);
     if domain_len == 0 {
         return 0;
