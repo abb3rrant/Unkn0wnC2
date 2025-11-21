@@ -84,8 +84,8 @@ fn discover_system_resolvers() -> Result<Vec<SocketAddr>> {
 
     #[cfg(target_os = "windows")]
     {
-        use std::process::Command;
         use std::net::IpAddr;
+        use std::process::Command;
 
         let output = Command::new("ipconfig")
             .arg("/all")
@@ -104,7 +104,7 @@ fn discover_system_resolvers() -> Result<Vec<SocketAddr>> {
 
             if line.contains("DNS Servers") {
                 if let Some(idx) = line.find(':') {
-                    let ip_str = line[idx+1..].trim();
+                    let ip_str = line[idx + 1..].trim();
                     if let Ok(ip) = ip_str.parse::<IpAddr>() {
                         addrs.push(SocketAddr::new(ip, 53));
                         capturing = true;
