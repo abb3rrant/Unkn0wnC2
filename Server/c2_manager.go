@@ -200,7 +200,7 @@ func NewC2Manager(debug bool, encryptionKey string, jitterConfig StagerJitter, d
 		debug:                debug,
 		aesKey:               aesKey,
 		jitterConfig:         jitterConfig,
-		domain:               domain,
+		domain:               strings.ToLower(domain),
 	}
 
 	// Load existing beacons from database
