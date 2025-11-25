@@ -2555,6 +2555,49 @@ func (d *MasterDatabase) CompleteStagerSession(sessionID string) error {
 	return err
 }
 
+// DeleteStagerSession removes a stager session and its chunk assignments
+func (d *MasterDatabase) DeleteStagerSession(sessionID string) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	// Delete chunk assignments first (in case CASCADE doesn't work)
+	_, err := d.db.Exec("DELETE FROM stager_chunk_assignments WHERE session_id = ?", sessionID)
+	if err != nil {
+		return fmt.Errorf("failed to delete chunk assignments: %w", err)
+	}
+
+	// Delete the session
+	result, err := d.db.Exec("DELETE FROM stager_sessions WHERE id = ?", sessionID)
+	if err != nil {
+		return fmt.Errorf("failed to delete stager session: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("stager session not found")
+	}
+
+	return nil
+}
+
+// UpdateStagerSessionStatus marks a stager session as failed
+func (d *MasterDatabase) UpdateStagerSessionStatus(sessionID string, failed bool) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	now := time.Now().Unix()
+	// We'll add a 'failed' column check, but for now just mark as completed with partial delivery
+	if failed {
+		_, err := d.db.Exec(`
+			UPDATE stager_sessions 
+			SET completed = 1, completed_at = ?, last_activity = ?
+			WHERE id = ?
+		`, now, now, sessionID)
+		return err
+	}
+	return nil
+}
+
 // AssignStagerChunks distributes chunks across DNS servers and stores assignments
 func (d *MasterDatabase) AssignStagerChunks(sessionID, clientBinaryID string, chunks []string, dnsServers []string) error {
 	d.mutex.Lock()
@@ -4176,6 +4219,29 @@ func (d *MasterDatabase) DeleteTask(taskID string) error {
 	}
 
 	return tx.Commit()
+}
+
+// UpdateTaskStatus updates the status of a task (e.g., mark as failed)
+func (d *MasterDatabase) UpdateTaskStatus(taskID, status string) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	now := time.Now().Unix()
+	result, err := d.db.Exec(`
+		UPDATE tasks 
+		SET status = ?, updated_at = ?
+		WHERE id = ?
+	`, status, now, taskID)
+	if err != nil {
+		return err
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("task not found")
+	}
+
+	return nil
 }
 
 // DeleteBeacon removes a beacon and its associated tasks/results

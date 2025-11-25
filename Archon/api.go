@@ -2332,6 +2332,110 @@ func (api *APIServer) handleGetStagerSession(w http.ResponseWriter, r *http.Requ
 	api.sendJSON(w, session)
 }
 
+// handleDeleteStagerSession deletes a stager session
+func (api *APIServer) handleDeleteStagerSession(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	sessionID := vars["id"]
+
+	err := api.db.DeleteStagerSession(sessionID)
+	if err != nil {
+		api.sendError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	api.sendSuccess(w, "stager session deleted", nil)
+}
+
+// handleUpdateStagerSessionStatus updates a stager session status (e.g., mark as failed)
+func (api *APIServer) handleUpdateStagerSessionStatus(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	sessionID := vars["id"]
+
+	var req struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	err := api.db.UpdateStagerSessionStatus(sessionID, req.Status == "failed")
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	api.sendSuccess(w, "stager session status updated", nil)
+}
+
+// handleDeleteExfilTransfer deletes an exfil transfer and associated data
+func (api *APIServer) handleDeleteExfilTransfer(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	sessionID := vars["id"]
+
+	err := api.db.DeleteExfilTransfer(sessionID)
+	if err != nil {
+		api.sendError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	api.sendSuccess(w, "exfil transfer deleted", nil)
+}
+
+// handleUpdateExfilTransferStatus updates an exfil transfer status
+func (api *APIServer) handleUpdateExfilTransferStatus(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	sessionID := vars["id"]
+
+	var req struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.Status != "failed" && req.Status != "complete" && req.Status != "receiving" {
+		api.sendError(w, http.StatusBadRequest, "invalid status (must be: failed, complete, receiving)")
+		return
+	}
+
+	err := api.db.UpdateExfilTransferStatus(sessionID, req.Status)
+	if err != nil {
+		api.sendError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	api.sendSuccess(w, "exfil transfer status updated", nil)
+}
+
+// handleUpdateTaskStatus updates a task status
+func (api *APIServer) handleUpdateTaskStatus(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	taskID := vars["id"]
+
+	var req struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.Status != "failed" && req.Status != "completed" && req.Status != "pending" {
+		api.sendError(w, http.StatusBadRequest, "invalid status (must be: failed, completed, pending)")
+		return
+	}
+
+	err := api.db.UpdateTaskStatus(taskID, req.Status)
+	if err != nil {
+		api.sendError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	api.sendSuccess(w, "task status updated", nil)
+}
+
 // Stager Protocol Handlers (called by DNS servers)
 
 // StagerInitRequest represents a stager initialization request from DNS server
@@ -2849,6 +2953,15 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	// Stager session endpoints
 	operatorRouter.HandleFunc("/stager/sessions", api.handleListStagerSessions).Methods("GET")
 	operatorRouter.HandleFunc("/stager/sessions/{id}", api.handleGetStagerSession).Methods("GET")
+	operatorRouter.HandleFunc("/stager/sessions/{id}", api.handleDeleteStagerSession).Methods("DELETE")
+	operatorRouter.HandleFunc("/stager/sessions/{id}/status", api.handleUpdateStagerSessionStatus).Methods("PATCH")
+
+	// Exfil transfer management endpoints
+	operatorRouter.HandleFunc("/exfil/transfers/{id}", api.handleDeleteExfilTransfer).Methods("DELETE")
+	operatorRouter.HandleFunc("/exfil/transfers/{id}/status", api.handleUpdateExfilTransferStatus).Methods("PATCH")
+
+	// Task management endpoints
+	operatorRouter.HandleFunc("/tasks/{id}/status", api.handleUpdateTaskStatus).Methods("PATCH")
 
 	// DNS server endpoints (API key auth required) - with high rate limits
 	dnsRouter := router.PathPrefix("/api/dns-server").Subrouter()

@@ -411,6 +411,35 @@
         .toggle-switch.active .toggle-slider {
             transform: translateX(26px);
         }
+
+        .action-btn {
+            padding: 4px 8px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+
+        .fail-btn {
+            background: rgba(255, 100, 100, 0.2);
+            color: #ff6666;
+            border: 1px solid rgba(255, 100, 100, 0.3);
+        }
+
+        .fail-btn:hover {
+            background: rgba(255, 100, 100, 0.4);
+        }
+
+        .delete-btn {
+            background: rgba(255, 50, 50, 0.2);
+            color: #ff4444;
+            border: 1px solid rgba(255, 50, 50, 0.3);
+        }
+
+        .delete-btn:hover {
+            background: rgba(255, 50, 50, 0.4);
+        }
     </style>
 </head>
 <body>
@@ -480,11 +509,12 @@
                         <th>ETA</th>
                         <th>DNS Server</th>
                         <th>Started</th>
+                        <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody id="sessionsTableBody">
                     <tr>
-                        <td colspan="9" class="empty-state">
+                        <td colspan="10" class="empty-state">
                             <div class="empty-state-icon">⏳</div>
                             <div>Loading stager sessions...</div>
                         </td>
@@ -619,7 +649,7 @@
                 if (sessions.length === 0) {
                     tbody.innerHTML = `
                         <tr>
-                            <td colspan="9" class="empty-state">
+                            <td colspan="10" class="empty-state">
                                 <div class="empty-state-icon">📭</div>
                                 <div>No stager sessions yet</div>
                                 <div style="margin-top: 10px; color: #444; font-size: 12px;">
@@ -684,6 +714,12 @@
                             <td style="color: ${session.completed ? '#00ff00' : '#ffa500'};">${eta}</td>
                             <td>${session.initiated_by_dns || 'N/A'}</td>
                             <td style="font-size: 11px;">${started}</td>
+                            <td>
+                                <div style="display: flex; gap: 5px;">
+                                    ${!session.completed ? `<button class="action-btn fail-btn" onclick="markStagerFailed('${session.id}')" title="Mark as Failed">✗</button>` : ''}
+                                    <button class="action-btn delete-btn" onclick="deleteStagerSession('${session.id}')" title="Delete">🗑</button>
+                                </div>
+                            </td>
                         </tr>
                     `;
                 }).join('');
@@ -693,7 +729,7 @@
                 const tbody = document.getElementById('sessionsTableBody');
                 tbody.innerHTML = `
                     <tr>
-                        <td colspan="9" class="empty-state">
+                        <td colspan="10" class="empty-state">
                             <div class="empty-state-icon">⚠️</div>
                             <div>Failed to load stager sessions</div>
                             <div style="margin-top: 10px; color: #ff6666; font-size: 12px;">
@@ -716,6 +752,45 @@
                 return `${minutes}m ${seconds % 60}s`;
             } else {
                 return `${seconds}s`;
+            }
+        }
+
+        async function markStagerFailed(sessionId) {
+            if (!confirm('Mark this stager session as failed?')) return;
+            
+            try {
+                const response = await authFetch(`/api/stager/sessions/${sessionId}/status`, {
+                    method: 'PATCH',
+                    body: JSON.stringify({ status: 'failed' })
+                });
+                
+                if (response && response.ok) {
+                    loadStagerSessions();
+                } else {
+                    alert('Failed to update session status');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Failed to update session status');
+            }
+        }
+
+        async function deleteStagerSession(sessionId) {
+            if (!confirm('Delete this stager session? This cannot be undone.')) return;
+            
+            try {
+                const response = await authFetch(`/api/stager/sessions/${sessionId}`, {
+                    method: 'DELETE'
+                });
+                
+                if (response && response.ok) {
+                    loadStagerSessions();
+                } else {
+                    alert('Failed to delete session');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Failed to delete session');
             }
         }
 

@@ -124,6 +124,9 @@ func encryptAndEncode(data string, key []byte) (string, error) {
 
 // decodeAndDecrypt decodes base36 and decrypts with AES-GCM
 func decodeAndDecrypt(encoded string, key []byte) (string, error) {
+	// DNS is case-insensitive, so normalize to lowercase
+	encoded = strings.ToLower(encoded)
+
 	// Decode from base36
 	encrypted, err := base36Decode(encoded)
 	if err != nil {

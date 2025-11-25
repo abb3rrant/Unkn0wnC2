@@ -359,14 +359,15 @@ func (d *MasterDatabase) ListExfilTransfers(limit, offset int) ([]ExfilTransfer,
 	for rows.Next() {
 		var t ExfilTransfer
 		var created, updated int64
-		var note sql.NullString
+		var jobID, sourceDNS, fileName, note sql.NullString
+		var fileSize sql.NullInt64
 		var lastChunk, completed sql.NullInt64
 		if err := rows.Scan(
 			&t.SessionID,
-			&t.JobID,
-			&t.SourceDNS,
-			&t.FileName,
-			&t.FileSize,
+			&jobID,
+			&sourceDNS,
+			&fileName,
+			&fileSize,
 			&t.TotalChunks,
 			&t.ReceivedChunks,
 			&t.Status,
@@ -378,10 +379,20 @@ func (d *MasterDatabase) ListExfilTransfers(limit, offset int) ([]ExfilTransfer,
 		); err != nil {
 			return nil, err
 		}
+		if jobID.Valid {
+			t.JobID = jobID.String
+		}
+		if sourceDNS.Valid {
+			t.SourceDNS = sourceDNS.String
+		}
+		if fileName.Valid {
+			t.FileName = fileName.String
+		}
 		if note.Valid {
 			t.Note = note.String
-		} else {
-			t.Note = ""
+		}
+		if fileSize.Valid {
+			t.FileSize = fileSize.Int64
 		}
 		t.CreatedAt = time.Unix(created, 0)
 		t.UpdatedAt = time.Unix(updated, 0)
@@ -414,14 +425,15 @@ func (d *MasterDatabase) GetExfilTransfer(sessionID string) (*ExfilTransfer, err
 
 	var t ExfilTransfer
 	var created, updated int64
-	var note sql.NullString
+	var jobID, sourceDNS, fileName, note sql.NullString
+	var fileSize sql.NullInt64
 	var lastChunk, completed sql.NullInt64
 	if err := row.Scan(
 		&t.SessionID,
-		&t.JobID,
-		&t.SourceDNS,
-		&t.FileName,
-		&t.FileSize,
+		&jobID,
+		&sourceDNS,
+		&fileName,
+		&fileSize,
 		&t.TotalChunks,
 		&t.ReceivedChunks,
 		&t.Status,
@@ -437,10 +449,20 @@ func (d *MasterDatabase) GetExfilTransfer(sessionID string) (*ExfilTransfer, err
 		return nil, err
 	}
 
+	if jobID.Valid {
+		t.JobID = jobID.String
+	}
+	if sourceDNS.Valid {
+		t.SourceDNS = sourceDNS.String
+	}
+	if fileName.Valid {
+		t.FileName = fileName.String
+	}
 	if note.Valid {
 		t.Note = note.String
-	} else {
-		t.Note = ""
+	}
+	if fileSize.Valid {
+		t.FileSize = fileSize.Int64
 	}
 
 	t.CreatedAt = time.Unix(created, 0)
@@ -455,6 +477,72 @@ func (d *MasterDatabase) GetExfilTransfer(sessionID string) (*ExfilTransfer, err
 	}
 
 	return &t, nil
+}
+
+// DeleteExfilTransfer removes an exfil transfer and its associated chunks/artifacts
+func (d *MasterDatabase) DeleteExfilTransfer(sessionID string) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Delete artifacts
+	_, err = tx.Exec("DELETE FROM exfil_artifacts WHERE session_id = ?", sessionID)
+	if err != nil {
+		return fmt.Errorf("failed to delete artifacts: %w", err)
+	}
+
+	// Delete chunks
+	_, err = tx.Exec("DELETE FROM exfil_chunks WHERE session_id = ?", sessionID)
+	if err != nil {
+		return fmt.Errorf("failed to delete chunks: %w", err)
+	}
+
+	// Delete session tags
+	_, err = tx.Exec("DELETE FROM exfil_session_tags WHERE session_id = ?", sessionID)
+	if err != nil {
+		return fmt.Errorf("failed to delete session tags: %w", err)
+	}
+
+	// Delete the transfer
+	result, err := tx.Exec("DELETE FROM exfil_transfers WHERE session_id = ?", sessionID)
+	if err != nil {
+		return fmt.Errorf("failed to delete transfer: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("exfil transfer not found")
+	}
+
+	return tx.Commit()
+}
+
+// UpdateExfilTransferStatus updates the status of an exfil transfer
+func (d *MasterDatabase) UpdateExfilTransferStatus(sessionID, status string) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	now := time.Now().Unix()
+	result, err := d.db.Exec(`
+		UPDATE exfil_transfers 
+		SET status = ?, updated_at = ?
+		WHERE session_id = ?
+	`, status, now, sessionID)
+	if err != nil {
+		return err
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("exfil transfer not found")
+	}
+
+	return nil
 }
 
 // GetExfilArtifact reconstructs the decrypted payload for download.
@@ -690,14 +778,15 @@ func (d *MasterDatabase) fetchExfilTransferTx(tx *sql.Tx, sessionID string) (*Ex
 
 	var t ExfilTransfer
 	var created, updated int64
-	var note sql.NullString
+	var jobID, sourceDNS, fileName, note sql.NullString
+	var fileSize sql.NullInt64
 	var lastChunk, completed sql.NullInt64
 	if err := row.Scan(
 		&t.SessionID,
-		&t.JobID,
-		&t.SourceDNS,
-		&t.FileName,
-		&t.FileSize,
+		&jobID,
+		&sourceDNS,
+		&fileName,
+		&fileSize,
 		&t.TotalChunks,
 		&t.ReceivedChunks,
 		&t.Status,
@@ -709,10 +798,22 @@ func (d *MasterDatabase) fetchExfilTransferTx(tx *sql.Tx, sessionID string) (*Ex
 	); err != nil {
 		return nil, err
 	}
+
+	// Handle nullable string fields
+	if jobID.Valid {
+		t.JobID = jobID.String
+	}
+	if sourceDNS.Valid {
+		t.SourceDNS = sourceDNS.String
+	}
+	if fileName.Valid {
+		t.FileName = fileName.String
+	}
 	if note.Valid {
 		t.Note = note.String
-	} else {
-		t.Note = ""
+	}
+	if fileSize.Valid {
+		t.FileSize = fileSize.Int64
 	}
 
 	t.CreatedAt = time.Unix(created, 0)

