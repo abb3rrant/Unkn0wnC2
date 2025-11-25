@@ -382,7 +382,7 @@ func isLikelyTimestampLabel(label string) bool {
 	return true
 }
 
-// ackIPAddress returns the server IP or +1 (wrap last octet) for ACK signaling.
+// ackIPAddress returns the server IP or +1 (with carry) for ACK signaling.
 func ackIPAddress(base string, ack bool) []byte {
 	ip, ok := toIPv4(base)
 	if !ok || len(ip) != 4 {
@@ -392,7 +392,15 @@ func ackIPAddress(base string, ack bool) []byte {
 		return ip
 	}
 	result := append([]byte(nil), ip...)
-	result[3] = byte((int(result[3]) + 1) & 0xFF)
+	// Increment with carry (matching exfil-client behavior)
+	for idx := 3; idx >= 0; idx-- {
+		if result[idx] == 255 {
+			result[idx] = 0
+		} else {
+			result[idx]++
+			break
+		}
+	}
 	return result
 }
 

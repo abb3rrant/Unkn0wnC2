@@ -439,6 +439,9 @@ func (api *APIServer) handleBuildClient(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Log domains for debugging Shadow Mesh configuration
+	fmt.Printf("[Builder] Building client with %d DNS domains: %v\n", len(req.DNSDomains), req.DNSDomains)
+
 	// Validate platform
 	if req.Platform == "" {
 		api.sendError(w, http.StatusBadRequest, "platform is required")

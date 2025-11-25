@@ -54,6 +54,13 @@ func (c *DNSClient) selectDomain(taskID string) (string, error) {
 		return "", fmt.Errorf("no DNS domains configured")
 	}
 
+	// DEBUG: Log configured domains on first call
+	c.mutex.Lock()
+	if c.lastDomain == "" && len(domains) > 1 {
+		fmt.Printf("[DNS] Shadow Mesh: %d domains configured: %v\n", len(domains), domains)
+	}
+	c.mutex.Unlock()
+
 	// Single domain case - no selection needed
 	if len(domains) == 1 {
 		c.mutex.Lock()
@@ -90,6 +97,7 @@ func (c *DNSClient) selectDomain(taskID string) (string, error) {
 		c.mutex.Lock()
 		c.failedDomains = make(map[string]time.Time)
 		c.mutex.Unlock()
+		fmt.Printf("[DNS] All domains were failed, resetting\n")
 	}
 
 	// CRITICAL: Exclude last used domain to force rotation (Shadow Mesh)
@@ -149,7 +157,8 @@ func (c *DNSClient) selectDomain(taskID string) (string, error) {
 	}
 
 	// DEBUG: Log domain selection for troubleshooting
-	//fmt.Printf("[DNS] Selected: %s (prev: %s, available: %v, mode: %s)\n", selectedDomain, lastUsed, availableDomains, mode)
+	fmt.Printf("[DNS] Selected: %s (prev: %s, available: %d/%d, mode: %s)\n", 
+		selectedDomain, lastUsed, len(availableDomains), len(domains), mode)
 
 	// Store the selected domain as the last used
 	c.mutex.Lock()
@@ -231,6 +240,7 @@ func (c *DNSClient) markDomainFailed(domain string) {
 	c.mutex.Lock()
 	c.failedDomains[domain] = time.Now()
 	c.mutex.Unlock()
+	fmt.Printf("[DNS] Domain marked as failed (will retry in 2min): %s\n", domain)
 }
 
 // encodeCommand encrypts and encodes a command string for DNS transmission
