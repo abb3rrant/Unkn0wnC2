@@ -1305,6 +1305,13 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 		}
 	}
 
+	// SHADOW MESH: Ignore metadata-only notifications (chunk_index=0 with empty data)
+	// DNS servers may send this to hint at totalChunks, but it's not actual result data
+	if chunkIndex == 0 && len(data) == 0 {
+		fmt.Printf("[Master DB] Ignoring metadata notification for task %s (totalChunks=%d)\n", taskID, totalChunks)
+		return nil
+	}
+
 	var err error
 
 	// Determine if this is a complete result
@@ -1314,8 +1321,9 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 	if chunkIndex == 1 && totalChunks == 1 {
 		// Single-chunk result from DNS server (1-indexed)
 		isComplete = 1
-	} else if chunkIndex == 0 {
-		// Either assembled result (totalChunks>1) or legacy 0-indexed single chunk
+	} else if chunkIndex == 0 && len(data) > 0 {
+		// Assembled result (totalChunks>1) or legacy 0-indexed single chunk
+		// ONLY mark complete if there's actual data
 		isComplete = 1
 
 		// If this is an assembled result from a DNS server, store it and we're done
@@ -3753,6 +3761,22 @@ func (d *MasterDatabase) MarkTaskCompleteFromBeacon(taskID, beaconID string, tot
 			// All chunks present, trigger reassembly synchronously (we already have the mutex)
 			fmt.Printf("[Master DB] All chunks present for task %s, assembling result\n", taskID)
 
+			// Check if we already have an assembled result (from another DNS server's completion signal)
+			var existingResultID int
+			err = d.db.QueryRow(`
+				SELECT id FROM task_results 
+				WHERE task_id = ? AND chunk_index = 0 AND is_complete = 1
+				LIMIT 1
+			`, taskID).Scan(&existingResultID)
+
+			if err == nil {
+				// Already assembled - just mark task complete if not already
+				fmt.Printf("[Master DB] Task %s already has assembled result (id=%d), marking complete\n", taskID, existingResultID)
+				d.markTaskCompleted(taskID)
+				d.clearPendingCompletion(taskID)
+				return nil
+			}
+
 			// Fetch all chunks in order
 			rows, err := d.db.Query(`
 				SELECT result_data FROM task_results 
@@ -3782,9 +3806,10 @@ func (d *MasterDatabase) MarkTaskCompleteFromBeacon(taskID, beaconID string, tot
 			assembledResult := strings.Join(chunks, "")
 
 			// Store assembled result (chunkIndex=0 indicates final assembled result)
+			// Use INSERT OR REPLACE to handle race conditions from multiple DNS servers
 			_, err = d.db.Exec(`
-				INSERT INTO task_results (task_id, beacon_id, dns_server_id, result_data, received_at, chunk_index, total_chunks, is_complete)
-				VALUES (?, ?, 'beacon-complete', ?, ?, 0, ?, 1)
+				INSERT OR REPLACE INTO task_results (task_id, beacon_id, dns_server_id, result_data, received_at, chunk_index, total_chunks, is_complete)
+				VALUES (?, ?, 'master-assembled', ?, ?, 0, ?, 1)
 			`, taskID, beaconID, assembledResult, time.Now().Unix(), totalChunks)
 
 			if err != nil {

