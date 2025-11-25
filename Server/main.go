@@ -334,8 +334,10 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 			var answers []DNSResourceRecord
 
 			// Debug: Log the query name format
-			logf("[DEBUG] Query Name (original): '%s' (len=%d)", q.Name, len(q.Name))
-			logf("[DEBUG] Query Name (processed): '%s' (len=%d)", qname, len(qname))
+			if debugMode {
+				logf("[DEBUG] Query Name (original): '%s' (len=%d)", q.Name, len(q.Name))
+				logf("[DEBUG] Query Name (processed): '%s' (len=%d)", qname, len(qname))
+			}
 
 			switch q.Type {
 			case 1: // A record - encode simple responses in IP
@@ -371,8 +373,10 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 					// Stager META responses - use base36 encoding only (no encryption)
 					encoded = base36EncodeString(c2Response)
 					// Debug: Log what we're encoding and the result
-					logf("[DEBUG] META Response: %s", c2Response)
-					logf("[DEBUG] Base36 Encoded (len=%d): %s", len(encoded), encoded)
+					if debugMode {
+						logf("[DEBUG] META Response: %s", c2Response)
+						logf("[DEBUG] Base36 Encoded (len=%d): %s", len(encoded), encoded)
+					}
 				} else {
 					// Beacon response - use AES-GCM + base36
 					// Check if we have a cached encrypted response for this query
@@ -432,13 +436,17 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 				})
 
 				// Debug: Log the TXT record details
-				logf("[DEBUG] TXT RData length: %d bytes", len(txtData))
-				logf("[DEBUG] TXT RData hex: %x", txtData)
+				if debugMode {
+					logf("[DEBUG] TXT RData length: %d bytes", len(txtData))
+					logf("[DEBUG] TXT RData hex: %x", txtData)
+				}
 			}
 
 			respMsg := buildResponse(msg, answers, 0)
 			serialized := serializeMessage(respMsg)
-			logf("[DEBUG] Response packet length: %d bytes", len(serialized))
+			if debugMode {
+				logf("[DEBUG] Response packet length: %d bytes", len(serialized))
+			}
 			return serialized, nil
 		}
 	}
