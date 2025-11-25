@@ -69,8 +69,8 @@ func TestC2ManagerInit(t *testing.T) {
 func TestBeaconRegistration(t *testing.T) {
 	c2 := NewC2Manager(true, "testkey", StagerJitter{JitterMinMs: 100, JitterMaxMs: 200}, ":memory:", "example.com")
 
-	// Simulate beacon checkin
-	beaconData := `{"id":"test-beacon","hostname":"host1","username":"user1","os":"linux","arch":"amd64"}`
+	// Simulate beacon checkin using pipe-delimited format: CHK|id|hostname|username|os|arch
+	beaconData := "CHK|test-beacon|host1|user1|linux|amd64"
 
 	// Encrypt beacon data
 	encoded, err := encryptAndEncode(beaconData, c2.aesKey)
@@ -105,15 +105,15 @@ func TestBeaconRegistration(t *testing.T) {
 func TestTasking(t *testing.T) {
 	c2 := NewC2Manager(true, "testkey", StagerJitter{JitterMinMs: 100, JitterMaxMs: 200}, ":memory:", "example.com")
 
-	// Register beacon first
-	beaconData := `{"id":"test-beacon","hostname":"host1","username":"user1","os":"linux","arch":"amd64"}`
+	// Register beacon first using pipe-delimited format
+	beaconData := "CHK|test-beacon|host1|user1|linux|amd64"
 	encoded, _ := encryptAndEncode(beaconData, c2.aesKey)
 	c2.processBeaconQuery(encoded+".example.com", "127.0.0.1")
 
 	// Add task
 	c2.AddTaskFromMaster("M1", "test-beacon", "whoami")
 
-	// Poll for task
+	// Poll for task (same check-in message)
 	resp, _ := c2.processBeaconQuery(encoded+".example.com", "127.0.0.1")
 
 	// Response should be TASK|ID|COMMAND
