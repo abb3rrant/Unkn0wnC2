@@ -54,23 +54,22 @@ func (c *DNSClient) selectDomain(taskID string) (string, error) {
 		return "", fmt.Errorf("no DNS domains configured")
 	}
 
-	// DEBUG: Log configured domains on first call
+	// Hold lock for entire operation to prevent race conditions
 	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	// DEBUG: Log configured domains on first call
 	if c.lastDomain == "" && len(domains) > 1 {
 		fmt.Printf("[DNS] Shadow Mesh: %d domains configured: %v\n", len(domains), domains)
 	}
-	c.mutex.Unlock()
 
 	// Single domain case - no selection needed
 	if len(domains) == 1 {
-		c.mutex.Lock()
 		c.lastDomain = domains[0]
-		c.mutex.Unlock()
 		return domains[0], nil
 	}
 
 	// Clean up expired failed domains (retry after 2 minutes)
-	c.mutex.Lock()
 	now := time.Now()
 	for domain, failTime := range c.failedDomains {
 		if now.Sub(failTime) > 2*time.Minute {
@@ -78,25 +77,20 @@ func (c *DNSClient) selectDomain(taskID string) (string, error) {
 			delete(c.failureCounts, domain) // Reset failure count
 		}
 	}
-	c.mutex.Unlock()
 
 	// Filter out currently failed domains
 	availableDomains := []string{}
-	c.mutex.RLock()
 	lastUsed := c.lastDomain
 	for _, domain := range domains {
 		if _, failed := c.failedDomains[domain]; !failed {
 			availableDomains = append(availableDomains, domain)
 		}
 	}
-	c.mutex.RUnlock()
 
 	// If all domains failed, reset and use all domains
 	if len(availableDomains) == 0 {
 		availableDomains = domains
-		c.mutex.Lock()
 		c.failedDomains = make(map[string]time.Time)
-		c.mutex.Unlock()
 		fmt.Printf("[DNS] All domains were failed, resetting\n")
 	}
 
@@ -131,11 +125,9 @@ func (c *DNSClient) selectDomain(taskID string) (string, error) {
 
 	case "round-robin":
 		// Round-robin selection
-		c.mutex.Lock()
 		c.domainIndex = c.domainIndex % len(availableDomains)
 		selectedDomain = availableDomains[c.domainIndex]
 		c.domainIndex++
-		c.mutex.Unlock()
 
 	case "failover":
 		// Failover: always use first available domain
@@ -144,7 +136,7 @@ func (c *DNSClient) selectDomain(taskID string) (string, error) {
 	case "weighted":
 		// Weighted selection based on latency and success rate
 		// Prefer faster, more reliable domains
-		selectedDomain = c.selectWeightedDomain(availableDomains)
+		selectedDomain = c.selectWeightedDomainLocked(availableDomains)
 
 	default:
 		// Default to random
@@ -161,9 +153,7 @@ func (c *DNSClient) selectDomain(taskID string) (string, error) {
 		selectedDomain, lastUsed, len(availableDomains), len(domains), mode)
 
 	// Store the selected domain as the last used
-	c.mutex.Lock()
 	c.lastDomain = selectedDomain
-	c.mutex.Unlock()
 
 	// NOTE: Task domain mapping removed to enable proper load balancing
 	// Each chunk can go to a different DNS server for distributed processing
@@ -176,12 +166,16 @@ func (c *DNSClient) selectDomain(taskID string) (string, error) {
 // selectWeightedDomain chooses a domain based on performance metrics
 // Prefers domains with lower latency and higher success rates
 func (c *DNSClient) selectWeightedDomain(domains []string) string {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+	return c.selectWeightedDomainLocked(domains)
+}
+
+// selectWeightedDomainLocked is the internal implementation that assumes mutex is held
+func (c *DNSClient) selectWeightedDomainLocked(domains []string) string {
 	if len(domains) == 1 {
 		return domains[0]
 	}
-
-	c.mutex.RLock()
-	defer c.mutex.RUnlock()
 
 	// Calculate scores for each domain (lower is better)
 	bestScore := float64(99999)
