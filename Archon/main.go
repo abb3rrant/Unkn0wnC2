@@ -60,11 +60,9 @@ func main() {
 	}
 	if *bindAddr != "" {
 		cfg.BindAddr = *bindAddr
-		fmt.Printf("✓ Overriding bind address: %s\n", *bindAddr)
 	}
 	if *bindPort != 0 {
 		cfg.BindPort = *bindPort
-		fmt.Printf("✓ Overriding bind port: %d\n", *bindPort)
 	}
 
 	// Validate configuration
@@ -73,31 +71,40 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("Configuration loaded from: %s\n", *configPath)
-	fmt.Printf("Bind address: %s:%d\n", cfg.BindAddr, cfg.BindPort)
-	fmt.Printf("TLS Certificate: %s\n", cfg.TLSCert)
-	fmt.Printf("Database: %s\n", cfg.DatabasePath)
-	fmt.Printf("Debug mode: %v\n", cfg.Debug)
-	fmt.Println()
+	// Initialize logger - always log to file, also to stdout if debug mode
+	logDir := "/opt/unkn0wnc2/logs"
+	if err := InitLogger(logDir, cfg.Debug); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
+		os.Exit(1)
+	}
+	defer CloseLogger()
+
+	LogInfo("Archon Master Server starting")
+	LogInfo("Configuration loaded from: %s", *configPath)
+	LogInfo("Bind address: %s:%d", cfg.BindAddr, cfg.BindPort)
+	LogInfo("TLS Certificate: %s", cfg.TLSCert)
+	LogInfo("Database: %s", cfg.DatabasePath)
+	LogInfo("Debug mode: %v", cfg.Debug)
+	LogInfo("Log directory: %s", logDir)
 
 	// Initialize database
-	fmt.Println("Initializing database...")
+	LogInfo("Initializing database...")
 	db, err := NewMasterDatabase(cfg.DatabasePath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to initialize database: %v\n", err)
+		LogError("Failed to initialize database: %v", err)
 		os.Exit(1)
 	}
 	defer db.Close()
 
 	// Check if initial admin setup is needed
 	if err := initializeAdmin(db, cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to initialize admin: %v\n", err)
+		LogError("Failed to initialize admin: %v", err)
 		os.Exit(1)
 	}
 
 	// Register pre-configured DNS servers
 	if err := registerConfiguredDNSServers(db, cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to register DNS servers: %v\n", err)
+		LogWarn("Failed to register DNS servers: %v", err)
 		// Don't exit - this is not critical
 	}
 
@@ -125,34 +132,30 @@ func main() {
 
 	// Start server in a goroutine
 	go func() {
-		fmt.Printf("\n%s==================================================%s\n", ColorGreen, ColorReset)
-		fmt.Printf("%sArchon Server v%s%s\n", ColorGreen, version, ColorReset)
-		fmt.Printf("Build: %s (commit: %s)\n", buildDate, gitCommit)
-		fmt.Printf("%s==================================================%s\n", ColorGreen, ColorReset)
-		fmt.Printf("HTTPS Server listening on: https://%s\n", addr)
-		fmt.Printf("TLS enabled with certificate: %s\n", cfg.TLSCert)
-		fmt.Printf("Database: %s\n", cfg.DatabasePath)
-		fmt.Printf("DNS Servers registered: %d\n", len(cfg.DNSServers))
+		LogInfo("=================================================")
+		LogInfo("Archon Server v%s", version)
+		LogInfo("Build: %s (commit: %s)", buildDate, gitCommit)
+		LogInfo("=================================================")
+		LogInfo("HTTPS Server listening on: https://%s", addr)
+		LogInfo("TLS enabled with certificate: %s", cfg.TLSCert)
+		LogInfo("Database: %s", cfg.DatabasePath)
+		LogInfo("DNS Servers registered: %d", len(cfg.DNSServers))
 
 		// Display registered DNS servers
 		if len(cfg.DNSServers) > 0 {
-			fmt.Println("\nRegistered DNS Servers:")
+			LogInfo("Registered DNS Servers:")
 			for _, dns := range cfg.DNSServers {
-				status := "✓"
+				status := "enabled"
 				if !dns.Enabled {
-					status = "✗"
+					status = "disabled"
 				}
-				fmt.Printf("  %s %s - %s (%s)\n", status, dns.ID, dns.Domain, dns.Address)
+				LogInfo("  - %s: %s (%s) [%s]", dns.ID, dns.Domain, dns.Address, status)
 			}
 		}
 
-		fmt.Println()
-		fmt.Printf("%sPress Ctrl+C to shutdown gracefully%s\n", ColorYellow, ColorReset)
-		fmt.Println()
-
 		// Start HTTPS server
 		if err := srv.ListenAndServeTLS(cfg.TLSCert, cfg.TLSKey); err != nil && err != http.ErrServerClosed {
-			fmt.Fprintf(os.Stderr, "Failed to start HTTPS server: %v\n", err)
+			LogError("Failed to start HTTPS server: %v", err)
 			os.Exit(1)
 		}
 	}()
@@ -161,7 +164,7 @@ func main() {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				fmt.Printf("[Cleanup] PANIC in cleanup goroutine: %v\n", r)
+				LogError("PANIC in cleanup goroutine: %v", r)
 			}
 		}()
 
@@ -172,53 +175,48 @@ func main() {
 		time.Sleep(1 * time.Hour)
 
 		for {
-			if cfg.Debug {
-				fmt.Println("[Cleanup] Running database maintenance...")
-			}
+			LogDebug("Running database maintenance...")
 
 			// Cleanup completed tasks older than 30 days
 			if count, err := db.CleanupOldTasks(30); err == nil && count > 0 {
-				fmt.Printf("[Cleanup] ✓ Removed %d old completed tasks\n", count)
-			} else if err != nil && cfg.Debug {
-				fmt.Printf("[Cleanup] Warning: Failed to cleanup old tasks: %v\n", err)
+				LogInfo("Cleanup: Removed %d old completed tasks", count)
+			} else if err != nil {
+				LogWarn("Cleanup: Failed to cleanup old tasks: %v", err)
 			}
 
 			// Cleanup inactive beacons older than 60 days
 			if count, err := db.CleanupInactiveBeacons(60); err == nil && count > 0 {
-				fmt.Printf("[Cleanup] ✓ Removed %d inactive beacons\n", count)
-			} else if err != nil && cfg.Debug {
-				fmt.Printf("[Cleanup] Warning: Failed to cleanup inactive beacons: %v\n", err)
+				LogInfo("Cleanup: Removed %d inactive beacons", count)
+			} else if err != nil {
+				LogWarn("Cleanup: Failed to cleanup inactive beacons: %v", err)
 			}
 
 			// Cleanup completed stager sessions older than 7 days
 			if count, err := db.CleanupCompletedStagerSessions(7); err == nil && count > 0 {
-				fmt.Printf("[Cleanup] ✓ Removed %d old stager sessions\n", count)
-			} else if err != nil && cfg.Debug {
-				fmt.Printf("[Cleanup] Warning: Failed to cleanup stager sessions: %v\n", err)
+				LogInfo("Cleanup: Removed %d old stager sessions", count)
+			} else if err != nil {
+				LogWarn("Cleanup: Failed to cleanup stager sessions: %v", err)
 			}
 
 			// Expire stale pending tasks (pending for 48+ hours)
-			// For long-term engagements (30min+ callbacks), this prevents queue buildup
 			if count, err := db.CleanupStalePendingTasks(48); err == nil && count > 0 {
-				fmt.Printf("[Cleanup] ✓ Expired %d stale pending tasks (pending >48hrs)\n", count)
-			} else if err != nil && cfg.Debug {
-				fmt.Printf("[Cleanup] Warning: Failed to cleanup stale pending tasks: %v\n", err)
+				LogInfo("Cleanup: Expired %d stale pending tasks (pending >48hrs)", count)
+			} else if err != nil {
+				LogWarn("Cleanup: Failed to cleanup stale pending tasks: %v", err)
 			}
 
 			// Detect partial results (sent tasks with incomplete chunks after 6 hours)
-			// Alerts operators to beacons that died mid-exfiltration
 			if count, err := db.DetectPartialResults(6); err == nil && count > 0 {
-				fmt.Printf("[Cleanup] Detected %d tasks with partial results (incomplete chunks >6hrs)\n", count)
-			} else if err != nil && cfg.Debug {
-				fmt.Printf("[Cleanup] Warning: Failed to detect partial results: %v\n", err)
+				LogWarn("Cleanup: Detected %d tasks with partial results (incomplete >6hrs)", count)
+			} else if err != nil {
+				LogWarn("Cleanup: Failed to detect partial results: %v", err)
 			}
 
 			// Cleanup expired and revoked sessions
-			// Prevents session table bloat and ensures proper authentication state
 			if count, err := db.CleanupExpiredSessions(); err == nil && count > 0 {
-				fmt.Printf("[Cleanup] ✓ Removed %d expired/revoked sessions\n", count)
-			} else if err != nil && cfg.Debug {
-				fmt.Printf("[Cleanup] Warning: Failed to cleanup sessions: %v\n", err)
+				LogInfo("Cleanup: Removed %d expired/revoked sessions", count)
+			} else if err != nil {
+				LogWarn("Cleanup: Failed to cleanup sessions: %v", err)
 			}
 
 			// Wait for next tick
@@ -231,7 +229,7 @@ func main() {
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 	<-quit
 
-	fmt.Println("\nShutting down Archon Server...")
+	LogInfo("Shutting down Archon Server...")
 
 	// Create shutdown context with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -239,15 +237,15 @@ func main() {
 
 	// Shutdown HTTP server gracefully
 	if err := srv.Shutdown(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "Server shutdown error: %v\n", err)
+		LogError("Server shutdown error: %v", err)
 	}
 
 	// Close database connection
 	if err := db.Close(); err != nil {
-		fmt.Fprintf(os.Stderr, "Database close error: %v\n", err)
+		LogError("Database close error: %v", err)
 	}
 
-	fmt.Println("✓ Archon Server stopped gracefully")
+	LogInfo("Archon Server stopped gracefully")
 }
 
 // initializeAdmin creates the initial admin account if it doesn't exist
@@ -266,17 +264,16 @@ func initializeAdmin(db *MasterDatabase, cfg Config) error {
 
 	if err != nil {
 		// If error is about duplicate username, admin already exists
-		// Check if error string contains "UNIQUE constraint" or "constraint failed"
 		errStr := err.Error()
 		if strings.Contains(errStr, "UNIQUE constraint") || strings.Contains(errStr, "constraint failed") {
-			fmt.Println("✓ Admin account already exists")
+			LogDebug("Admin account already exists")
 			return nil
 		}
 		return fmt.Errorf("failed to create admin account: %w", err)
 	}
 
-	fmt.Printf("✓ Created admin account: %s\n", cfg.AdminCredentials.Username)
-	fmt.Printf("Default password is set - please change it after first login!\n")
+	LogInfo("Created admin account: %s", cfg.AdminCredentials.Username)
+	LogWarn("Default password is set - please change it after first login!")
 
 	return nil
 }
@@ -296,13 +293,11 @@ func registerConfiguredDNSServers(db *MasterDatabase, cfg Config) error {
 		)
 
 		if err != nil {
-			fmt.Printf("Warning: Failed to register DNS server %s: %v\n", dnsConfig.ID, err)
+			LogWarn("Failed to register DNS server %s: %v", dnsConfig.ID, err)
 			continue
 		}
 
-		if cfg.Debug {
-			fmt.Printf("✓ Registered DNS server: %s (%s)\n", dnsConfig.ID, dnsConfig.Domain)
-		}
+		LogDebug("Registered DNS server: %s (%s)", dnsConfig.ID, dnsConfig.Domain)
 	}
 
 	return nil
