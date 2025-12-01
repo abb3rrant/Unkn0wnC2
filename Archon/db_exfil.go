@@ -556,6 +556,42 @@ func (d *MasterDatabase) UpdateExfilTransferStatus(sessionID, status string) err
 	return nil
 }
 
+// EnsureExfilTransfer creates or updates a transfer record with metadata (no chunk data).
+// Used for header/metadata frames that only carry session info.
+func (d *MasterDatabase) EnsureExfilTransfer(sessionID, jobID, dnsID, fileName string, fileSize int64, totalChunks int) (*ExfilTransfer, error) {
+	if sessionID == "" {
+		return nil, fmt.Errorf("session_id is required")
+	}
+
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			tx.Rollback()
+		}
+	}()
+
+	if err = d.ensureExfilTransferTx(tx, sessionID, jobID, dnsID, fileName, fileSize, totalChunks); err != nil {
+		return nil, err
+	}
+
+	transfer, err := d.fetchExfilTransferTx(tx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	return transfer, nil
+}
+
 // GetExfilArtifact reconstructs the decrypted payload for download.
 func (d *MasterDatabase) GetExfilArtifact(sessionID string) ([]byte, string, string, error) {
 	d.mutex.RLock()

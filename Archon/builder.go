@@ -1562,10 +1562,8 @@ func collectServerAddresses(servers []map[string]interface{}) []string {
 	seen := make(map[string]struct{})
 	var ips []string
 	for _, server := range servers {
-		status, _ := server["status"].(string)
-		if status != "active" {
-			continue
-		}
+		// Collect addresses from all servers, not just active ones
+		// This ensures the exfil client can ACK responses from any registered server
 		if addr, ok := server["address"].(string); ok {
 			addr = strings.TrimSpace(addr)
 			if addr == "" {

