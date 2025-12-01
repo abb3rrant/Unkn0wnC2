@@ -975,6 +975,25 @@ func (d *Database) GetCachedStagerChunk(clientBinaryID string, chunkIndex int) (
 	return chunk, true
 }
 
+// GetCachedBinaryInfo returns info about the most recent cached binary
+func (d *Database) GetCachedBinaryInfo() (clientBinaryID string, totalChunks int, found bool) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	err := d.db.QueryRow(`
+		SELECT client_binary_id, COUNT(*) as chunk_count
+		FROM stager_chunk_cache
+		GROUP BY client_binary_id
+		ORDER BY cached_at DESC
+		LIMIT 1
+	`).Scan(&clientBinaryID, &totalChunks)
+
+	if err != nil {
+		return "", 0, false
+	}
+	return clientBinaryID, totalChunks, true
+}
+
 // MarkExfilChunkSynced marks a chunk as successfully uploaded to Master
 func (d *Database) MarkExfilChunkSynced(sessionID string, chunkIndex int) error {
 	d.mutex.Lock()

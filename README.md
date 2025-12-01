@@ -130,49 +130,37 @@ A huge feature of Unkn0wnC2 is Shadow Mesh. Unkn0wnC2 can be used with 1 domain 
 ```mermaid
 flowchart TB
 
-
-
     subgraph Victim-VPC
         direction TB
             subgraph Victim-Host
-                A(Becon)
+                A(Beacon)
             end
-            A e1@-->|DNS TXT Request| B[Local DNS]
-       
+            A -->|DNS TXT Request| B[Local DNS]
         end
     
-    B e2@-->|DNS| C{Root DNS - 8.8.8.8}
-
-    C e3@-->|DNS| D{TLD}
-
-    D e4@-->|DNS| E
-    D e5@-->|DNS| F{ns1.badguys.net}
-    D e6@-->|DNS| G{ns1.johnadversay.org}
-
-
+    B -->|DNS| C{Root DNS - 8.8.8.8}
+    C -->|DNS| D{TLD}
+    D -->|DNS| E
+    D -->|DNS| F{ns1.badguys.net}
+    D -->|DNS| G{ns1.johnadversay.org}
 
     subgraph EvilCorp-VPC
         direction TB
-            E{ns1.evilcorp.com} e7@-->|HTTPS| H
-            F{ns1.badguys.net} e8@-->|HTTPS| H
-            G{ns1.johnadversay.org} e9@-->|HTTPS| H
+            E{ns1.evilcorp.com} -->|HTTPS| H
+            F -->|HTTPS| H
+            G -->|HTTPS| H
             H{Archon Server}
             I{Operator} ==>|HTTPS| H
-
         end
 
-
 classDef vict stroke:#0f0
-class B,Victim-Host,Victim-VPC vict;
+class B,Victim-Host,Victim-VPC vict
 
 classDef adversary stroke:#f00
-class A,E,F,G,H,I,EvilCorp-VPC adversary;
+class A,E,F,G,H,I,EvilCorp-VPC adversary
 
 classDef internet stroke:#00f
-class C,D internet;
-
-classDef animate stroke-dasharray: 9,5,stroke-dashoffset: 900,animation: dash 25s linear infinite;
-class e1,e2,e3,e4,e5,e6,e7,e8,e9 animate
+class C,D internet
 ```
 
 ### Authoritative DNS
@@ -242,7 +230,7 @@ sequenceDiagram
     Beacon->>Beacon: Split into 62-char DNS labels
     
     Note over Beacon: Select domain (Shadow Mesh)
-    Beacon->>Beacon: selectDomain() - never reuse last domain
+    Beacon->>Beacon: selectDomain() - rotate through domains
     
     Beacon->>DNS_Resolver: TXT query: <base36>.<timestamp>.domain
     DNS_Resolver->>DNS_Server: Forward TXT query
@@ -261,40 +249,16 @@ sequenceDiagram
         Master->>Master: Log audit event
         Master-->>DNS_Server: 200 OK {success: true}
         
-        DNS_Server->>Master: GET /api/dns-server/beacons?dns_server_id=X
-        Master-->>DNS_Server: Return all known domains
-        
-        DNS_Server->>DNS_Server: Format DOMAINS response
-        DNS_Server->>DNS_Server: DOMAINS|domain1,domain2,domain3
-        DNS_Server->>DNS_Server: Encrypt + Base36 encode
-        DNS_Server-->>DNS_Resolver: TXT record with domain list
+        Note over DNS_Server: Check for pending tasks
+        DNS_Server->>DNS_Server: No tasks for new beacon
+        DNS_Server->>DNS_Server: Encrypt + Base36 encode "ACK"
+        DNS_Server-->>DNS_Resolver: TXT record: ACK
         
     else Existing Beacon - Poll for Task
         DNS_Server->>DNS_Server: Update beacon.LastSeen
         DNS_Server->>DNS_Server: Check local task queue
         
-        alt No tasks locally, poll Master
-            DNS_Server->>Master: GET /api/dns-server/tasks?dns_server_id=X
-            Master->>Master: Query pending tasks for this DNS server
-            Master-->>DNS_Server: Return task list [{task_id, beacon_id, command}]
-            
-            alt Tasks available from Master
-                DNS_Server->>DNS_Server: Add tasks to local queue
-                DNS_Server->>DNS_Server: Format TASK response
-                DNS_Server->>DNS_Server: TASK|taskID|command
-                DNS_Server->>DNS_Server: Encrypt + Base36 encode
-                
-                DNS_Server->>Master: POST /api/dns-server/tasks/delivered<br/>{task_id, beacon_id}
-                Master->>Master: Update task status: pending → sent
-                Master-->>DNS_Server: 200 OK
-                
-                DNS_Server-->>DNS_Resolver: TXT record with task
-            else No tasks from Master
-                DNS_Server->>DNS_Server: Format ACK response
-                DNS_Server->>DNS_Server: Encrypt + Base36 encode
-                DNS_Server-->>DNS_Resolver: TXT record: "ACK"
-            end
-        else Task in local queue
+        alt Task in queue
             DNS_Server->>DNS_Server: Format TASK response
             DNS_Server->>DNS_Server: TASK|taskID|command
             DNS_Server->>DNS_Server: Encrypt + Base36 encode
@@ -304,6 +268,10 @@ sequenceDiagram
             Master-->>DNS_Server: 200 OK
             
             DNS_Server-->>DNS_Resolver: TXT record with task
+        else No tasks
+            DNS_Server->>DNS_Server: Format ACK response
+            DNS_Server->>DNS_Server: Encrypt + Base36 encode
+            DNS_Server-->>DNS_Resolver: TXT record: "ACK"
         end
     end
     
@@ -330,16 +298,25 @@ sequenceDiagram
 | Message Type | Format | Description | Example |
 |--------------|--------|-------------|---------|
 | **STG** | `STG\|clientIP\|os\|arch` | Initial stager request to start session | `STG\|192.168.1.100\|windows\|amd64` |
-| **CHUNK** | `CHUNK\|chunkIndex\|clientIP\|sessionID` | Request specific beacon chunk | `CHUNK\|0\|192.168.1.100\|sess_abc123` |
-| **ACK** | `ACK\|chunkIndex\|clientIP\|sessionID` | (DEPRECATED) Old stager acknowledgment | `ACK\|5\|192.168.1.100\|sess_abc123` |
+| **CHUNK** | `CHUNK\|chunkIndex\|clientIP\|sessionID` | Request specific beacon chunk | `CHUNK\|0\|192.168.1.100\|stg_a1b2` |
 
 ### Exfil Client → DNS Server Messages
 
-| Message Type | Format | Description | Example |
-|--------------|--------|-------------|---------|
-| **EX** | `EX\|ID\|totalChunks\|` | Initial exfil request to start session | `EX\|E2\|9402` |
-| **EX DATA** | `EX\|ID\|chunkIndex\|<result_data>` | Sending specific exfil data chunk | `EX\|E2\|3\|<result_data>` |
-| **EX COMPLETE** | `EX\|ID\|COMPLETE` | Signaling exfil is complete | `EX\|E2\|COMPLETE` |
+The exfil client uses encrypted DNS subdomain labels with an `EX` prefix:
+
+| Frame Type | DNS Query Format | Description |
+|------------|------------------|-------------|
+| **INIT** | `EX<encrypted_envelope>.<payload_labels>.<domain>` | Initial frame with file metadata (filename, size, total chunks) |
+| **CHUNK** | `EX<encrypted_envelope>.<payload_labels>.<domain>` | Data chunk with encrypted payload |
+| **COMPLETE** | `EX<encrypted_envelope>.0.<domain>` | Signal transfer completion (pad label "0" for empty payload) |
+
+**Envelope Structure** (encrypted, base36 encoded):
+- Version (1 byte): Protocol version
+- Flags (1 byte): Frame type flags (INIT=0x01, CHUNK=0x02, COMPLETE=0x04, METADATA=0x08, FINAL=0x10)
+- Session Tag (3 bytes): Base36 encoded session identifier
+- Counter (4 bytes): Chunk counter (little-endian)
+
+**Example DNS Query**: `EXa1b2c3d4e5f6g7h8.abcdefghij.klmnopqrst.evil.com`
 
 
 ### DNS Server → Beacon/Stager Responses
@@ -347,9 +324,10 @@ sequenceDiagram
 | Response Type | Format | Description | Example |
 |---------------|--------|-------------|---------|
 | **Task Delivery** | `TASK\|taskID\|command` | Deliver task to beacon | `TASK\|task1001\|whoami` |
-| **ACK** | `ACK` | Acknowledge message receipt | `ACK` |
-| **Chunk Data** | `<base36_encoded_chunk>` | Binary chunk for stager | `3g7k2m...` |
-| **Session Info** | `sessionID\|totalChunks` | Response to STG request | `sess_abc123\|15` |
+| **ACK** | `ACK` | Acknowledge message receipt (no pending tasks) | `ACK` |
+| **Domain Update** | `update_domains:<json_array>` | Task to update beacon's domain list (Shadow Mesh) | `update_domains:["evil.com","bad.net"]` |
+| **Stager Meta** | `META\|sessionID\|totalChunks` | Response to STG request with session info | `META\|stg_a1b2\|4360` |
+| **Chunk Data** | `CHUNK\|<base64_data>` | Binary chunk for stager (plain text, not base36) | `CHUNK\|SGVsbG8gV29y...` |
 | **ERROR** | `ERROR` | Invalid or malformed message | `ERROR` |
 
 ### Malleable Timing (stager / client / exfil)

