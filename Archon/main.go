@@ -113,9 +113,6 @@ func main() {
 	// Setup API routes
 	apiServer.SetupRoutes(router)
 
-	// TODO: Setup WebSocket endpoint for real-time updates
-	// router.HandleFunc("/ws", handleWebSocket).Methods("GET")
-
 	// Create HTTPS server
 	addr := fmt.Sprintf("%s:%d", cfg.BindAddr, cfg.BindPort)
 	srv := &http.Server{

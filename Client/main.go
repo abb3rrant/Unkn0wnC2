@@ -413,9 +413,6 @@ func (b *Beacon) handleUpdateDomains(domainsJSON string) {
 		// Reset failed domain tracking to give new servers a chance
 		b.client.failedDomains = make(map[string]time.Time)
 		b.client.mutex.Unlock()
-
-		// Log update (in real deployment, this would be silent)
-		// fmt.Printf("[Beacon] Updated domains: %v (old: %v)\n", newDomains, oldDomains)
 		_ = oldDomains // Prevent unused variable warning
 	}
 }
