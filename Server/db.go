@@ -994,6 +994,44 @@ func (d *Database) GetCachedBinaryInfo() (clientBinaryID string, totalChunks int
 	return clientBinaryID, totalChunks, true
 }
 
+// GetLocalTaskChunks retrieves locally stored chunks for a task that Master is missing
+func (d *Database) GetLocalTaskChunks(taskID string, chunkIndices []int) map[int][]byte {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	result := make(map[int][]byte)
+	for _, idx := range chunkIndices {
+		var chunk []byte
+		err := d.db.QueryRow(`
+			SELECT chunk_data FROM task_result_chunks
+			WHERE task_id = ? AND chunk_index = ?
+		`, taskID, idx).Scan(&chunk)
+		if err == nil && len(chunk) > 0 {
+			result[idx] = chunk
+		}
+	}
+	return result
+}
+
+// GetLocalExfilChunks retrieves locally stored chunks for an exfil session that Master is missing
+func (d *Database) GetLocalExfilChunks(sessionID string, chunkIndices []int) map[int][]byte {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	result := make(map[int][]byte)
+	for _, idx := range chunkIndices {
+		var chunk []byte
+		err := d.db.QueryRow(`
+			SELECT data FROM exfil_chunks
+			WHERE session_id = ? AND chunk_index = ?
+		`, sessionID, idx).Scan(&chunk)
+		if err == nil && len(chunk) > 0 {
+			result[idx] = chunk
+		}
+	}
+	return result
+}
+
 // MarkExfilChunkSynced marks a chunk as successfully uploaded to Master
 func (d *Database) MarkExfilChunkSynced(sessionID string, chunkIndex int) error {
 	d.mutex.Lock()

