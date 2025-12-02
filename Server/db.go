@@ -47,8 +47,10 @@ func NewDatabase(dbPath string) (*Database, error) {
 		dbPath = DatabaseFileName
 	}
 
-	// Open database connection
-	db, err := sql.Open("sqlite", dbPath)
+	// Open database connection with foreign keys enabled in DSN
+	// This ensures foreign keys are enabled on every connection from the pool
+	dsn := dbPath + "?_pragma=foreign_keys(1)"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
@@ -1131,10 +1133,28 @@ func (d *Database) RecordExfilChunk(sessionID string, chunkIndex uint32, data []
 	}
 
 	now := time.Now().Unix()
+
+	// Ensure session exists first (chunks may arrive before header due to DNS race conditions)
+	// Check if session exists, create if not
+	var sessionExists int
+	err = tx.QueryRow(`SELECT 1 FROM exfil_sessions WHERE session_id = ?`, sessionID).Scan(&sessionExists)
+	if err == sql.ErrNoRows {
+		// Session doesn't exist, create it
+		if _, err := tx.Exec(`
+			INSERT INTO exfil_sessions (session_id, created_at, updated_at, status)
+			VALUES (?, ?, ?, 'receiving')
+		`, sessionID, now, now); err != nil {
+			tx.Rollback()
+			return false, fmt.Errorf("failed to create session: %w", err)
+		}
+	} else if err != nil {
+		tx.Rollback()
+		return false, fmt.Errorf("failed to check session existence: %w", err)
+	}
+
 	res, err := tx.Exec(`
-		INSERT INTO exfil_chunks (session_id, chunk_index, data, received_at)
+		INSERT OR IGNORE INTO exfil_chunks (session_id, chunk_index, data, received_at)
 		VALUES (?, ?, ?, ?)
-		ON CONFLICT(session_id, chunk_index) DO NOTHING
 	`, sessionID, chunkIndex, data, now)
 	if err != nil {
 		tx.Rollback()

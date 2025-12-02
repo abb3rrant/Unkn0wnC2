@@ -150,26 +150,28 @@ static const unsigned char base64_decode_table[256] = {
 /*
  * Base36 encoding - encode binary data to base36 string (0-9, a-z)
  * This matches the server's base36 encoding for DNS compatibility
+ * Prepends a 0x01 sentinel byte to preserve leading zeros in the data
  */
 static void base36_encode(const unsigned char *input, size_t input_len, char *output, size_t output_size) {
     // Handle empty input
     if (input_len == 0 || output_size == 0) {
         if (output_size > 0) {
-            output[0] = '0';
-            output[1] = '\0';
+            output[0] = '\0';
         }
         return;
     }
     
-    // Copy input to working buffer (big-endian byte array)
+    // Copy input to working buffer with 0x01 sentinel byte prefix
+    // This ensures leading zeros in the original data are preserved
     unsigned char num[512] = {0};
-    size_t num_len = input_len;
+    size_t num_len = input_len + 1;
     
     if (num_len > sizeof(num)) {
         num_len = sizeof(num);
     }
     
-    memcpy(num, input, num_len);
+    num[0] = 0x01;  // Sentinel byte
+    memcpy(num + 1, input, num_len - 1);
     
     // Build base36 string by repeatedly dividing by 36
     char result[1024];
@@ -303,7 +305,13 @@ static size_t base36_decode(const char *input, unsigned char *output, size_t out
         return 0;
     }
     
-    // Copy result to output
+    // Check for and strip sentinel byte (0x01 prefix added by encoder)
+    // This restores the original byte array including any leading zeros
+    if (result[start] == 0x01 && (result_len - start) > 1) {
+        start++;  // Skip sentinel byte
+    }
+    
+    // Copy result to output (excluding sentinel if present)
     size_t final_len = result_len - start;
     if (final_len > output_size) {
         final_len = output_size;

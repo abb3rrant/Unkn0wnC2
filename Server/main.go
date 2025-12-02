@@ -671,10 +671,10 @@ func logExfilFrameDecision(frame *ExfilFrame, ack bool, err error) {
 		status = "REJECT"
 	}
 	if err != nil {
-		logf("[Exfil] frame=%s tag=%s counter=%d flags=0x%x status=%s err=%v", frame.Phase, frame.SessionTag, frame.Counter, frame.Flags, status, err)
+		logf("[Exfil] frame=%v tag=%s counter=%d flags=0x%x status=%s err=%v", frame.Phase, frame.SessionTag, frame.Counter, frame.Flags, status, err)
 		return
 	}
-	logf("[Exfil] frame=%s tag=%s counter=%d flags=0x%x status=%s", frame.Phase, frame.SessionTag, frame.Counter, frame.Flags, status)
+	logf("[Exfil] frame=%v tag=%s counter=%d flags=0x%x status=%s", frame.Phase, frame.SessionTag, frame.Counter, frame.Flags, status)
 }
 
 func main() {

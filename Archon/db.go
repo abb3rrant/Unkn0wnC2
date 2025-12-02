@@ -3529,15 +3529,15 @@ func (d *MasterDatabase) CreateTask(beaconID, command, createdBy string) (string
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 
-	// Verify beacon exists and is active
+	// Verify beacon exists (don't require active status - tasks queue for next checkin)
 	var exists int
 	err := d.db.QueryRow(`
-		SELECT 1 FROM beacons WHERE id = ? AND status = 'active'
+		SELECT 1 FROM beacons WHERE id = ?
 	`, beaconID).Scan(&exists)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return "", fmt.Errorf("beacon not found or inactive")
+			return "", fmt.Errorf("beacon not found")
 		}
 		return "", fmt.Errorf("failed to get beacon info: %w", err)
 	}

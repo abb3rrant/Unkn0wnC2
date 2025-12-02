@@ -14,7 +14,14 @@ pub fn encode(bytes: &[u8]) -> String {
         return String::new();
     }
 
-    let num = BigUint::from_bytes_be(bytes);
+    // Prepend a 0x01 sentinel byte to preserve leading zeros
+    // This ensures the BigUint representation doesn't lose leading zeros
+    // The decoder will strip this sentinel byte
+    let mut with_sentinel = Vec::with_capacity(bytes.len() + 1);
+    with_sentinel.push(0x01);
+    with_sentinel.extend_from_slice(bytes);
+
+    let num = BigUint::from_bytes_be(&with_sentinel);
     let mut value = num;
     let mut encoded = Vec::new();
     let radix = BigUint::from(36u32);
@@ -49,7 +56,16 @@ pub fn decode(text: &str) -> Result<Vec<u8>, Base36Error> {
         value = &value * &radix + BigUint::from(digit);
     }
 
-    Ok(value.to_bytes_be())
+    let bytes = value.to_bytes_be();
+    
+    // Check for and strip sentinel byte (0x01 prefix added by encoder)
+    // This restores the original byte array including any leading zeros
+    if !bytes.is_empty() && bytes[0] == 0x01 {
+        return Ok(bytes[1..].to_vec());
+    }
+    
+    // Fallback for legacy data without sentinel (backward compatibility)
+    Ok(bytes)
 }
 
 fn to_char(idx: u8) -> char {
