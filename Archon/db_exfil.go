@@ -275,7 +275,7 @@ func (d *MasterDatabase) MarkExfilTransferComplete(req *ExfilCompletionRecord) (
 		return nil, fmt.Errorf("session_id is required")
 	}
 
-	fmt.Printf("[Master DB] Exfil completion signal for session %s (totalChunks=%d, source=%s)\n",
+	dbLog("Exfil completion signal for session %s (totalChunks=%d, source=%s)\n",
 		req.SessionID, req.TotalChunks, req.SourceDNS)
 
 	d.mutex.Lock()
@@ -309,7 +309,7 @@ func (d *MasterDatabase) MarkExfilTransferComplete(req *ExfilCompletionRecord) (
 	// Count actual chunks before trying to assemble
 	var actualChunks int
 	tx.QueryRow(`SELECT COUNT(DISTINCT chunk_index) FROM exfil_chunks WHERE session_id = ?`, req.SessionID).Scan(&actualChunks)
-	fmt.Printf("[Master DB] Exfil session %s has %d chunks stored (expecting %d)\n", req.SessionID, actualChunks, req.TotalChunks)
+	dbLog("Exfil session %s has %d chunks stored (expecting %d)\n", req.SessionID, actualChunks, req.TotalChunks)
 
 	completed, err := d.tryAssembleExfilTransferTx(tx, req.SessionID)
 	if err != nil {
@@ -317,7 +317,7 @@ func (d *MasterDatabase) MarkExfilTransferComplete(req *ExfilCompletionRecord) (
 	}
 
 	if !completed && req.TotalChunks > 0 {
-		fmt.Printf("[Master DB] Exfil session %s not complete yet, recording pending completion\n", req.SessionID)
+		dbLog("Exfil session %s not complete yet, recording pending completion\n", req.SessionID)
 		if err = d.recordPendingExfilCompletionTx(tx, req.SessionID, req.TotalChunks); err != nil {
 			return nil, err
 		}
@@ -329,7 +329,7 @@ func (d *MasterDatabase) MarkExfilTransferComplete(req *ExfilCompletionRecord) (
 			return nil, err
 		}
 	} else if completed {
-		fmt.Printf("[Master DB] ✓ Exfil session %s assembled successfully\n", req.SessionID)
+		dbLogAlways("✓ Exfil session %s assembled successfully\n", req.SessionID)
 	}
 
 	transfer, err := d.fetchExfilTransferTx(tx, req.SessionID)
@@ -734,7 +734,7 @@ func (d *MasterDatabase) tryAssembleExfilTransferTx(tx *sql.Tx, sessionID string
 			tx.QueryRow(`SELECT COALESCE(MAX(chunk_index), 0) FROM exfil_chunks WHERE session_id = ?`, sessionID).Scan(&maxIdx)
 			if maxIdx > 0 {
 				total = maxIdx
-				fmt.Printf("[Master DB] Exfil %s: Inferred total_chunks=%d from max chunk index (completion signal received)\n", sessionID, total)
+				dbLog("Exfil %s: Inferred total_chunks=%d from max chunk index (completion signal received)\n", sessionID, total)
 				tx.Exec(`UPDATE exfil_transfers SET total_chunks = ? WHERE session_id = ? AND total_chunks = 0`, total, sessionID)
 			}
 		}
@@ -781,9 +781,9 @@ func (d *MasterDatabase) tryAssembleExfilTransferTx(tx *sql.Tx, sessionID string
 			}
 		}
 		if len(missing) > 0 && len(missing) <= 10 {
-			fmt.Printf("[Master DB] Exfil %s incomplete: %d/%d chunks (indices %d-%d), missing: %v\n", sessionID, actualChunkCount, total, minIdx, maxIdx, missing)
+			dbLog("Exfil %s incomplete: %d/%d chunks (indices %d-%d), missing: %v\n", sessionID, actualChunkCount, total, minIdx, maxIdx, missing)
 		} else {
-			fmt.Printf("[Master DB] Exfil %s incomplete: %d/%d chunks (indices %d-%d), missing %d chunks\n", sessionID, actualChunkCount, total, minIdx, maxIdx, total-actualChunkCount)
+			dbLog("Exfil %s incomplete: %d/%d chunks (indices %d-%d), missing %d chunks\n", sessionID, actualChunkCount, total, minIdx, maxIdx, total-actualChunkCount)
 		}
 		return false, nil
 	}

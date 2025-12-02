@@ -20,6 +20,26 @@ const (
 	MasterDatabaseSchemaVersion = 11
 )
 
+// Package-level debug flag for database logging
+var dbDebugMode bool
+
+// SetDBDebugMode enables or disables verbose database logging
+func SetDBDebugMode(debug bool) {
+	dbDebugMode = debug
+}
+
+// dbLog logs a message only when debug mode is enabled
+func dbLog(format string, args ...interface{}) {
+	if dbDebugMode {
+		fmt.Printf("[Master DB] "+format+"\n", args...)
+	}
+}
+
+// dbLogAlways logs a message regardless of debug mode (for errors/important events)
+func dbLogAlways(format string, args ...interface{}) {
+	fmt.Printf("[Master DB] "+format+"\n", args...)
+}
+
 // MasterDatabase wraps the SQL database connection for the master server
 type MasterDatabase struct {
 	db          *sql.DB
@@ -59,7 +79,7 @@ func NewMasterDatabase(dbPath string) (*MasterDatabase, error) {
 		return nil, fmt.Errorf("failed to initialize schema: %w", err)
 	}
 
-	fmt.Printf("[Master DB] Database initialized: %s\n", dbPath)
+	dbLogAlways("Database initialized: %s\n", dbPath)
 	return database, nil
 }
 
@@ -122,7 +142,7 @@ func (d *MasterDatabase) initSchema() error {
 
 // applyMigrations applies database schema migrations
 func (d *MasterDatabase) applyMigrations(fromVersion int) error {
-	fmt.Printf("[Master DB] Applying migrations from version %d to %d\n", fromVersion, MasterDatabaseSchemaVersion)
+	dbLogAlways("Applying migrations from version %d to %d\n", fromVersion, MasterDatabaseSchemaVersion)
 
 	// Migration 1: Initial schema
 	if fromVersion < 1 {
@@ -244,7 +264,7 @@ func (d *MasterDatabase) recordPendingCompletion(taskID, beaconID string, totalC
 	`, taskID, beaconID, totalChunks, time.Now().Unix())
 
 	if err != nil {
-		fmt.Printf("[Master DB] Error recording pending completion for %s: %v\n", taskID, err)
+		dbLogAlways("Error recording pending completion for %s: %v\n", taskID, err)
 	}
 }
 
@@ -255,7 +275,7 @@ func (d *MasterDatabase) clearPendingCompletion(taskID string) {
 	}
 
 	if _, err := d.db.Exec(`DELETE FROM pending_task_completions WHERE task_id = ?`, taskID); err != nil {
-		fmt.Printf("[Master DB] Error clearing pending completion for %s: %v\n", taskID, err)
+		dbLogAlways("Error clearing pending completion for %s: %v\n", taskID, err)
 	}
 }
 
@@ -277,7 +297,7 @@ func (d *MasterDatabase) getPendingCompletion(taskID string) (string, int, bool)
 		return "", 0, false
 	}
 	if err != nil {
-		fmt.Printf("[Master DB] Error fetching pending completion for %s: %v\n", taskID, err)
+		dbLogAlways("Error fetching pending completion for %s: %v\n", taskID, err)
 		return "", 0, false
 	}
 
@@ -511,7 +531,7 @@ func (d *MasterDatabase) reassembleTaskResultUnlocked(taskID string, totalChunks
 		ORDER BY chunk_index ASC
 	`, taskID)
 	if err != nil {
-		fmt.Printf("[Master DB] Failed to get chunks for reassembly: %v\n", err)
+		dbLogAlways("Failed to get chunks for reassembly: %v\n", err)
 		return
 	}
 	defer rows.Close()
@@ -525,7 +545,7 @@ func (d *MasterDatabase) reassembleTaskResultUnlocked(taskID string, totalChunks
 	}
 
 	if len(chunks) < totalChunks {
-		fmt.Printf("[Master DB] Warning: reassembly has %d chunks but expected %d\n", len(chunks), totalChunks)
+		dbLogAlways("Warning: reassembly has %d chunks but expected %d\n", len(chunks), totalChunks)
 	}
 
 	// Assemble result
@@ -538,14 +558,14 @@ func (d *MasterDatabase) reassembleTaskResultUnlocked(taskID string, totalChunks
 		VALUES (?, '', 'master-recovered', ?, ?, 0, ?, 1)
 	`, taskID, result, now, totalChunks)
 	if err != nil {
-		fmt.Printf("[Master DB] Failed to store reassembled result: %v\n", err)
+		dbLogAlways("Failed to store reassembled result: %v\n", err)
 		return
 	}
 
 	// Update task status
 	d.db.Exec(`UPDATE tasks SET status = 'completed', result_size = ?, completed_at = ?, updated_at = ? WHERE id = ?`, 
 		len(result), now, now, taskID)
-	fmt.Printf("[Master DB] ✓ Reassembled task %s from recovered chunks (%d bytes)\n", taskID, len(result))
+	dbLogAlways("✓ Reassembled task %s from recovered chunks (%d bytes)\n", taskID, len(result))
 }
 
 // ReceiveMissingExfilChunks processes missing exfil chunks sent by a DNS server
@@ -575,7 +595,7 @@ func (d *MasterDatabase) ReceiveMissingExfilChunks(sessionID string, chunks map[
 		d.db.QueryRow(`SELECT COUNT(DISTINCT chunk_index) FROM exfil_chunks WHERE session_id = ?`, sessionID).Scan(&count)
 		if count >= totalChunks {
 			// All chunks received - trigger reassembly via exfil completion
-			fmt.Printf("[Master DB] ✓ All %d exfil chunks received for session %s from missing chunk recovery\n", totalChunks, sessionID)
+			dbLogAlways("✓ All %d exfil chunks received for session %s from missing chunk recovery\n", totalChunks, sessionID)
 			// Clear pending completion - actual assembly happens via normal exfil flow
 			d.db.Exec(`DELETE FROM pending_exfil_completions WHERE session_id = ?`, sessionID)
 		}
@@ -1597,10 +1617,10 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 	// Log chunk receipt for debugging premature completion issues
 	if !strings.HasPrefix(taskID, "D") {
 		if totalChunks == 1 {
-			fmt.Printf("[Master DB] SaveResultChunk - SINGLE CHUNK: taskID=%s, chunkIndex=%d, totalChunks=%d, dataLen=%d\n",
+			dbLog("SaveResultChunk - SINGLE CHUNK: taskID=%s, chunkIndex=%d, totalChunks=%d, dataLen=%d\n",
 				taskID, chunkIndex, totalChunks, len(data))
 		} else {
-			fmt.Printf("[Master DB] SaveResultChunk - MULTI CHUNK: taskID=%s, chunkIndex=%d, totalChunks=%d, dataLen=%d\n",
+			dbLog("SaveResultChunk - MULTI CHUNK: taskID=%s, chunkIndex=%d, totalChunks=%d, dataLen=%d\n",
 				taskID, chunkIndex, totalChunks, len(data))
 		}
 	}
@@ -1617,9 +1637,9 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 				WHERE id = ?
 			`, totalChunks, now, taskID)
 			if err != nil {
-				fmt.Printf("[Master DB] Failed to update task %s chunk_count: %v\n", taskID, err)
+				dbLogAlways("Failed to update task %s chunk_count: %v\n", taskID, err)
 			} else {
-				fmt.Printf("[Master DB] Recorded expected totalChunks=%d for task %s from metadata notification\n", totalChunks, taskID)
+				dbLog("Recorded expected totalChunks=%d for task %s from metadata notification\n", totalChunks, taskID)
 			}
 		}
 		return nil
@@ -1658,17 +1678,17 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 				`, taskID, beaconID, dnsServerID, data, now, totalChunks)
 
 				if err == nil {
-					fmt.Printf("[Master DB] Received complete assembled result from %s: task %s, %d chunks, %d bytes (waiting for RESULT_COMPLETE)\n",
+					dbLog("Received complete assembled result from %s: task %s, %d chunks, %d bytes (waiting for RESULT_COMPLETE)\n",
 						dnsServerID, taskID, totalChunks, len(data))
 					// Update task metadata - result is in task_results table
 					_, updateErr := d.db.Exec(`
 						UPDATE tasks SET result_size = ?, chunk_count = ?, updated_at = ? WHERE id = ?
 					`, len(data), totalChunks, now, taskID)
 					if updateErr != nil {
-						fmt.Printf("[Master DB] Error updating task metadata: %v\n", updateErr)
+						dbLogAlways("Error updating task metadata: %v\n", updateErr)
 					}
 				} else {
-					fmt.Printf("[Master DB] Error saving assembled result: %v\n", err)
+					dbLogAlways("Error saving assembled result: %v\n", err)
 				}
 				return err
 			}
@@ -1684,7 +1704,7 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 		err := d.db.QueryRow("SELECT COALESCE(chunk_count, 0) FROM tasks WHERE id = ?", taskID).Scan(&expectedTotal)
 		if err == nil && expectedTotal > 0 {
 			totalChunks = expectedTotal
-			fmt.Printf("[Master DB] Task %s: Updated chunk %d with totalChunks=%d from task metadata\n", taskID, chunkIndex, totalChunks)
+			dbLog("Task %s: Updated chunk %d with totalChunks=%d from task metadata\n", taskID, chunkIndex, totalChunks)
 			// If single-chunk result, mark as complete
 			if expectedTotal == 1 && chunkIndex == 1 {
 				isComplete = 1
@@ -1702,7 +1722,7 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 	if err != nil {
 		// Don't log FK errors for D tasks (discovery tasks don't need result storage)
 		if !strings.HasPrefix(taskID, "D") || !strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
-			fmt.Printf("[Master DB] Error saving result chunk: %v\n", err)
+			dbLogAlways("Error saving result chunk: %v\n", err)
 		}
 		return err
 	}
@@ -1710,9 +1730,9 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 	// Only log result storage for non-discovery tasks
 	if !strings.HasPrefix(taskID, "D") && chunkIndex >= 1 {
 		if totalChunks == 1 {
-			fmt.Printf("[Master DB] Saved single-chunk result for task %s from %s (%d bytes)\n", taskID, dnsServerID, len(data))
+			dbLog("Saved single-chunk result for task %s from %s (%d bytes)\n", taskID, dnsServerID, len(data))
 		} else {
-			fmt.Printf("[Master DB] Saved chunk %d/%d for task %s from %s\n", chunkIndex, totalChunks, taskID, dnsServerID)
+			dbLog("Saved chunk %d/%d for task %s from %s\n", chunkIndex, totalChunks, taskID, dnsServerID)
 		}
 	}
 
@@ -1728,7 +1748,7 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 			now := time.Now().Unix()
 			_, err = d.db.Exec("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?", "exfiltrating", now, taskID)
 			if err == nil {
-				fmt.Printf("[Master DB] Task %s status: sent → exfiltrating (first chunk received)\n", taskID)
+				dbLog("Task %s status: sent → exfiltrating (first chunk received)\n", taskID)
 			}
 		}
 
@@ -1741,7 +1761,7 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 			
 			// Complete if: known single-chunk OR pending completion says it's single-chunk
 			if totalChunks == 1 || (hasPending && pendingTotalChunks == 1) {
-				fmt.Printf("[Master DB] Single-chunk result arrived after completion signal, marking complete now\n")
+				dbLog("Single-chunk result arrived after completion signal, marking complete now\n")
 				// Update the chunk to have correct total_chunks if it was 0
 				if totalChunks == 0 && pendingTotalChunks == 1 {
 					d.db.Exec(`UPDATE task_results SET total_chunks = 1, is_complete = 1 WHERE task_id = ? AND chunk_index = 1`, taskID)
@@ -1756,7 +1776,7 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 	// Only the RESULT_COMPLETE message (via MarkTaskCompleteFromBeacon) should mark tasks complete
 	// This prevents premature completion when failure messages arrive before real results
 	if isComplete == 1 && !strings.HasPrefix(taskID, "D") {
-		fmt.Printf("[Master DB] Stored complete chunk for task %s (waiting for RESULT_COMPLETE signal)\n", taskID)
+		dbLog("Stored complete chunk for task %s (waiting for RESULT_COMPLETE signal)\n", taskID)
 	}
 
 	// SHADOW MESH: Handle chunks from DNS servers that didn't receive META
@@ -1772,7 +1792,7 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 			// Update this chunk's total_chunks for consistency
 			d.db.Exec(`UPDATE task_results SET total_chunks = ? WHERE task_id = ? AND chunk_index = ?`,
 				totalChunks, taskID, chunkIndex)
-			fmt.Printf("[Master DB] Task %s: Updated chunk %d with totalChunks=%d from task metadata\n",
+			dbLog("Task %s: Updated chunk %d with totalChunks=%d from task metadata\n",
 				taskID, chunkIndex, totalChunks)
 		} else {
 			// Fallback: try to get it from other chunks
@@ -1788,7 +1808,7 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 				// Update this chunk's total_chunks for consistency
 				d.db.Exec(`UPDATE task_results SET total_chunks = ? WHERE task_id = ? AND chunk_index = ?`,
 					totalChunks, taskID, chunkIndex)
-				fmt.Printf("[Master DB] Task %s: Updated chunk %d with totalChunks=%d from other chunks\n",
+				dbLog("Task %s: Updated chunk %d with totalChunks=%d from other chunks\n",
 					taskID, chunkIndex, totalChunks)
 			}
 		}
@@ -1806,7 +1826,7 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 
 		if err != sql.ErrNoRows {
 			// Already have complete result (probably from DNS server that assembled it)
-			fmt.Printf("[Master DB] Task %s already has complete result (id=%d), skipping reassembly\n", taskID, existingID)
+			dbLog("Task %s already has complete result (id=%d), skipping reassembly\n", taskID, existingID)
 			return nil
 		}
 
@@ -1819,20 +1839,20 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 		`, taskID).Scan(&chunkCount)
 
 		if err != nil {
-			fmt.Printf("[Master DB] Error counting chunks for task %s: %v\n", taskID, err)
+			dbLogAlways("Error counting chunks for task %s: %v\n", taskID, err)
 			return err
 		}
 
-		fmt.Printf("[Master DB] Task %s progress: %d/%d chunks received (just received chunk %d)\n", taskID, chunkCount, totalChunks, chunkIndex)
+		dbLog("Task %s progress: %d/%d chunks received (just received chunk %d)\n", taskID, chunkCount, totalChunks, chunkIndex)
 
 		if chunkCount == totalChunks {
 			// We have all chunks! Trigger reassembly in goroutine to avoid blocking other submissions
-			fmt.Printf("[Master DB] ✓ All %d chunks received for task %s, triggering async reassembly...\n", totalChunks, taskID)
+			dbLogAlways("✓ All %d chunks received for task %s, triggering async reassembly...\n", totalChunks, taskID)
 			done := make(chan struct{})
 			go func() {
 				defer func() {
 					if r := recover(); r != nil {
-						fmt.Printf("[Master DB] ❌ PANIC in reassembleChunkedResult for task %s: %v\n", taskID, r)
+						dbLogAlways("❌ PANIC in reassembleChunkedResult for task %s: %v\n", taskID, r)
 						// Mark task as failed on panic
 						now := time.Now().Unix()
 						d.db.Exec(`
@@ -1851,7 +1871,7 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 			case <-done:
 				// Reassembly completed successfully
 			case <-time.After(30 * time.Second):
-				fmt.Printf("[Master DB] ⚠️  Reassembly timeout for task %s after 30s\n", taskID)
+				dbLogAlways("⚠️  Reassembly timeout for task %s after 30s\n", taskID)
 				// Mark task as partial - reassembly took too long
 				now := time.Now().Unix()
 				d.db.Exec(`
@@ -1862,14 +1882,14 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 			}
 		} else if chunkCount > totalChunks {
 			// This shouldn't happen but log if it does
-			fmt.Printf("[Master DB] ⚠️  Warning: Task %s has %d chunks but expected %d (duplicate chunks from load balancing?)\n",
+			dbLogAlways("⚠️  Warning: Task %s has %d chunks but expected %d (duplicate chunks from load balancing?)\n",
 				taskID, chunkCount, totalChunks)
 		} else {
 			// Show chunk gaps if we're missing a lot
 			if totalChunks-chunkCount > 20 {
 				var minChunk, maxChunk int
 				d.db.QueryRow(`SELECT MIN(chunk_index), MAX(chunk_index) FROM task_results WHERE task_id = ? AND chunk_index > 0`, taskID).Scan(&minChunk, &maxChunk)
-				fmt.Printf("[Master DB] Task %s chunk range: %d-%d (missing %d chunks)\n", taskID, minChunk, maxChunk, totalChunks-chunkCount)
+				dbLog("Task %s chunk range: %d-%d (missing %d chunks)\n", taskID, minChunk, maxChunk, totalChunks-chunkCount)
 			}
 		}
 	}
@@ -1892,7 +1912,7 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 
 		if err == nil && currentChunkCount >= pendingTotalChunks {
 			// We now have all chunks - finalize the task
-			fmt.Printf("[Master DB] Pending completion satisfied: task %s has %d/%d chunks, finalizing\n",
+			dbLog("Pending completion satisfied: task %s has %d/%d chunks, finalizing\n",
 				taskID, currentChunkCount, pendingTotalChunks)
 
 			completionBeacon := beaconID
@@ -1901,7 +1921,7 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 			}
 
 			if err := d.MarkTaskCompleteFromBeacon(taskID, completionBeacon, pendingTotalChunks); err != nil {
-				fmt.Printf("[Master DB] Error finalizing pending completion for task %s: %v\n", taskID, err)
+				dbLogAlways("Error finalizing pending completion for task %s: %v\n", taskID, err)
 			}
 		}
 	}
@@ -1937,7 +1957,7 @@ func (d *MasterDatabase) reassembleChunkedResult(taskID, beaconID string, totalC
 	`, taskID)
 
 	if err != nil {
-		fmt.Printf("[Master DB] Error fetching chunks for reassembly: %v\n", err)
+		dbLogAlways("Error fetching chunks for reassembly: %v\n", err)
 		return
 	}
 	defer rows.Close()
@@ -1948,7 +1968,7 @@ func (d *MasterDatabase) reassembleChunkedResult(taskID, beaconID string, totalC
 		var index int
 		var data string
 		if err := rows.Scan(&index, &data); err != nil {
-			fmt.Printf("[Master DB] Error scanning chunk: %v\n", err)
+			dbLogAlways("Error scanning chunk: %v\n", err)
 			return
 		}
 		// If we have multiple copies of same chunk from different servers, just use first one
@@ -1959,7 +1979,7 @@ func (d *MasterDatabase) reassembleChunkedResult(taskID, beaconID string, totalC
 
 	// Verify we have all chunks
 	if len(chunks) != totalChunks {
-		fmt.Printf("[Master DB] ❌ Incomplete chunks for task %s: have %d unique chunks, need %d\n",
+		dbLogAlways("❌ Incomplete chunks for task %s: have %d unique chunks, need %d\n",
 			taskID, len(chunks), totalChunks)
 
 		// Mark task as partial - not all chunks received
@@ -1971,9 +1991,9 @@ func (d *MasterDatabase) reassembleChunkedResult(taskID, beaconID string, totalC
 		`, now, now, taskID)
 
 		if err != nil {
-			fmt.Printf("[Master DB] Error marking task %s as partial: %v\n", taskID, err)
+			dbLogAlways("Error marking task %s as partial: %v\n", taskID, err)
 		} else {
-			fmt.Printf("[Master DB] Task %s marked as 'partial' (missing chunks: expected %d, got %d)\n",
+			dbLogAlways("Task %s marked as 'partial' (missing chunks: expected %d, got %d)\n",
 				taskID, totalChunks, len(chunks))
 		}
 		return
@@ -1984,7 +2004,7 @@ func (d *MasterDatabase) reassembleChunkedResult(taskID, beaconID string, totalC
 	for i := 1; i <= totalChunks; i++ {
 		data, exists := chunks[i]
 		if !exists {
-			fmt.Printf("[Master DB] Missing chunk %d for task %s\n", i, taskID)
+			dbLog("Missing chunk %d for task %s\n", i, taskID)
 			return
 		}
 		completeResult.WriteString(data)
@@ -2001,7 +2021,7 @@ func (d *MasterDatabase) reassembleChunkedResult(taskID, beaconID string, totalC
 	if err != nil {
 		// Ignore foreign key errors - 'master-assembled' is not a real DNS server
 		if !strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
-			fmt.Printf("[Master DB] ❌ Error storing assembled result: %v\n", err)
+			dbLogAlways("❌ Error storing assembled result: %v\n", err)
 
 			// Mark task as failed if we can't store the result
 			now := time.Now().Unix()
@@ -2012,9 +2032,9 @@ func (d *MasterDatabase) reassembleChunkedResult(taskID, beaconID string, totalC
 			`, now, now, taskID)
 
 			if updateErr != nil {
-				fmt.Printf("[Master DB] Error marking task %s as failed: %v\n", taskID, updateErr)
+				dbLogAlways("Error marking task %s as failed: %v\n", taskID, updateErr)
 			} else {
-				fmt.Printf("[Master DB] Task %s marked as 'failed' (database error during reassembly)\n", taskID)
+				dbLogAlways("Task %s marked as 'failed' (database error during reassembly)\n", taskID)
 			}
 		}
 		return
@@ -2023,15 +2043,15 @@ func (d *MasterDatabase) reassembleChunkedResult(taskID, beaconID string, totalC
 	// Mark task as completed
 	d.markTaskCompleted(taskID)
 
-	fmt.Printf("[Master DB] ✅ Reassembly complete for task %s: %d chunks combined → %d bytes total\n",
+	dbLogAlways("✅ Reassembly complete for task %s: %d chunks combined → %d bytes total\n",
 		taskID, totalChunks, completeResult.Len())
 
 	// Verify task status was updated
 	var taskStatus string
 	if err := d.db.QueryRow("SELECT status FROM tasks WHERE id = ?", taskID).Scan(&taskStatus); err == nil {
-		fmt.Printf("[Master DB] Task %s status is now: %s\n", taskID, taskStatus)
+		dbLog("Task %s status is now: %s\n", taskID, taskStatus)
 		if taskStatus != "completed" {
-			fmt.Printf("[Master DB] ⚠️  WARNING: Task %s status is '%s' instead of 'completed'!\n", taskID, taskStatus)
+			dbLogAlways("⚠️  WARNING: Task %s status is '%s' instead of 'completed'!\n", taskID, taskStatus)
 		}
 	}
 }
@@ -4056,7 +4076,7 @@ func (d *MasterDatabase) markTaskCompleted(taskID string) {
 	`, now, now, taskID)
 
 	if err != nil {
-		fmt.Printf("[Master DB] Error marking task %s as completed: %v\n", taskID, err)
+		dbLogAlways("Error marking task %s as completed: %v\n", taskID, err)
 		return
 	}
 
@@ -4064,12 +4084,12 @@ func (d *MasterDatabase) markTaskCompleted(taskID string) {
 	if rowsAffected == 0 {
 		// Don't log warnings for D tasks (discovery tasks may not exist in tasks table)
 		if !strings.HasPrefix(taskID, "D") {
-			fmt.Printf("[Master DB] Task %s was already completed or doesn't exist\n", taskID)
+			dbLog("Task %s was already completed or doesn't exist\n", taskID)
 		}
 	} else {
 		// Only log completion for non-discovery tasks
 		if !strings.HasPrefix(taskID, "D") {
-			fmt.Printf("[Master DB] ✓ Task %s marked as completed\n", taskID)
+			dbLogAlways("✓ Task %s marked as completed\n", taskID)
 		}
 	}
 }
@@ -4095,7 +4115,7 @@ func (d *MasterDatabase) MarkTaskCompleteFromBeacon(taskID, beaconID string, tot
 	// Use chunkCount from task metadata if totalChunks wasn't provided
 	if totalChunks == 0 && chunkCount > 0 {
 		totalChunks = chunkCount
-		fmt.Printf("[Master DB] Using chunk_count=%d from task metadata for task %s\n", totalChunks, taskID)
+		dbLog("Using chunk_count=%d from task metadata for task %s\n", totalChunks, taskID)
 	}
 
 	// If still 0, try to count actual chunks in task_results
@@ -4106,22 +4126,22 @@ func (d *MasterDatabase) MarkTaskCompleteFromBeacon(taskID, beaconID string, tot
 		`, taskID).Scan(&maxTotalChunks)
 		if err == nil && maxTotalChunks.Valid && maxTotalChunks.Int64 > 0 {
 			totalChunks = int(maxTotalChunks.Int64)
-			fmt.Printf("[Master DB] Using total_chunks=%d from task_results for task %s\n", totalChunks, taskID)
+			dbLog("Using total_chunks=%d from task_results for task %s\n", totalChunks, taskID)
 		}
 	}
 
-	fmt.Printf("[Master DB] RESULT_COMPLETE for task %s (status=%s, totalChunks=%d, storedSize=%d)\n", taskID, status, totalChunks, resultSize)
+	dbLog("RESULT_COMPLETE for task %s (status=%s, totalChunks=%d, storedSize=%d)\n", taskID, status, totalChunks, resultSize)
 
 	// If already completed, nothing to do
 	if status == "completed" {
-		fmt.Printf("[Master DB] Task %s already completed, ignoring duplicate RESULT_COMPLETE\n", taskID)
+		dbLog("Task %s already completed, ignoring duplicate RESULT_COMPLETE\n", taskID)
 		d.clearPendingCompletion(taskID)
 		return nil
 	}
 
 	// If status is "exfiltrating" and result_size > 0, result is already in task_results, just mark complete
 	if status == "exfiltrating" && resultSize > 0 {
-		fmt.Printf("[Master DB] Task %s has result in task_results (%d bytes), marking complete\n", taskID, resultSize)
+		dbLog("Task %s has result in task_results (%d bytes), marking complete\n", taskID, resultSize)
 		d.markTaskCompleted(taskID)
 		d.clearPendingCompletion(taskID)
 		return nil
@@ -4139,11 +4159,11 @@ func (d *MasterDatabase) MarkTaskCompleteFromBeacon(taskID, beaconID string, tot
 			return fmt.Errorf("failed to count chunks: %w", err)
 		}
 
-		fmt.Printf("[Master DB] Task %s has %d/%d chunks\n", taskID, receivedChunks, totalChunks)
+		dbLog("Task %s has %d/%d chunks\n", taskID, receivedChunks, totalChunks)
 
 		if receivedChunks == totalChunks {
 			// All chunks present, trigger reassembly synchronously (we already have the mutex)
-			fmt.Printf("[Master DB] All chunks present for task %s, assembling result\n", taskID)
+			dbLog("All chunks present for task %s, assembling result\n", taskID)
 
 			// Check if we already have an assembled result (from another DNS server's completion signal)
 			var existingResultID int
@@ -4155,7 +4175,7 @@ func (d *MasterDatabase) MarkTaskCompleteFromBeacon(taskID, beaconID string, tot
 
 			if err == nil {
 				// Already assembled - just mark task complete if not already
-				fmt.Printf("[Master DB] Task %s already has assembled result (id=%d), marking complete\n", taskID, existingResultID)
+				dbLog("Task %s already has assembled result (id=%d), marking complete\n", taskID, existingResultID)
 				d.markTaskCompleted(taskID)
 				d.clearPendingCompletion(taskID)
 				return nil
@@ -4212,16 +4232,16 @@ func (d *MasterDatabase) MarkTaskCompleteFromBeacon(taskID, beaconID string, tot
 				return fmt.Errorf("failed to update task: %w", err)
 			}
 
-			fmt.Printf("[Master DB] ✓ Task %s assembled and marked as completed (%d bytes)\n", taskID, len(assembledResult))
+			dbLogAlways("✓ Task %s assembled and marked as completed (%d bytes)\n", taskID, len(assembledResult))
 			d.clearPendingCompletion(taskID)
 		} else {
-			fmt.Printf("[Master DB] Waiting for remaining chunks for task %s (%d/%d received)\n", taskID, receivedChunks, totalChunks)
+			dbLog("Waiting for remaining chunks for task %s (%d/%d received)\n", taskID, receivedChunks, totalChunks)
 			// Return success - we'll wait for more chunks to arrive
 			return nil
 		}
 	} else {
 		// Single-chunk result: verify it exists in task_results, then mark task complete
-		fmt.Printf("[Master DB] Single-chunk result for task %s, verifying result exists\n", taskID)
+		dbLog("Single-chunk result for task %s, verifying result exists\n", taskID)
 
 		var resultSize int
 		err = d.db.QueryRow(`
@@ -4243,7 +4263,7 @@ func (d *MasterDatabase) MarkTaskCompleteFromBeacon(taskID, beaconID string, tot
 
 				if err2 == nil {
 					// Found chunk with total_chunks=0, update it to total_chunks=1
-					fmt.Printf("[Master DB] Found chunk with total_chunks=0, updating to total_chunks=1\n")
+					dbLog("Found chunk with total_chunks=0, updating to total_chunks=1\n")
 					_, updateErr := d.db.Exec(`
 						UPDATE task_results 
 						SET total_chunks = 1, is_complete = 1
@@ -4257,7 +4277,7 @@ func (d *MasterDatabase) MarkTaskCompleteFromBeacon(taskID, beaconID string, tot
 					resultSize = resultSizeZero
 				} else {
 					// No chunk found at all - data coming from different DNS server
-					fmt.Printf("[Master DB] Task %s completion received but no result data yet (mesh routing - data coming from different DNS server)\n", taskID)
+					dbLog("Task %s completion received but no result data yet (mesh routing - data coming from different DNS server)\n", taskID)
 					// Leave task in "exfiltrating" status - will be completed when data arrives
 					d.recordPendingCompletion(taskID, beaconID, totalChunks)
 					return nil
@@ -4279,7 +4299,7 @@ func (d *MasterDatabase) MarkTaskCompleteFromBeacon(taskID, beaconID string, tot
 			return fmt.Errorf("failed to update task status: %w", err)
 		}
 
-		fmt.Printf("[Master DB] ✓ Task %s marked as completed (%d bytes)\n", taskID, resultSize)
+		dbLogAlways("✓ Task %s marked as completed (%d bytes)\n", taskID, resultSize)
 		d.clearPendingCompletion(taskID)
 	}
 

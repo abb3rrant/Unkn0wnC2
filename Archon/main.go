@@ -87,6 +87,9 @@ func main() {
 	LogInfo("Debug mode: %v", cfg.Debug)
 	LogInfo("Log directory: %s", logDir)
 
+	// Set database debug mode
+	SetDBDebugMode(cfg.Debug)
+
 	// Initialize database
 	LogInfo("Initializing database...")
 	db, err := NewMasterDatabase(cfg.DatabasePath)

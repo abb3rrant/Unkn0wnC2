@@ -1225,9 +1225,11 @@ func (d *Database) GetUnsyncedExfilChunks(limit int) ([]map[string]interface{}, 
 
 	var chunks []map[string]interface{}
 	for rows.Next() {
-		var sessionID, jobID, fileName string
-		var chunkIndex, totalChunks int
-		var fileSize int64
+		var sessionID string
+		var jobID, fileName sql.NullString
+		var chunkIndex int
+		var totalChunks sql.NullInt64
+		var fileSize sql.NullInt64
 		var data []byte
 
 		if err := rows.Scan(&sessionID, &chunkIndex, &data, &jobID, &fileName, &fileSize, &totalChunks); err != nil {
@@ -1238,10 +1240,10 @@ func (d *Database) GetUnsyncedExfilChunks(limit int) ([]map[string]interface{}, 
 			"session_id":   sessionID,
 			"chunk_index":  chunkIndex,
 			"data":         data,
-			"job_id":       jobID,
-			"file_name":    fileName,
-			"file_size":    fileSize,
-			"total_chunks": totalChunks,
+			"job_id":       jobID.String,
+			"file_name":    fileName.String,
+			"file_size":    fileSize.Int64,
+			"total_chunks": int(totalChunks.Int64),
 		})
 	}
 
@@ -1272,9 +1274,11 @@ func (d *Database) GetUnsyncedExfilChunksForSession(sessionID string, limit int)
 
 	var chunks []map[string]interface{}
 	for rows.Next() {
-		var sessID, jobID, fileName string
-		var chunkIndex, totalChunks int
-		var fileSize int64
+		var sessID string
+		var jobID, fileName sql.NullString
+		var chunkIndex int
+		var totalChunks sql.NullInt64
+		var fileSize sql.NullInt64
 		var data []byte
 
 		if err := rows.Scan(&sessID, &chunkIndex, &data, &jobID, &fileName, &fileSize, &totalChunks); err != nil {
@@ -1285,10 +1289,10 @@ func (d *Database) GetUnsyncedExfilChunksForSession(sessionID string, limit int)
 			"session_id":   sessID,
 			"chunk_index":  chunkIndex,
 			"data":         data,
-			"job_id":       jobID,
-			"file_name":    fileName,
-			"file_size":    fileSize,
-			"total_chunks": totalChunks,
+			"job_id":       jobID.String,
+			"file_name":    fileName.String,
+			"file_size":    fileSize.Int64,
+			"total_chunks": int(totalChunks.Int64),
 		})
 	}
 
