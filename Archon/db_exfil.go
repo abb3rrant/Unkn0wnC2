@@ -741,7 +741,32 @@ func (d *MasterDatabase) tryAssembleExfilTransferTx(tx *sql.Tx, sessionID string
 	tx.QueryRow(`SELECT MIN(chunk_index), MAX(chunk_index) FROM exfil_chunks WHERE session_id = ?`, sessionID).Scan(&minIdx, &maxIdx)
 	
 	if actualChunkCount < total {
-		fmt.Printf("[Master DB] Exfil %s incomplete: %d/%d chunks (indices %d-%d)\n", sessionID, actualChunkCount, total, minIdx, maxIdx)
+		// Find missing chunks for debugging
+		missing := []int{}
+		rows, _ := tx.Query(`SELECT chunk_index FROM exfil_chunks WHERE session_id = ? ORDER BY chunk_index`, sessionID)
+		if rows != nil {
+			expected := 1
+			for rows.Next() {
+				var idx int
+				rows.Scan(&idx)
+				for expected < idx {
+					missing = append(missing, expected)
+					expected++
+				}
+				expected = idx + 1
+			}
+			rows.Close()
+			// Check for missing chunks at the end
+			for expected <= total {
+				missing = append(missing, expected)
+				expected++
+			}
+		}
+		if len(missing) > 0 && len(missing) <= 10 {
+			fmt.Printf("[Master DB] Exfil %s incomplete: %d/%d chunks (indices %d-%d), missing: %v\n", sessionID, actualChunkCount, total, minIdx, maxIdx, missing)
+		} else {
+			fmt.Printf("[Master DB] Exfil %s incomplete: %d/%d chunks (indices %d-%d), missing %d chunks\n", sessionID, actualChunkCount, total, minIdx, maxIdx, total-actualChunkCount)
+		}
 		return false, nil
 	}
 

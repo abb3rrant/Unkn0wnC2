@@ -803,6 +803,9 @@
                     const data = await response.json();
                     showToast(`Command sent to ${data.success_count || selectedBeacons.size} beacon(s)`, 'success');
                     clearBulkSelection();
+                } else if (response) {
+                    const errData = await response.json().catch(() => ({}));
+                    showToast(errData.error || `Failed to send bulk command (${response.status})`, 'error');
                 } else {
                     showToast('Failed to send bulk command', 'error');
                 }

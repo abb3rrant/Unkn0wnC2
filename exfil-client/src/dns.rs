@@ -113,11 +113,13 @@ impl DnsTransmitter {
             return Err(anyhow!("chunk frames must include payload data"));
         }
 
-        let labels = self.build_labels(session, &descriptor, payload)?;
-        let qname = self.build_name(&labels)?;
-
         let mut last_err = None;
         for attempt in 0..3 {
+            // Re-build labels on each retry to get fresh encryption nonce
+            // This bypasses DNS caching that might have cached a corrupted response
+            let labels = self.build_labels(session, &descriptor, payload)?;
+            let qname = self.build_name(&labels)?;
+            
             let resolver = self.next_resolver();
             match self.dispatch(&qname, resolver) {
                 Ok(true) => {
