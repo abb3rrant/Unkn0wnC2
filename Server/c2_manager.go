@@ -744,12 +744,10 @@ func (c2 *C2Manager) recordExfilInit(tag string, totalFrames uint32) {
 	c2.mutex.Lock()
 	tracker := c2.ensureExfilTagTrackerLocked(tag, now)
 	tracker.TotalFrames = totalFrames
-	if totalFrames > 0 {
-		tp := totalFrames - 1
-		if tracker.TotalChunks == 0 || tracker.TotalChunks < tp {
-			tracker.TotalChunks = tp
-		}
-	}
+	// NOTE: Do NOT attempt to calculate TotalChunks from TotalFrames here.
+	// TotalFrames includes metadata frames (which can be >1), so the calculation
+	// would be inaccurate. TotalChunks should only be set from the metadata payload
+	// in handleExfilMetadataFrame, which parses the actual value from the client.
 	c2.mutex.Unlock()
 }
 
@@ -778,9 +776,9 @@ func (c2 *C2Manager) handleExfilMetadataFrame(frame *ExfilFrame, clientIP string
 	tracker.JobID = meta.JobID
 	if meta.TotalChunks != 0 {
 		tracker.TotalChunks = meta.TotalChunks
-		if meta.TotalChunks < ^uint32(0) {
-			tracker.TotalFrames = meta.TotalChunks + 1
-		}
+		// NOTE: Do NOT recalculate TotalFrames here. The init frame provides the
+		// accurate TotalFrames count (which includes metadata frames). Calculating
+		// TotalFrames = TotalChunks + 1 would be wrong for multi-segment metadata.
 	}
 	c2.mutex.Unlock()
 

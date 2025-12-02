@@ -3942,10 +3942,11 @@ func (d *MasterDatabase) GetTaskProgressFromResults(taskID string) (map[string]i
 	}
 
 	// Get total expected chunks from task_results (RESULT_META chunk or max total_chunks)
+	// NOTE: Changed from total_chunks > 1 to total_chunks > 0 to include single-chunk results
 	var totalExpected sql.NullInt64
 	err = d.db.QueryRow(`
 		SELECT MAX(total_chunks) FROM task_results
-		WHERE task_id = ? AND total_chunks > 1
+		WHERE task_id = ? AND total_chunks > 0
 		LIMIT 1
 	`, taskID).Scan(&totalExpected)
 
