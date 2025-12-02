@@ -4344,6 +4344,7 @@ func (d *MasterDatabase) QueueStagerCacheForDNSServers(clientBinaryID string, dn
 	defer d.mutex.Unlock()
 
 	now := time.Now().Unix()
+	successCount := 0
 
 	for _, serverID := range dnsServerIDs {
 		_, err := d.db.Exec(`
@@ -4352,10 +4353,18 @@ func (d *MasterDatabase) QueueStagerCacheForDNSServers(clientBinaryID string, dn
 		`, serverID, clientBinaryID, now)
 
 		if err != nil {
-			return fmt.Errorf("failed to queue cache for server %s: %w", serverID, err)
+			// Log but continue - don't let one failed server prevent caching to others
+			fmt.Printf("[DB] Warning: failed to queue cache for server %s: %v (continuing with others)\n", serverID, err)
+			continue
 		}
+		successCount++
 	}
 
+	if successCount == 0 && len(dnsServerIDs) > 0 {
+		return fmt.Errorf("failed to queue cache for any DNS servers")
+	}
+
+	fmt.Printf("[DB] Successfully queued stager cache for %d/%d DNS servers\n", successCount, len(dnsServerIDs))
 	return nil
 }
 

@@ -414,6 +414,15 @@
     <nav class="navbar">
         <div class="navbar-brand">Unkn0wnC2</div>
         <div class="navbar-right">
+            <div class="ws-status" id="wsStatus">
+                <div class="ws-status-dot"></div>
+                <span class="ws-status-text">Connecting...</span>
+            </div>
+            <div class="session-warning" id="sessionWarning">
+                <span>⚠️</span>
+                <span class="warning-text">Session expiring soon</span>
+                <button class="btn-manage" onclick="sessionManager.extendSession()">Extend</button>
+            </div>
             <div class="user-info">Logged in as <strong id="username">admin</strong></div>
             <button class="btn-logout" onclick="logout()">Logout</button>
         </div>
@@ -425,6 +434,8 @@
         <a href="/builder" class="nav-btn">Builder</a>
         <a href="/stager" class="nav-btn">Stager Sessions</a>
         <a href="/exfils" class="nav-btn">Exfils</a>
+        <a href="/logs" class="nav-btn">Logs</a>
+        <a href="/report" class="nav-btn">Report</a>
         <a href="/users" class="nav-btn" id="usersNavBtn">Users</a>
     </div>
 
@@ -482,45 +493,11 @@
         </div>
     </div>
 
+    <script src="/static/shared.js"></script>
     <script>
         const API_BASE = '';
 
-        // Helper to get CSRF token from cookie
-        function getCookie(name) {
-            const value = `; ${document.cookie}`;
-            const parts = value.split(`; ${name}=`);
-            if (parts.length === 2) return parts.pop().split(';').shift();
-            return null;
-        }
-
-        // Fetch with authentication (cookie-based) and CSRF protection
-        async function authFetch(url, options = {}) {
-            const headers = {
-                'Content-Type': 'application/json',
-                ...options.headers
-            };
-
-            // Add CSRF token for state-changing requests
-            if (options.method && options.method !== 'GET') {
-                const csrfToken = getCookie('csrf_token');
-                if (csrfToken) {
-                    headers['X-CSRF-Token'] = csrfToken;
-                }
-            }
-
-            const response = await fetch(url, { 
-                ...options, 
-                headers,
-                credentials: 'include' // Include cookies
-            });
-
-            if (response.status === 401 || response.status === 403) {
-                window.location.href = '/login';
-                return null;
-            }
-
-            return response;
-        }
+        // Note: getCookie, authFetch, formatTimestamp, isOnline, logout are now in shared.js
 
         // Check authentication on page load
         async function checkAuth() {
@@ -685,37 +662,7 @@
             }
         }
 
-        // Helper functions
-        function formatTimestamp(timestamp) {
-            if (!timestamp) return 'Never';
-            const date = new Date(timestamp);
-            const now = new Date();
-            const diff = Math.floor((now - date) / 1000);
-
-            if (diff < 60) return `${diff}s ago`;
-            if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-            if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-            return date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
-        }
-
-        function isOnline(timestamp) {
-            if (!timestamp) return false;
-            const date = new Date(timestamp);
-            const now = new Date();
-            const diff = Math.floor((now - date) / 1000);
-            return diff < 300; // Online if seen within 5 minutes
-        }
-
-        async function logout() {
-            try {
-                // Call logout endpoint to revoke session and clear cookies
-                await authFetch('/api/auth/logout', { method: 'POST' });
-            } catch (error) {
-                console.error('Logout error:', error);
-            }
-            // Redirect to login regardless of API response
-            window.location.href = '/login';
-        }
+        // Note: formatTimestamp, isOnline, and logout are now in shared.js
 
         function manageBeacon(beaconId, hostname) {
             // Navigate to beacon management page
@@ -725,12 +672,25 @@
         // Initial load
         loadDashboard();
 
-        // Auto-refresh every 10 seconds
+        // WebSocket handlers for real-time updates
+        ws.on('beacon_update', (beacon) => {
+            loadBeacons();
+        });
+
+        ws.on('dns_server_update', (server) => {
+            loadServers();
+        });
+
+        ws.on('task_update', (task) => {
+            loadStats();
+        });
+
+        // Auto-refresh every 30 seconds (reduced since we have WebSocket)
         setInterval(() => {
             loadBeacons();
             loadServers();
             loadStats();
-        }, 10000);
+        }, 30000);
     </script>
 </body>
 </html>

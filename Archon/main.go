@@ -111,6 +111,9 @@ func main() {
 	// Create API server
 	apiServer := NewAPIServer(db, cfg)
 
+	// Initialize WebSocket hub for real-time updates
+	InitWebSocketHub()
+
 	// Setup router
 	router := mux.NewRouter()
 

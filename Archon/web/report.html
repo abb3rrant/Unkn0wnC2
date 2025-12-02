@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Report - Unkn0wnC2</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .map-container {
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 51, 51, 0.2);
+            border-radius: 4px;
+            min-height: 600px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .map-canvas {
+            width: 100%;
+            height: 600px;
+            position: relative;
+        }
+
+        .infra-node {
+            position: absolute;
+            padding: 15px 20px;
+            background: rgba(20, 20, 20, 0.95);
+            border: 2px solid rgba(255, 51, 51, 0.3);
+            border-radius: 8px;
+            cursor: move;
+            transition: box-shadow 0.3s, border-color 0.3s;
+            z-index: 10;
+            min-width: 150px;
+            user-select: none;
+        }
+
+        .infra-node:hover {
+            border-color: rgba(255, 51, 51, 0.6);
+            box-shadow: 0 0 25px rgba(255, 51, 51, 0.3);
+            z-index: 100;
+        }
+
+        .infra-node.archon {
+            border-color: rgba(255, 51, 51, 0.6);
+            background: linear-gradient(135deg, rgba(255, 51, 51, 0.15) 0%, rgba(20, 20, 20, 0.95) 100%);
+        }
+
+        .infra-node.dns-server {
+            border-color: rgba(0, 255, 136, 0.5);
+            background: linear-gradient(135deg, rgba(0, 255, 136, 0.1) 0%, rgba(20, 20, 20, 0.95) 100%);
+        }
+
+        .infra-node.beacon {
+            border-color: rgba(100, 149, 237, 0.5);
+            background: linear-gradient(135deg, rgba(100, 149, 237, 0.1) 0%, rgba(20, 20, 20, 0.95) 100%);
+        }
+
+        .infra-node.beacon.offline {
+            border-color: rgba(128, 128, 128, 0.4);
+            background: linear-gradient(135deg, rgba(128, 128, 128, 0.1) 0%, rgba(20, 20, 20, 0.95) 100%);
+            opacity: 0.6;
+        }
+
+        .node-icon {
+            font-size: 24px;
+            margin-bottom: 8px;
+            text-align: center;
+        }
+
+        .node-title {
+            font-weight: 600;
+            color: #fff;
+            margin-bottom: 5px;
+            text-align: center;
+            font-size: 14px;
+        }
+
+        .node-subtitle {
+            font-size: 11px;
+            color: #666;
+            text-align: center;
+        }
+
+        .node-status {
+            margin-top: 8px;
+            text-align: center;
+        }
+
+        .node-status .status-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+
+        .node-status .status-dot.online {
+            background: #00ff88;
+            box-shadow: 0 0 8px rgba(0, 255, 136, 0.5);
+        }
+
+        .node-status .status-dot.offline {
+            background: #ff4444;
+        }
+
+        .node-details {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            font-size: 10px;
+            color: #555;
+        }
+
+        .node-details div {
+            margin: 3px 0;
+        }
+
+        svg.connections {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        svg.connections line {
+            stroke: rgba(255, 51, 51, 0.2);
+            stroke-width: 2;
+            stroke-dasharray: 5, 5;
+        }
+
+        svg.connections line.dns-connection {
+            stroke: rgba(0, 255, 136, 0.3);
+            stroke-dasharray: none;
+        }
+
+        svg.connections line.beacon-connection {
+            stroke: rgba(100, 149, 237, 0.2);
+        }
+
+        .map-legend {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            border: 1px solid rgba(255, 51, 51, 0.2);
+            border-radius: 4px;
+            padding: 15px;
+            z-index: 1000;
+        }
+
+        .legend-title {
+            font-weight: 600;
+            color: rgba(255, 51, 51, 0.8);
+            margin-bottom: 10px;
+            font-size: 12px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 5px 0;
+            font-size: 11px;
+            color: #888;
+        }
+
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            border-radius: 4px;
+            border: 2px solid;
+        }
+
+        .legend-color.archon {
+            border-color: rgba(255, 51, 51, 0.6);
+            background: rgba(255, 51, 51, 0.1);
+        }
+
+        .legend-color.dns {
+            border-color: rgba(0, 255, 136, 0.5);
+            background: rgba(0, 255, 136, 0.1);
+        }
+
+        .legend-color.beacon {
+            border-color: rgba(100, 149, 237, 0.5);
+            background: rgba(100, 149, 237, 0.1);
+        }
+
+        .map-controls {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .map-btn {
+            padding: 8px 12px;
+            background: rgba(0, 0, 0, 0.8);
+            border: 1px solid rgba(255, 51, 51, 0.3);
+            border-radius: 4px;
+            color: #fff;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+
+        .map-btn:hover {
+            background: rgba(255, 51, 51, 0.1);
+            border-color: rgba(255, 51, 51, 0.5);
+        }
+
+        .stats-summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .summary-card {
+            background: rgba(10, 10, 10, 0.98);
+            border: 1px solid rgba(255, 51, 51, 0.15);
+            border-left: 3px solid rgba(255, 51, 51, 0.4);
+            padding: 15px 20px;
+            border-radius: 0;
+        }
+
+        .summary-card .label {
+            color: #555;
+            font-size: 12px;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+        }
+
+        .summary-card .value {
+            font-size: 28px;
+            font-weight: 700;
+            color: rgba(255, 51, 51, 0.8);
+        }
+
+        .summary-card .change {
+            font-size: 11px;
+            margin-top: 5px;
+        }
+
+        .summary-card .change.positive { color: #00ff88; }
+        .summary-card .change.negative { color: #ff4444; }
+    </style>
+</head>
+<body>
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="spinner"></div>
+    </div>
+
+    <nav class="navbar">
+        <div class="navbar-brand">Unkn0wnC2</div>
+        <div class="navbar-right">
+            <div class="ws-status" id="wsStatus">
+                <div class="ws-status-dot"></div>
+                <span class="ws-status-text">Connecting...</span>
+            </div>
+            <div class="session-warning" id="sessionWarning">
+                <span>⚠️</span>
+                <span class="warning-text">Session expiring soon</span>
+                <button class="btn-manage" onclick="sessionManager.extendSession()">Extend</button>
+            </div>
+            <div class="user-info">Logged in as <strong id="username">admin</strong></div>
+            <button class="btn-logout" onclick="logout()">Logout</button>
+        </div>
+    </nav>
+
+    <div class="nav-menu">
+        <a href="/dashboard" class="nav-btn">Dashboard</a>
+        <a href="/builder" class="nav-btn">Builder</a>
+        <a href="/stager" class="nav-btn">Stager Sessions</a>
+        <a href="/exfils" class="nav-btn">Exfils</a>
+        <a href="/logs" class="nav-btn">Logs</a>
+        <a href="/report" class="nav-btn active">Report</a>
+        <a href="/users" class="nav-btn">Users</a>
+    </div>
+
+    <div class="container">
+        <!-- Summary Stats -->
+        <div class="stats-summary" id="statsSummary">
+            <div class="summary-card">
+                <div class="label">DNS Servers</div>
+                <div class="value" id="dnsCount">0</div>
+            </div>
+            <div class="summary-card">
+                <div class="label">Active Beacons</div>
+                <div class="value" id="beaconCount">0</div>
+            </div>
+            <div class="summary-card">
+                <div class="label">Total Connections</div>
+                <div class="value" id="connectionCount">0</div>
+            </div>
+            <div class="summary-card">
+                <div class="label">Infrastructure Health</div>
+                <div class="value" id="healthStatus">-</div>
+            </div>
+        </div>
+
+        <!-- Infrastructure Map -->
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">Infrastructure Map</h2>
+                <button class="btn-refresh" onclick="loadInfrastructure()">↻ Refresh</button>
+            </div>
+
+            <div class="map-container">
+                <div class="map-canvas" id="mapCanvas">
+                    <svg class="connections" id="connectionsSvg"></svg>
+                </div>
+
+                <div class="map-legend">
+                    <div class="legend-title">LEGEND</div>
+                    <div class="legend-item">
+                        <div class="legend-color archon"></div>
+                        <span>Archon Master Server</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color dns"></div>
+                        <span>DNS Server</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color beacon"></div>
+                        <span>Beacon Client</span>
+                    </div>
+                </div>
+
+                <div class="map-controls">
+                    <button class="map-btn" onclick="autoLayout()">⚡ Auto Layout</button>
+                    <button class="map-btn" onclick="resetLayout()">↺ Reset</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/shared.js"></script>
+    <script>
+        let infraData = null;
+        let nodePositions = {};
+        let draggingNode = null;
+        let dragOffset = { x: 0, y: 0 };
+
+        async function loadInfrastructure() {
+            showLoading();
+
+            try {
+                const response = await authFetch('/api/infrastructure');
+                if (!response) return;
+
+                const result = await response.json();
+                if (result.success) {
+                    infraData = result.data;
+                    updateStats();
+                    renderMap();
+                }
+            } catch (error) {
+                console.error('Error loading infrastructure:', error);
+                showToast('Failed to load infrastructure data', 'error');
+            } finally {
+                hideLoading();
+            }
+        }
+
+        function updateStats() {
+            if (!infraData) return;
+
+            const dnsOnline = infraData.dns_servers.filter(s => s.status === 'active' || s.status === 'online').length;
+            const beaconsOnline = infraData.beacons.filter(b => b.status === 'online').length;
+            const totalConnections = infraData.connections.length;
+
+            document.getElementById('dnsCount').textContent = `${dnsOnline}/${infraData.dns_servers.length}`;
+            document.getElementById('beaconCount').textContent = `${beaconsOnline}/${infraData.beacons.length}`;
+            document.getElementById('connectionCount').textContent = totalConnections;
+
+            // Calculate health
+            const totalNodes = 1 + infraData.dns_servers.length + infraData.beacons.length;
+            const onlineNodes = 1 + dnsOnline + beaconsOnline;
+            const healthPercent = Math.round((onlineNodes / totalNodes) * 100);
+            
+            const healthEl = document.getElementById('healthStatus');
+            healthEl.textContent = `${healthPercent}%`;
+            healthEl.style.color = healthPercent >= 80 ? '#00ff88' : 
+                                   healthPercent >= 50 ? '#ffa500' : '#ff4444';
+        }
+
+        function renderMap() {
+            const canvas = document.getElementById('mapCanvas');
+            const svg = document.getElementById('connectionsSvg');
+            
+            // Clear existing nodes (keep SVG)
+            canvas.querySelectorAll('.infra-node').forEach(n => n.remove());
+            svg.innerHTML = '';
+
+            if (!infraData) return;
+
+            const canvasRect = canvas.getBoundingClientRect();
+            const centerX = canvasRect.width / 2;
+            const centerY = 150;
+
+            // Create Archon node (center top)
+            createNode(infraData.archon, centerX - 75, 30);
+
+            // Create DNS server nodes (row below Archon)
+            const dnsY = 180;
+            const dnsSpacing = Math.min(200, (canvasRect.width - 100) / Math.max(infraData.dns_servers.length, 1));
+            const dnsStartX = centerX - ((infraData.dns_servers.length - 1) * dnsSpacing) / 2 - 75;
+            
+            infraData.dns_servers.forEach((dns, i) => {
+                createNode(dns, dnsStartX + i * dnsSpacing, dnsY);
+            });
+
+            // Create beacon nodes (row below DNS)
+            const beaconY = 380;
+            const beaconSpacing = Math.min(180, (canvasRect.width - 100) / Math.max(infraData.beacons.length, 1));
+            const beaconStartX = centerX - ((infraData.beacons.length - 1) * beaconSpacing) / 2 - 75;
+            
+            infraData.beacons.forEach((beacon, i) => {
+                createNode(beacon, beaconStartX + i * beaconSpacing, beaconY);
+            });
+
+            // Draw connections
+            setTimeout(drawConnections, 50);
+        }
+
+        function createNode(data, x, y) {
+            const canvas = document.getElementById('mapCanvas');
+            
+            // Use saved position if available
+            const savedPos = nodePositions[data.id];
+            if (savedPos) {
+                x = savedPos.x;
+                y = savedPos.y;
+            }
+
+            const node = document.createElement('div');
+            node.className = `infra-node ${data.type}${data.status === 'offline' ? ' offline' : ''}`;
+            node.id = `node-${data.id}`;
+            node.style.left = `${x}px`;
+            node.style.top = `${y}px`;
+
+            const icon = data.type === 'archon' ? '🏛️' : 
+                        data.type === 'dns-server' ? '🌐' : '💻';
+            const statusClass = data.status === 'online' || data.status === 'active' ? 'online' : 'offline';
+
+            node.innerHTML = `
+                <div class="node-icon">${icon}</div>
+                <div class="node-title">${escapeHtml(data.name || data.id)}</div>
+                <div class="node-subtitle">${escapeHtml(data.address || '')}</div>
+                <div class="node-status">
+                    <span class="status-dot ${statusClass}"></span>
+                    <span style="font-size: 10px; color: #888;">${data.status || 'unknown'}</span>
+                </div>
+                ${data.type === 'beacon' ? `
+                <div class="node-details">
+                    <div>OS: ${escapeHtml(data.os || '-')}</div>
+                    <div>User: ${escapeHtml(data.user || '-')}</div>
+                </div>` : ''}
+            `;
+
+            // Make draggable
+            node.addEventListener('mousedown', startDrag);
+            
+            canvas.appendChild(node);
+        }
+
+        function drawConnections() {
+            const svg = document.getElementById('connectionsSvg');
+            svg.innerHTML = '';
+
+            if (!infraData) return;
+
+            infraData.connections.forEach(conn => {
+                const fromNode = document.getElementById(`node-${conn.from}`);
+                const toNode = document.getElementById(`node-${conn.to}`);
+
+                if (!fromNode || !toNode) return;
+
+                const fromRect = fromNode.getBoundingClientRect();
+                const toRect = toNode.getBoundingClientRect();
+                const svgRect = svg.getBoundingClientRect();
+
+                const x1 = fromRect.left + fromRect.width / 2 - svgRect.left;
+                const y1 = fromRect.top + fromRect.height - svgRect.top;
+                const x2 = toRect.left + toRect.width / 2 - svgRect.left;
+                const y2 = toRect.top - svgRect.top;
+
+                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                line.setAttribute('x1', x1);
+                line.setAttribute('y1', y1);
+                line.setAttribute('x2', x2);
+                line.setAttribute('y2', y2);
+                line.classList.add(`${conn.type}-connection`);
+                svg.appendChild(line);
+            });
+        }
+
+        function startDrag(e) {
+            if (e.button !== 0) return;
+            
+            draggingNode = e.currentTarget;
+            const rect = draggingNode.getBoundingClientRect();
+            dragOffset.x = e.clientX - rect.left;
+            dragOffset.y = e.clientY - rect.top;
+
+            document.addEventListener('mousemove', drag);
+            document.addEventListener('mouseup', stopDrag);
+            e.preventDefault();
+        }
+
+        function drag(e) {
+            if (!draggingNode) return;
+
+            const canvas = document.getElementById('mapCanvas');
+            const canvasRect = canvas.getBoundingClientRect();
+
+            let x = e.clientX - canvasRect.left - dragOffset.x;
+            let y = e.clientY - canvasRect.top - dragOffset.y;
+
+            // Keep within bounds
+            x = Math.max(0, Math.min(x, canvasRect.width - draggingNode.offsetWidth));
+            y = Math.max(0, Math.min(y, canvasRect.height - draggingNode.offsetHeight));
+
+            draggingNode.style.left = `${x}px`;
+            draggingNode.style.top = `${y}px`;
+
+            // Save position
+            const nodeId = draggingNode.id.replace('node-', '');
+            nodePositions[nodeId] = { x, y };
+
+            // Redraw connections
+            drawConnections();
+        }
+
+        function stopDrag() {
+            draggingNode = null;
+            document.removeEventListener('mousemove', drag);
+            document.removeEventListener('mouseup', stopDrag);
+        }
+
+        function autoLayout() {
+            nodePositions = {};
+            renderMap();
+        }
+
+        function resetLayout() {
+            nodePositions = {};
+            renderMap();
+        }
+
+        // WebSocket handlers for real-time updates
+        ws.on('beacon_update', () => loadInfrastructure());
+        ws.on('dns_server_update', () => loadInfrastructure());
+
+        // Window resize handler
+        window.addEventListener('resize', () => {
+            if (infraData) {
+                drawConnections();
+            }
+        });
+
+        // Initialize
+        loadInfrastructure();
+
+        // Auto-refresh every 30 seconds
+        setInterval(loadInfrastructure, 30000);
+    </script>
+</body>
+</html>
