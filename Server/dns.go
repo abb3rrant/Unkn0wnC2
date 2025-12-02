@@ -197,14 +197,25 @@ func parseLabelEncodedExfilFrame(qname string, domains []string, aesKey []byte) 
 			continue
 		}
 
-		if last := frameLabels[len(frameLabels)-1]; isLikelyTimestampLabel(last) {
-			frameLabels = frameLabels[:len(frameLabels)-1]
-		}
-		if len(frameLabels) < 2 {
-			continue
+		// Try to interpret without stripping any labels first
+		// This avoids accidentally stripping base36 data that happens to look like a timestamp
+		frame, err := interpretEncryptedFrameLabels(frameLabels, aesKey)
+		if err == nil {
+			return frame, true, nil
 		}
 
-		frame, err := interpretEncryptedFrameLabels(frameLabels, aesKey)
+		// If decryption failed and last label looks like a timestamp, try stripping it
+		// Some DNS resolvers add timestamps to bypass caching
+		if len(frameLabels) > 2 {
+			if last := frameLabels[len(frameLabels)-1]; isLikelyTimestampLabel(last) {
+				strippedLabels := frameLabels[:len(frameLabels)-1]
+				if frame2, err2 := interpretEncryptedFrameLabels(strippedLabels, aesKey); err2 == nil {
+					return frame2, true, nil
+				}
+			}
+		}
+
+		// Return original error if neither worked
 		return frame, true, err
 	}
 

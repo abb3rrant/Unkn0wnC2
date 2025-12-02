@@ -114,7 +114,7 @@ impl DnsTransmitter {
         }
 
         let mut last_err = None;
-        for attempt in 0..3 {
+        for attempt in 0..5 {
             // Re-build labels on each retry to get fresh encryption nonce
             // This bypasses DNS caching that might have cached a corrupted response
             let labels = self.build_labels(session, &descriptor, payload)?;
@@ -133,8 +133,16 @@ impl DnsTransmitter {
                         resolver,
                         attempt + 1
                     ));
+                    // Add delay between retries to allow DNS caches to expire
+                    // Exponential backoff: 100ms, 200ms, 400ms, 800ms
+                    let delay_ms = 100 * (1 << attempt.min(3));
+                    std::thread::sleep(Duration::from_millis(delay_ms));
                 }
-                Err(e) => last_err = Some(e),
+                Err(e) => {
+                    last_err = Some(e);
+                    // Add small delay on network errors too
+                    std::thread::sleep(Duration::from_millis(50));
+                }
             }
         }
 

