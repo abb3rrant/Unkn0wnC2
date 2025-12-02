@@ -1661,6 +1661,21 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 		}
 	}
 
+	// SHADOW MESH: If totalChunks is 0 but we have chunk data, lookup expected chunk_count from task metadata
+	// This handles the case where metadata notification arrived before data chunk
+	if totalChunks == 0 && len(data) > 0 && chunkIndex >= 1 {
+		var expectedTotal int
+		err := d.db.QueryRow("SELECT COALESCE(chunk_count, 0) FROM tasks WHERE id = ?", taskID).Scan(&expectedTotal)
+		if err == nil && expectedTotal > 0 {
+			totalChunks = expectedTotal
+			fmt.Printf("[Master DB] Task %s: Updated chunk %d with totalChunks=%d from task metadata\n", taskID, chunkIndex, totalChunks)
+			// If single-chunk result, mark as complete
+			if expectedTotal == 1 && chunkIndex == 1 {
+				isComplete = 1
+			}
+		}
+	}
+
 	// Insert the chunk (for single-chunk results or individual chunks from multi-chunk results)
 	// Use INSERT OR REPLACE to handle duplicate chunks from DNS retries or load balancing
 	_, err = d.db.Exec(`
@@ -2012,7 +2027,8 @@ func (d *MasterDatabase) GetTaskResult(taskID string) (string, bool, error) {
 
 	// First try to get the complete result
 	// chunk_index = 0: Assembled multi-chunk result OR legacy single-chunk
-	// chunk_index = 1 AND total_chunks = 1: New 1-indexed single-chunk result
+	// chunk_index = 1 AND total_chunks IN (0,1): New 1-indexed single-chunk result
+	// (total_chunks could be 0 if metadata hadn't arrived yet, or 1 if it did)
 	var resultData string
 	var isComplete int
 
@@ -2020,7 +2036,7 @@ func (d *MasterDatabase) GetTaskResult(taskID string) (string, bool, error) {
 		SELECT result_data, is_complete 
 		FROM task_results 
 		WHERE task_id = ? AND is_complete = 1 AND (
-			chunk_index = 0 OR (chunk_index = 1 AND total_chunks = 1)
+			chunk_index = 0 OR (chunk_index = 1 AND total_chunks <= 1)
 		)
 		ORDER BY received_at DESC
 		LIMIT 1

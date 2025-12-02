@@ -9,8 +9,6 @@
 const CONFIG = {
     WS_RECONNECT_INTERVAL: 3000,
     WS_MAX_RECONNECT_ATTEMPTS: 10,
-    SESSION_WARNING_THRESHOLD: 5 * 60 * 1000, // 5 minutes before expiry
-    SESSION_CHECK_INTERVAL: 30 * 1000, // Check every 30 seconds
     ONLINE_THRESHOLD: 300, // 5 minutes in seconds
     TOAST_DURATION: 5000,
 };
@@ -147,102 +145,7 @@ class WebSocketManager {
 // Global WebSocket instance
 const ws = new WebSocketManager();
 
-// ===========================================
-// Session Management
-// ===========================================
-class SessionManager {
-    constructor() {
-        this.expiryTime = null;
-        this.warningElement = null;
-        this.checkInterval = null;
-    }
 
-    init() {
-        this.parseSessionExpiry();
-        this.startChecking();
-    }
-
-    parseSessionExpiry() {
-        // Try to get expiry from cookie or response header
-        const cookies = document.cookie.split(';');
-        for (const cookie of cookies) {
-            const [name, value] = cookie.trim().split('=');
-            if (name === 'session_expiry') {
-                this.expiryTime = parseInt(value) * 1000; // Convert to ms
-                break;
-            }
-        }
-        
-        // Default to 1 hour from now if not found
-        if (!this.expiryTime) {
-            this.expiryTime = Date.now() + (60 * 60 * 1000);
-        }
-    }
-
-    startChecking() {
-        this.checkInterval = setInterval(() => this.checkSession(), CONFIG.SESSION_CHECK_INTERVAL);
-    }
-
-    checkSession() {
-        const remaining = this.expiryTime - Date.now();
-        
-        if (remaining <= 0) {
-            // Session expired
-            this.showExpiredModal();
-            return;
-        }
-
-        if (remaining <= CONFIG.SESSION_WARNING_THRESHOLD) {
-            this.showWarning(remaining);
-        } else {
-            this.hideWarning();
-        }
-    }
-
-    showWarning(remaining) {
-        if (!this.warningElement) {
-            this.warningElement = document.getElementById('sessionWarning');
-        }
-        if (this.warningElement) {
-            const minutes = Math.ceil(remaining / 60000);
-            this.warningElement.querySelector('.warning-text').textContent = 
-                `Session expires in ${minutes} minute${minutes !== 1 ? 's' : ''}`;
-            this.warningElement.classList.add('show');
-        }
-    }
-
-    hideWarning() {
-        if (this.warningElement) {
-            this.warningElement.classList.remove('show');
-        }
-    }
-
-    showExpiredModal() {
-        clearInterval(this.checkInterval);
-        showToast('Session expired. Redirecting to login...', 'warning');
-        setTimeout(() => {
-            window.location.href = '/login';
-        }, 2000);
-    }
-
-    async extendSession() {
-        try {
-            const response = await authFetch('/api/auth/extend', { method: 'POST' });
-            if (response && response.ok) {
-                const data = await response.json();
-                if (data.expiry) {
-                    this.expiryTime = data.expiry * 1000;
-                    this.hideWarning();
-                    showToast('Session extended', 'success');
-                }
-            }
-        } catch (error) {
-            console.error('Failed to extend session:', error);
-        }
-    }
-}
-
-const sessionManager = new SessionManager();
 
 // ===========================================
 // API Utilities
@@ -530,7 +433,6 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initialize WebSocket if not on login page
     if (!window.location.pathname.includes('/login')) {
         ws.connect();
-        sessionManager.init();
     }
 
     // Add keyboard shortcuts
@@ -553,7 +455,6 @@ document.addEventListener('DOMContentLoaded', () => {
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         ws,
-        sessionManager,
         authFetch,
         formatTimestamp,
         formatBytes,

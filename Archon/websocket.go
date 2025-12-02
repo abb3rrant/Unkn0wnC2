@@ -317,10 +317,12 @@ func (api *APIServer) handleGetLogs(w http.ResponseWriter, r *http.Request) {
 
 	logDir := "/opt/unkn0wnc2/logs"
 	var logFile string
+	today := time.Now().Format("2006-01-02")
 
 	switch logType {
 	case "archon":
-		logFile = filepath.Join(logDir, "archon.log")
+		// Try today's dated log file first, then fallback to archon.log
+		logFile = filepath.Join(logDir, fmt.Sprintf("archon-%s.log", today))
 	case "dns-server":
 		// Could be multiple DNS servers - get the latest or specified
 		serverID := r.URL.Query().Get("server_id")
@@ -330,22 +332,27 @@ func (api *APIServer) handleGetLogs(w http.ResponseWriter, r *http.Request) {
 			logFile = filepath.Join(logDir, "dns-server.log")
 		}
 	default:
-		logFile = filepath.Join(logDir, "archon.log")
+		logFile = filepath.Join(logDir, fmt.Sprintf("archon-%s.log", today))
 	}
 
 	entries, err := readLogFile(logFile, numLines)
 	if err != nil {
-		// Try alternative paths
-		altLogDir := "./logs"
-		altLogFile := filepath.Join(altLogDir, filepath.Base(logFile))
+		// Try alternative paths - undated version
+		altLogFile := filepath.Join(logDir, "archon.log")
 		entries, err = readLogFile(altLogFile, numLines)
 		if err != nil {
-			api.sendJSON(w, map[string]interface{}{
-				"success": true,
-				"entries": []LogEntry{},
-				"message": fmt.Sprintf("Log file not found or empty: %s", filepath.Base(logFile)),
-			})
-			return
+			// Try ./logs directory
+			altLogDir := "./logs"
+			altLogFile = filepath.Join(altLogDir, fmt.Sprintf("archon-%s.log", today))
+			entries, err = readLogFile(altLogFile, numLines)
+			if err != nil {
+				api.sendJSON(w, map[string]interface{}{
+					"success": true,
+					"entries": []LogEntry{},
+					"message": fmt.Sprintf("Log file not found or empty: %s", filepath.Base(logFile)),
+				})
+				return
+			}
 		}
 	}
 
@@ -548,7 +555,19 @@ func (api *APIServer) handleGetInfrastructure(w http.ResponseWriter, r *http.Req
 	// Transform beacons for map
 	var beaconNodes []map[string]interface{}
 	for _, beacon := range beacons {
-		lastSeen, _ := beacon["last_seen"].(int64)
+		// Handle last_seen which could be int64, float64, or other types from SQLite
+		var lastSeen int64
+		switch v := beacon["last_seen"].(type) {
+		case int64:
+			lastSeen = v
+		case float64:
+			lastSeen = int64(v)
+		case int:
+			lastSeen = int64(v)
+		default:
+			lastSeen = 0
+		}
+		
 		status := "offline"
 		if time.Now().Unix()-lastSeen < 300 {
 			status = "online"

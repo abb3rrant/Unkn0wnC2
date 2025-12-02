@@ -404,6 +404,53 @@
         @keyframes spin {
             to { transform: rotate(360deg); }
         }
+
+        /* Bulk Operations Styles */
+        .bulk-action-bar {
+            display: none;
+            padding: 12px 20px;
+            background: rgba(255, 51, 51, 0.1);
+            border: 1px solid rgba(255, 51, 51, 0.3);
+            border-radius: 8px;
+            margin-bottom: 15px;
+            align-items: center;
+            gap: 15px;
+        }
+        .bulk-action-bar.show {
+            display: flex;
+        }
+        .selected-count {
+            color: #ff3333;
+            font-weight: 600;
+        }
+        .btn-bulk {
+            padding: 8px 16px;
+            background: rgba(255, 51, 51, 0.2);
+            border: 1px solid rgba(255, 51, 51, 0.4);
+            color: #ff3333;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+        .btn-bulk:hover {
+            background: rgba(255, 51, 51, 0.3);
+        }
+        .btn-bulk.btn-danger {
+            background: rgba(255, 0, 0, 0.2);
+            border-color: rgba(255, 0, 0, 0.4);
+            color: #ff4444;
+        }
+        .btn-bulk.btn-secondary {
+            background: rgba(100, 100, 100, 0.2);
+            border-color: rgba(100, 100, 100, 0.4);
+            color: #aaa;
+        }
+        .beacon-checkbox {
+            width: 16px;
+            height: 16px;
+            cursor: pointer;
+        }
     </style>
 </head>
 <body>
@@ -417,11 +464,6 @@
             <div class="ws-status" id="wsStatus">
                 <div class="ws-status-dot"></div>
                 <span class="ws-status-text">Connecting...</span>
-            </div>
-            <div class="session-warning" id="sessionWarning">
-                <span>⚠️</span>
-                <span class="warning-text">Session expiring soon</span>
-                <button class="btn-manage" onclick="sessionManager.extendSession()">Extend</button>
             </div>
             <div class="user-info">Logged in as <strong id="username">admin</strong></div>
             <button class="btn-logout" onclick="logout()">Logout</button>
@@ -550,9 +592,16 @@
                 }
 
                 const table = `
-                    <table class="table">
+                    <div id="bulkActionBar" class="bulk-action-bar">
+                        <span class="selected-count">0 selected</span>
+                        <button class="btn-bulk" onclick="bulkSendCommand()">Send Command</button>
+                        <button class="btn-bulk btn-danger" onclick="bulkDeleteBeacons()">Delete Selected</button>
+                        <button class="btn-bulk btn-secondary" onclick="clearBulkSelection()">Clear Selection</button>
+                    </div>
+                    <table class="table" id="beaconsTableEl">
                         <thead>
                             <tr>
+                                <th><input type="checkbox" id="selectAllBeacons" onchange="toggleAllBeacons(this)"></th>
                                 <th>ID</th>
                                 <th>Hostname</th>
                                 <th>User</th>
@@ -566,6 +615,7 @@
                         <tbody>
                             ${beacons.map(beacon => `
                                 <tr>
+                                    <td><input type="checkbox" class="beacon-checkbox" value="${beacon.id}" onchange="updateBulkSelection()"></td>
                                     <td><code>${beacon.id}</code></td>
                                     <td>${beacon.hostname}</td>
                                     <td>${beacon.username}</td>
@@ -691,6 +741,105 @@
             loadServers();
             loadStats();
         }, 30000);
+
+        // Bulk operations functions
+        let selectedBeacons = new Set();
+
+        function toggleAllBeacons(checkbox) {
+            const checkboxes = document.querySelectorAll('.beacon-checkbox');
+            checkboxes.forEach(cb => {
+                cb.checked = checkbox.checked;
+                if (checkbox.checked) {
+                    selectedBeacons.add(cb.value);
+                } else {
+                    selectedBeacons.delete(cb.value);
+                }
+            });
+            updateBulkSelection();
+        }
+
+        function updateBulkSelection() {
+            const checkboxes = document.querySelectorAll('.beacon-checkbox:checked');
+            selectedBeacons.clear();
+            checkboxes.forEach(cb => selectedBeacons.add(cb.value));
+            
+            const actionBar = document.getElementById('bulkActionBar');
+            const countEl = actionBar.querySelector('.selected-count');
+            
+            if (selectedBeacons.size > 0) {
+                actionBar.classList.add('show');
+                countEl.textContent = `${selectedBeacons.size} selected`;
+            } else {
+                actionBar.classList.remove('show');
+            }
+        }
+
+        function clearBulkSelection() {
+            selectedBeacons.clear();
+            document.querySelectorAll('.beacon-checkbox, #selectAllBeacons').forEach(cb => cb.checked = false);
+            document.getElementById('bulkActionBar').classList.remove('show');
+        }
+
+        async function bulkSendCommand() {
+            if (selectedBeacons.size === 0) {
+                showToast('No beacons selected', 'warning');
+                return;
+            }
+            
+            const command = prompt(`Enter command to send to ${selectedBeacons.size} beacon(s):`);
+            if (!command) return;
+
+            showLoading();
+            try {
+                const response = await authFetch('/api/beacons/bulk/task', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        beacon_ids: Array.from(selectedBeacons),
+                        command: command
+                    })
+                });
+                
+                if (response && response.ok) {
+                    const data = await response.json();
+                    showToast(`Command sent to ${data.success_count || selectedBeacons.size} beacon(s)`, 'success');
+                    clearBulkSelection();
+                } else {
+                    showToast('Failed to send bulk command', 'error');
+                }
+            } catch (error) {
+                console.error('Bulk command error:', error);
+                showToast('Error sending bulk command', 'error');
+            } finally {
+                hideLoading();
+            }
+        }
+
+        async function bulkDeleteBeacons() {
+            if (selectedBeacons.size === 0) {
+                showToast('No beacons selected', 'warning');
+                return;
+            }
+            
+            if (!confirm(`Delete ${selectedBeacons.size} beacon(s)? This cannot be undone.`)) {
+                return;
+            }
+
+            showLoading();
+            let successCount = 0;
+            for (const beaconId of selectedBeacons) {
+                try {
+                    const response = await authFetch(`/api/beacons/${beaconId}`, { method: 'DELETE' });
+                    if (response && response.ok) successCount++;
+                } catch (e) {
+                    console.error(`Failed to delete beacon ${beaconId}:`, e);
+                }
+            }
+            hideLoading();
+            
+            showToast(`Deleted ${successCount}/${selectedBeacons.size} beacon(s)`, successCount > 0 ? 'success' : 'error');
+            clearBulkSelection();
+            loadBeacons();
+        }
     </script>
 </body>
 </html>

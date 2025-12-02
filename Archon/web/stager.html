@@ -488,10 +488,6 @@
                 <div class="stat-value" id="statCompleted">0</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Success Rate</div>
-                <div class="stat-value" id="statSuccessRate">0%</div>
-            </div>
-            <div class="stat-card">
                 <div class="stat-label">Avg Speed</div>
                 <div class="stat-value" id="statAvgSpeed">N/A</div>
             </div>
@@ -619,7 +615,6 @@
                 const total = sessions.length;
                 const active = sessions.filter(s => !s.completed).length;
                 const completed = sessions.filter(s => s.completed).length;
-                const successRate = total > 0 ? Math.round((completed / total) * 100) : 0;
                 
                 // Calculate average speed from completed sessions
                 let avgSpeed = 0;
@@ -636,13 +631,11 @@
                 const statTotal = document.getElementById('statTotal');
                 const statActive = document.getElementById('statActive');
                 const statCompleted = document.getElementById('statCompleted');
-                const statSuccessRate = document.getElementById('statSuccessRate');
                 const statAvgSpeed = document.getElementById('statAvgSpeed');
                 
                 if (statTotal) statTotal.textContent = total;
                 if (statActive) statActive.textContent = active;
                 if (statCompleted) statCompleted.textContent = completed;
-                if (statSuccessRate) statSuccessRate.textContent = successRate + '%';
                 if (statAvgSpeed) statAvgSpeed.textContent = avgSpeed > 0 ? avgSpeed + ' ch/s' : 'N/A';
 
                 // Update table
@@ -668,11 +661,14 @@
                         ? Math.round((session.chunks_delivered / session.total_chunks) * 100) 
                         : 0;
                     
-                    const status = session.completed 
+                    // Mark as completed if backend says so OR if all chunks delivered
+                    const isComplete = session.completed || (session.total_chunks > 0 && session.chunks_delivered >= session.total_chunks);
+                    
+                    const status = isComplete 
                         ? 'completed' 
                         : (session.chunks_delivered > 0 ? 'active' : 'pending');
                     
-                    const statusClass = session.completed 
+                    const statusClass = isComplete 
                         ? 'status-completed' 
                         : 'status-active';
                     
@@ -692,11 +688,11 @@
                         : 'N/A';
                     
                     let eta = 'N/A';
-                    if (!session.completed && chunksPerSecond > 0 && session.chunks_delivered > 0) {
+                    if (!isComplete && chunksPerSecond > 0 && session.chunks_delivered > 0) {
                         const remainingChunks = session.total_chunks - session.chunks_delivered;
                         const etaSeconds = Math.round(remainingChunks / chunksPerSecond);
                         eta = formatDuration(etaSeconds * 1000);
-                    } else if (session.completed) {
+                    } else if (isComplete) {
                         eta = 'Done ✓';
                     }
 
@@ -713,12 +709,12 @@
                             </td>
                             <td><span class="status-badge ${statusClass}">${status}</span></td>
                             <td style="color: ${chunksPerSecond > 0 ? '#00ff00' : '#666'};">${speed}</td>
-                            <td style="color: ${session.completed ? '#00ff00' : '#ffa500'};">${eta}</td>
+                            <td style="color: ${isComplete ? '#00ff00' : '#ffa500'};">${eta}</td>
                             <td>${session.initiated_by_dns || 'N/A'}</td>
                             <td style="font-size: 11px;">${started}</td>
                             <td>
                                 <div style="display: flex; gap: 5px;">
-                                    ${!session.completed ? `<button class="action-btn fail-btn" onclick="markStagerFailed('${session.id}')" title="Mark as Failed">✗</button>` : ''}
+                                    ${!isComplete ? `<button class="action-btn fail-btn" onclick="markStagerFailed('${session.id}')" title="Mark as Failed">✗</button>` : ''}
                                     <button class="action-btn delete-btn" onclick="deleteStagerSession('${session.id}')" title="Delete">🗑</button>
                                 </div>
                             </td>
