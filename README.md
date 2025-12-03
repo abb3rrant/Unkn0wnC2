@@ -30,7 +30,7 @@ Future Features:
 
 ![Unkn0wnC2](assets/unkn0wnc2.png)
 
-> [!DISCLAIMER]
+> [!NOTE]
 > This has been HEAVILY vibe coded. While I am not a developer, the use of AI coding Agents greatly increases what a Red Teamer can do and build. As I learn and improve, components will be refactored by myself or other contributers willing to help.
 > This framework has also been tested heavily and communications are validated through packet captures.
 
@@ -94,25 +94,20 @@ sudo unkn0wnc2 --bind-addr <interface IP to bind to> --bind-port <port>
 
 ![WebUI Login](assets/WebUI/builder.png)
 
-> [!TIP]
-> ### Exfil builder prerequisites
-> The Rust exfiltration client builder invokes `cargo` and cross-compiles to the same OS/architecture matrix as the full beacon. Make sure the master host has:
-> - Rust toolchain with `cargo` and `rustup` (`curl https://sh.rustup.rs -sSf | sh`)
-> - Required cargo targets installed, e.g.
->   ```bash
->   rustup target add x86_64-unknown-linux-gnu \
->                       i686-unknown-linux-gnu \
->                       aarch64-unknown-linux-gnu \
->                       armv7-unknown-linux-gnueabihf \
->                       arm-unknown-linux-gnueabihf \
->                       x86_64-pc-windows-gnu \
->                       i686-pc-windows-gnu
->   ```
-> - Matching cross linkers in PATH (Debian/Ubuntu packages: `gcc-multilib`, `gcc-aarch64-linux-gnu`, `gcc-arm-linux-gnueabihf`, `mingw-w64`, etc.)
-> - `build.sh` now verifies these targets/toolchains and runs `cargo fetch --locked` under `/opt/unkn0wnc2/src/exfil-client` so the first builder run does not stall downloading crates.
-> - The installer automatically sources `/root/.cargo/env` and the invoking sudo user's `~/.cargo/env` so rustup installed outside of root is still detected.
-> - Windows ARM targets (`aarch64/arm`) must be built from a Windows host with Visual Studio Build Tools so that MSVC linkers are available.
-> If a dependency is missing the builder now aborts with a clear error explaining what to install.
+
+### Exfil builder prerequisites
+The Rust exfiltration client builder invokes `cargo` and cross-compiles to the same OS/architecture matrix as the full beacon. Make sure the master host has:
+- Rust toolchain with `cargo` and `rustup` (`curl https://sh.rustup.rs -sSf | sh`)
+- Required cargo targets installed, e.g.
+```bash
+   rustup target add x86_64-unknown-linux-gnu \
+                       i686-unknown-linux-gnu \
+                       aarch64-unknown-linux-gnu \
+                       armv7-unknown-linux-gnueabihf \
+                       arm-unknown-linux-gnueabihf \
+                       x86_64-pc-windows-gnu \
+                       i686-pc-windows-gnu
+```
 
 9. Deploy DNS-Servers, ensure port 53 is unbound, you may need to stop the systemd-resolved service. To run the DNS-Servers, simply run the binary as sudo or create/start a service for it.
 ```bash

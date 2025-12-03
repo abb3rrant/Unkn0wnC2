@@ -1,8 +1,5 @@
 # 🛡️ Unkn0wnC2 Operational TTP Brief
 
-## 📋 Executive Summary
-Unkn0wnC2 is a specialized DNS Command & Control framework designed for high-security environments. It emphasizes **covert communication**, **resilience**, and **malleable traffic patterns** to evade detection. This brief outlines the specific Tactics, Techniques, and Procedures (TTPs) mapped to the MITRE ATT&CK framework, based on the current codebase implementation.
-
 ## 🗺️ MITRE ATT&CK Matrix
 
 | Tactic | ID | Technique | Procedure (Unkn0wnC2 Implementation) |
