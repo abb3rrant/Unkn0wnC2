@@ -253,6 +253,101 @@
 
         .summary-card .change.positive { color: #00ff88; }
         .summary-card .change.negative { color: #ff4444; }
+
+        /* Data Table Styles */
+        .data-table-container {
+            overflow-x: auto;
+        }
+
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        .data-table th, .data-table td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid rgba(255, 51, 51, 0.1);
+        }
+
+        .data-table th {
+            background: rgba(255, 51, 51, 0.08);
+            color: rgba(255, 51, 51, 0.8);
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 11px;
+            letter-spacing: 1px;
+        }
+
+        .data-table tr:hover {
+            background: rgba(255, 51, 51, 0.03);
+        }
+
+        .status-badge {
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .status-badge.completed { background: rgba(0, 200, 83, 0.15); color: #00c853; }
+        .status-badge.receiving { background: rgba(255, 193, 7, 0.15); color: #ffc107; }
+        .status-badge.failed { background: rgba(255, 68, 68, 0.15); color: #ff4444; }
+
+        /* TTP Grid Styles */
+        .ttp-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 15px;
+        }
+
+        .ttp-card {
+            background: rgba(20, 20, 20, 0.9);
+            border: 1px solid rgba(255, 51, 51, 0.2);
+            border-left: 3px solid rgba(255, 51, 51, 0.5);
+            padding: 15px;
+            border-radius: 4px;
+        }
+
+        .ttp-card.active {
+            border-left-color: #00c853;
+            background: rgba(0, 200, 83, 0.05);
+        }
+
+        .ttp-id {
+            font-size: 12px;
+            color: rgba(255, 51, 51, 0.7);
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+
+        .ttp-name {
+            font-size: 14px;
+            color: #fff;
+            margin-bottom: 8px;
+        }
+
+        .ttp-desc {
+            font-size: 11px;
+            color: #888;
+            line-height: 1.4;
+        }
+
+        .ttp-status {
+            margin-top: 10px;
+            font-size: 11px;
+            color: #00c853;
+        }
+
+        /* Print/PDF Styles */
+        @media print {
+            .navbar, .nav-menu, .map-controls, .btn-refresh, .loading-overlay { display: none !important; }
+            .container { padding: 0; max-width: 100%; }
+            .section { page-break-inside: avoid; }
+            body { background: #fff; color: #000; }
+            .infra-node, .summary-card, .ttp-card { border-color: #333 !important; }
+        }
     </style>
 </head>
 <body>
@@ -290,17 +385,22 @@
                 <div class="value" id="dnsCount">0</div>
             </div>
             <div class="summary-card">
-                <div class="label">Active Beacons</div>
+                <div class="label">Beacons</div>
                 <div class="value" id="beaconCount">0</div>
             </div>
             <div class="summary-card">
-                <div class="label">Total Connections</div>
-                <div class="value" id="connectionCount">0</div>
+                <div class="label">Stager Sessions</div>
+                <div class="value" id="stagerCount">0</div>
             </div>
             <div class="summary-card">
-                <div class="label">Infrastructure Health</div>
-                <div class="value" id="healthStatus">-</div>
+                <div class="label">Exfil Sessions</div>
+                <div class="value" id="exfilCount">0</div>
             </div>
+        </div>
+
+        <!-- Export Button -->
+        <div style="text-align: right; margin-bottom: 20px;">
+            <button class="btn-refresh" onclick="exportToPDF()" style="background: rgba(0, 200, 83, 0.1); border-left-color: rgba(0, 200, 83, 0.5); color: rgba(0, 200, 83, 0.9);">📄 Export PDF Report</button>
         </div>
 
         <!-- Infrastructure Map -->
@@ -337,6 +437,64 @@
                 </div>
             </div>
         </div>
+
+        <!-- Stager Sessions Section -->
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">Stager Sessions</h2>
+            </div>
+            <div class="data-table-container">
+                <table class="data-table" id="stagerTable">
+                    <thead>
+                        <tr>
+                            <th>Session ID</th>
+                            <th>Client IP</th>
+                            <th>OS/Arch</th>
+                            <th>Progress</th>
+                            <th>Status</th>
+                            <th>Created</th>
+                        </tr>
+                    </thead>
+                    <tbody id="stagerTableBody">
+                        <tr><td colspan="6" style="text-align: center; color: #666;">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Exfil Sessions Section -->
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">Exfil Sessions</h2>
+            </div>
+            <div class="data-table-container">
+                <table class="data-table" id="exfilTable">
+                    <thead>
+                        <tr>
+                            <th>Session ID</th>
+                            <th>File Name</th>
+                            <th>Size</th>
+                            <th>Progress</th>
+                            <th>Status</th>
+                            <th>Created</th>
+                        </tr>
+                    </thead>
+                    <tbody id="exfilTableBody">
+                        <tr><td colspan="6" style="text-align: center; color: #666;">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- TTPs Conducted Section -->
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">MITRE ATT&CK TTPs Conducted</h2>
+            </div>
+            <div class="ttp-grid" id="ttpGrid">
+                <!-- TTPs will be populated dynamically -->
+            </div>
+        </div>
     </div>
 
     <script src="/static/shared.js"></script>
@@ -370,12 +528,12 @@
         function updateStats() {
             if (!infraData) return;
 
-            const dnsOnline = infraData.dns_servers.filter(s => s.status === 'active' || s.status === 'online').length;
-            const beaconsOnline = infraData.beacons.filter(b => b.status === 'online').length;
+            const dnsCount = infraData.dns_servers.length;
+            const beaconCount = infraData.beacons.length;
             const totalConnections = infraData.connections.length;
 
-            document.getElementById('dnsCount').textContent = `${dnsOnline}/${infraData.dns_servers.length}`;
-            document.getElementById('beaconCount').textContent = `${beaconsOnline}/${infraData.beacons.length}`;
+            document.getElementById('dnsCount').textContent = dnsCount;
+            document.getElementById('beaconCount').textContent = beaconCount;
             document.getElementById('connectionCount').textContent = totalConnections;
 
             // Calculate health
@@ -439,23 +597,18 @@
             }
 
             const node = document.createElement('div');
-            node.className = `infra-node ${data.type}${data.status === 'offline' ? ' offline' : ''}`;
+            node.className = `infra-node ${data.type}`;
             node.id = `node-${data.id}`;
             node.style.left = `${x}px`;
             node.style.top = `${y}px`;
 
             const icon = data.type === 'archon' ? '🏛️' : 
                         data.type === 'dns-server' ? '🌐' : '💻';
-            const statusClass = data.status === 'online' || data.status === 'active' ? 'online' : 'offline';
 
             node.innerHTML = `
                 <div class="node-icon">${icon}</div>
                 <div class="node-title">${escapeHtml(data.name || data.id)}</div>
                 <div class="node-subtitle">${escapeHtml(data.address || '')}</div>
-                <div class="node-status">
-                    <span class="status-dot ${statusClass}"></span>
-                    <span style="font-size: 10px; color: #888;">${data.status || 'unknown'}</span>
-                </div>
                 ${data.type === 'beacon' ? `
                 <div class="node-details">
                     <div>OS: ${escapeHtml(data.os || '-')}</div>
@@ -578,11 +731,149 @@
         // Also try immediately in case DOM is already ready
         if (document.readyState === 'complete' || document.readyState === 'interactive') {
             setupWebSocketHandlers();
-            loadInfrastructure();
+            loadAllData();
         }
 
+        // Load all report data
+        async function loadAllData() {
+            await Promise.all([
+                loadInfrastructure(),
+                loadStagerSessions(),
+                loadExfilSessions()
+            ]);
+            renderTTPs();
+        }
+
+        // Load stager sessions
+        async function loadStagerSessions() {
+            try {
+                const response = await authFetch('/api/stager/sessions');
+                if (!response) return;
+                const result = await response.json();
+                if (result.success) {
+                    renderStagerTable(result.data || []);
+                    document.getElementById('stagerCount').textContent = (result.data || []).length;
+                }
+            } catch (error) {
+                console.error('Error loading stager sessions:', error);
+            }
+        }
+
+        function renderStagerTable(sessions) {
+            const tbody = document.getElementById('stagerTableBody');
+            if (!sessions || sessions.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: #666;">No stager sessions</td></tr>';
+                return;
+            }
+            tbody.innerHTML = sessions.slice(0, 10).map(s => {
+                const progress = s.total_chunks > 0 ? Math.round((s.chunks_delivered / s.total_chunks) * 100) : 0;
+                const status = s.completed ? 'completed' : (s.chunks_delivered > 0 ? 'receiving' : 'pending');
+                return `
+                    <tr>
+                        <td><code>${s.session_id || '-'}</code></td>
+                        <td>${s.client_ip || '-'}</td>
+                        <td>${s.os || '-'}/${s.arch || '-'}</td>
+                        <td>${s.chunks_delivered || 0}/${s.total_chunks || 0} (${progress}%)</td>
+                        <td><span class="status-badge ${status}">${status}</span></td>
+                        <td>${formatTimestamp(s.created_at)}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // Load exfil sessions
+        async function loadExfilSessions() {
+            try {
+                const response = await authFetch('/api/exfil/transfers?limit=50');
+                if (!response) return;
+                const result = await response.json();
+                if (result.success && result.data) {
+                    const transfers = result.data.transfers || [];
+                    renderExfilTable(transfers);
+                    document.getElementById('exfilCount').textContent = transfers.length;
+                }
+            } catch (error) {
+                console.error('Error loading exfil sessions:', error);
+            }
+        }
+
+        function renderExfilTable(transfers) {
+            const tbody = document.getElementById('exfilTableBody');
+            if (!transfers || transfers.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: #666;">No exfil sessions</td></tr>';
+                return;
+            }
+            tbody.innerHTML = transfers.slice(0, 10).map(t => {
+                const progress = t.total_chunks > 0 ? Math.round((t.received_chunks / t.total_chunks) * 100) : 0;
+                const status = (t.status || 'receiving').toLowerCase();
+                return `
+                    <tr>
+                        <td><code>${(t.session_id || '-').slice(0, 12)}</code></td>
+                        <td>${t.file_name || 'Unknown'}</td>
+                        <td>${formatBytes(t.file_size || 0)}</td>
+                        <td>${t.received_chunks || 0}/${t.total_chunks || '?'} (${progress}%)</td>
+                        <td><span class="status-badge ${status === 'complete' ? 'completed' : status}">${status}</span></td>
+                        <td>${formatTimestamp(t.created_at)}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function formatBytes(bytes) {
+            if (!bytes || bytes <= 0) return '0 B';
+            const units = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(1024));
+            return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
+        }
+
+        // TTP definitions based on Unkn0wnC2 capabilities
+        const TTP_DEFINITIONS = [
+            { id: 'T1587.001', name: 'Develop Capabilities: Malware', desc: 'WebUI Builder generates custom agents', check: () => true },
+            { id: 'T1583.002', name: 'Acquire Infrastructure: Domains', desc: 'Shadow Mesh domain rotation', check: () => infraData && infraData.dns_servers.length > 0 },
+            { id: 'T1583.006', name: 'Acquire Infrastructure: DNS Server', desc: 'Custom authoritative nameservers', check: () => infraData && infraData.dns_servers.length > 0 },
+            { id: 'T1059.003', name: 'Command and Scripting Interpreter: Windows', desc: 'Shell execution via cmd.exe', check: () => infraData && infraData.beacons.some(b => (b.os || '').toLowerCase().includes('windows')) },
+            { id: 'T1059.004', name: 'Command and Scripting Interpreter: Unix', desc: 'Shell execution via /bin/sh', check: () => infraData && infraData.beacons.some(b => (b.os || '').toLowerCase().includes('linux')) },
+            { id: 'T1105', name: 'Ingress Tool Transfer', desc: 'Staged beacon download over DNS', check: () => document.getElementById('stagerCount').textContent !== '0' },
+            { id: 'T1082', name: 'System Information Discovery', desc: 'Host survey on beacon startup', check: () => infraData && infraData.beacons.length > 0 },
+            { id: 'T1033', name: 'System Owner/User Discovery', desc: 'Username collection', check: () => infraData && infraData.beacons.length > 0 },
+            { id: 'T1027', name: 'Obfuscated Files or Information', desc: 'AES-GCM + Base36 encoding', check: () => infraData && infraData.beacons.length > 0 },
+            { id: 'T1071.004', name: 'Application Layer Protocol: DNS', desc: 'DNS tunneling for C2', check: () => infraData && infraData.dns_servers.length > 0 },
+            { id: 'T1573.001', name: 'Encrypted Channel: Symmetric Crypto', desc: 'AES-GCM encryption', check: () => infraData && infraData.beacons.length > 0 },
+            { id: 'T1041', name: 'Exfiltration Over C2 Channel', desc: 'Data exfiltration via DNS', check: () => document.getElementById('exfilCount').textContent !== '0' },
+            { id: 'T1030', name: 'Data Transfer Size Limits', desc: 'Chunked data transfer', check: () => document.getElementById('exfilCount').textContent !== '0' || document.getElementById('stagerCount').textContent !== '0' }
+        ];
+
+        function renderTTPs() {
+            const grid = document.getElementById('ttpGrid');
+            grid.innerHTML = TTP_DEFINITIONS.map(ttp => {
+                const isActive = ttp.check();
+                return `
+                    <div class="ttp-card ${isActive ? 'active' : ''}">
+                        <div class="ttp-id">${ttp.id}</div>
+                        <div class="ttp-name">${ttp.name}</div>
+                        <div class="ttp-desc">${ttp.desc}</div>
+                        ${isActive ? '<div class="ttp-status">✓ Conducted</div>' : ''}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // PDF Export
+        function exportToPDF() {
+            // Use browser print with PDF styling
+            const title = `Unkn0wnC2 Operation Report - ${new Date().toLocaleDateString()}`;
+            document.title = title;
+            window.print();
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            setupWebSocketHandlers();
+            loadAllData();
+        });
+
         // Auto-refresh every 30 seconds
-        setInterval(loadInfrastructure, 30000);
+        setInterval(loadAllData, 30000);
     </script>
 </body>
 </html>

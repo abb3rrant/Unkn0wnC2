@@ -130,6 +130,7 @@ type StagerSession struct {
 	LastChunk          *int      // Last chunk index sent (pointer to differentiate nil from 0)
 	ProgressRunning    bool      // Track if progress updater is running
 	ProgressDone       chan bool // Signal to stop progress updater
+	ProgressCompleted  bool      // Track if completion message was printed (avoid spam)
 }
 
 // C2Manager handles beacon management and tasking
@@ -469,6 +470,14 @@ func (c2 *C2Manager) stopProgressUpdater(session *StagerSession) {
 
 // logStagerProgress displays or updates the progress bar for stager downloads
 func (c2 *C2Manager) logStagerProgress(session *StagerSession, chunkIndex int, clientIP string) {
+	// Skip if completion message was already printed
+	c2.mutex.RLock()
+	if session.ProgressCompleted {
+		c2.mutex.RUnlock()
+		return
+	}
+	c2.mutex.RUnlock()
+
 	current := chunkIndex + 1
 	eta := calculateStagerETA(session, current)
 
@@ -478,10 +487,11 @@ func (c2 *C2Manager) logStagerProgress(session *StagerSession, chunkIndex int, c
 	if chunkIndex == 0 {
 		fmt.Print("\n" + progressBar)
 		c2.startProgressUpdater(session, clientIP)
-	} else if current == session.TotalChunks {
+	} else if current >= session.TotalChunks {
 		// Final chunk - stop updater and print completion
 		c2.mutex.Lock()
 		c2.stopProgressUpdater(session)
+		session.ProgressCompleted = true // Mark as complete to prevent spam
 		c2.mutex.Unlock()
 		elapsed := time.Since(session.StartedAt)
 		fmt.Printf("\r[Stager] %s %.1f%% (%d/%d chunks) Complete in %s - %s\n",

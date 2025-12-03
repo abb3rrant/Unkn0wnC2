@@ -715,9 +715,8 @@ func (api *APIServer) handleBulkBeaconTask(w http.ResponseWriter, r *http.Reques
 		if err != nil {
 			lastError = err
 			failCount++
-			if api.config.Debug {
-				fmt.Printf("[API] Bulk task creation failed for beacon %s: %v\n", beaconID, err)
-			}
+			// Always log bulk task failures for debugging
+			fmt.Printf("[API] Bulk task creation failed for beacon %s: %v\n", beaconID, err)
 			continue
 		}
 		taskIDs = append(taskIDs, taskID)

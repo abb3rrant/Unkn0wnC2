@@ -623,6 +623,10 @@
     <nav class="navbar">
         <div class="navbar-brand">Unkn0wnC2</div>
         <div class="navbar-right">
+            <div class="ws-status" id="wsStatus">
+                <div class="ws-status-dot"></div>
+                <span class="ws-status-text">Connecting...</span>
+            </div>
             <div class="user-info">Logged in as <strong id="username">admin</strong></div>
             <button class="btn-logout" onclick="logout()">Logout</button>
         </div>
@@ -667,11 +671,6 @@
                 <div class="stat-label">Receiving</div>
                 <div class="stat-value" id="statReceiving">0</div>
                 <div class="stat-note">Actively ingesting chunks</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Assembling</div>
-                <div class="stat-value" id="statAssembling">0</div>
-                <div class="stat-note">Waiting on artifact build</div>
             </div>
             <div class="stat-card">
                 <div class="stat-label">Completed</div>
@@ -958,8 +957,7 @@
 
         function updateStats(transfers) {
             const total = transfers.length;
-            const receiving = transfers.filter(t => (t.status || '').toLowerCase() === 'receiving').length;
-            const assembling = transfers.filter(t => (t.status || '').toLowerCase() === 'assembling').length;
+            const receiving = transfers.filter(t => (t.status || '').toLowerCase() === 'receiving' || (t.status || '').toLowerCase() === 'assembling').length;
             const completed = transfers.filter(t => (t.status || '').toLowerCase() === 'complete').length;
             const bytes = transfers.reduce((sum, t) => sum + (t.file_size || 0), 0);
 
@@ -970,7 +968,6 @@
 
             setText('statTotal', total);
             setText('statReceiving', receiving);
-            setText('statAssembling', assembling);
             setText('statCompleted', completed);
             setText('statData', formatBytes(bytes));
         }
@@ -1047,5 +1044,6 @@
 
         loadExfilTransfers(true);
     </script>
+    <script src="/static/shared.js"></script>
 </body>
 </html>
