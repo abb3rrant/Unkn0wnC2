@@ -554,8 +554,13 @@
         }
 
         // WebSocket handlers for real-time updates
-        ws.on('beacon_update', () => loadInfrastructure());
-        ws.on('dns_server_update', () => loadInfrastructure());
+        // Wait for ws to be available before setting handlers
+        function setupWebSocketHandlers() {
+            if (typeof ws !== 'undefined' && ws) {
+                ws.on('beacon_update', () => loadInfrastructure());
+                ws.on('dns_server_update', () => loadInfrastructure());
+            }
+        }
 
         // Window resize handler
         window.addEventListener('resize', () => {
@@ -564,8 +569,17 @@
             }
         });
 
-        // Initialize
-        loadInfrastructure();
+        // Initialize - wait a bit for shared.js to load ws
+        document.addEventListener('DOMContentLoaded', () => {
+            setupWebSocketHandlers();
+            loadInfrastructure();
+        });
+        
+        // Also try immediately in case DOM is already ready
+        if (document.readyState === 'complete' || document.readyState === 'interactive') {
+            setupWebSocketHandlers();
+            loadInfrastructure();
+        }
 
         // Auto-refresh every 30 seconds
         setInterval(loadInfrastructure, 30000);

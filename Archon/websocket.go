@@ -568,12 +568,12 @@ func (api *APIServer) handleGetInfrastructure(w http.ResponseWriter, r *http.Req
 			lastSeen = 0
 		}
 		
-		// Use database status field for beacons - they are marked active on checkin
-		// A beacon is considered online if its database status is 'active'
+		// Determine online status based on last_seen timestamp only
+		// A beacon is online if it checked in within the last 10 minutes
+		// This is more reliable than the DB status field which isn't updated to 'offline'
 		status := "offline"
-		if dbStatus, ok := beacon["status"].(string); ok && dbStatus == "active" {
-			status = "online"
-		} else if time.Now().Unix()-lastSeen < 1800 { // Fallback: 30 min threshold
+		secondsSinceLastSeen := time.Now().Unix() - lastSeen
+		if lastSeen > 0 && secondsSinceLastSeen < 600 { // 10 minutes
 			status = "online"
 		}
 
@@ -694,6 +694,12 @@ func (api *APIServer) handleBulkBeaconTask(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Verify database is initialized
+	if api.db == nil {
+		api.sendError(w, http.StatusInternalServerError, "Database not initialized")
+		return
+	}
+
 	// Get operator info from request headers (set by auth middleware)
 	createdBy := r.Header.Get("X-Operator-Username")
 	if createdBy == "" {
@@ -702,11 +708,16 @@ func (api *APIServer) handleBulkBeaconTask(w http.ResponseWriter, r *http.Reques
 
 	var successCount, failCount int
 	var taskIDs []string
+	var lastError error
 
 	for _, beaconID := range req.BeaconIDs {
 		taskID, err := api.db.CreateTask(beaconID, req.Command, createdBy)
 		if err != nil {
+			lastError = err
 			failCount++
+			if api.config.Debug {
+				fmt.Printf("[API] Bulk task creation failed for beacon %s: %v\n", beaconID, err)
+			}
 			continue
 		}
 		taskIDs = append(taskIDs, taskID)
@@ -719,6 +730,16 @@ func (api *APIServer) handleBulkBeaconTask(w http.ResponseWriter, r *http.Reques
 			"command":   req.Command,
 			"status":    "pending",
 		})
+	}
+
+	// If all failed, return an error with details
+	if successCount == 0 && failCount > 0 {
+		errMsg := "All tasks failed to create"
+		if lastError != nil {
+			errMsg = fmt.Sprintf("All tasks failed: %v", lastError)
+		}
+		api.sendError(w, http.StatusInternalServerError, errMsg)
+		return
 	}
 
 	api.sendJSON(w, map[string]interface{}{

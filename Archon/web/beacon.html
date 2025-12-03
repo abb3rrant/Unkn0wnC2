@@ -1371,7 +1371,7 @@
             const date = new Date(timestamp);
             const now = new Date();
             const diff = Math.floor((now - date) / 1000);
-            return diff < 300; // Online if seen within 5 minutes
+            return diff < 600; // Online if seen within 10 minutes (matches server-side)
         }
 
         // Escape HTML to prevent XSS

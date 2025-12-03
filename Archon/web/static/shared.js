@@ -9,7 +9,7 @@
 const CONFIG = {
     WS_RECONNECT_INTERVAL: 3000,
     WS_MAX_RECONNECT_ATTEMPTS: 10,
-    ONLINE_THRESHOLD: 300, // 5 minutes in seconds
+    ONLINE_THRESHOLD: 600, // 10 minutes in seconds - matches server-side logic
     TOAST_DURATION: 5000,
 };
 

@@ -366,6 +366,82 @@ How the pieces interact (approximate calculations):
 
 
 
+### Suggested Timing Profiles
+
+The default timing values balance speed with stealth. For highly monitored environments, consider these profiles to evade common IDS threshold-based detection rules.
+
+#### Detection Context
+
+Most Suricata/IDS rules use thresholds like:
+```
+threshold:type both, track by_src, count 10, seconds 60;
+```
+
+**Important:** `track by_src` aggregates ALL queries from a source IP regardless of destination domain. Multi-domain rotation (Shadow Mesh) does NOT evade these rules—only timing does.
+
+| Rule Type | Common Threshold | Queries/Min to Evade |
+|-----------|------------------|----------------------|
+| High volume DNS | 30 in 60s | < 0.5/min |
+| Large query detection | 10 in 60s | < 0.16/min |
+| TXT record abuse | 30 in 60s | < 0.5/min |
+
+#### Profile: Default (Balanced)
+Best for: Initial testing, low-security environments
+
+```
+# ~0.5-1 queries/min - may trigger some thresholds
+sleep_min = 60
+sleep_max = 120
+exfil_jitter_min_ms = 10000
+exfil_jitter_max_ms = 30000
+exfil_chunks_per_burst = 5
+exfil_burst_pause_ms = 120000
+```
+
+#### Profile: Low-and-Slow (Recommended)
+Best for: Production engagements, monitored environments
+
+```
+# ~0.07-0.2 queries/min - evades most threshold rules
+sleep_min = 300          # 5 min
+sleep_max = 900          # 15 min
+exfil_jitter_min_ms = 120000    # 2 min
+exfil_jitter_max_ms = 300000    # 5 min
+exfil_chunks_per_burst = 1      # No burst patterns
+exfil_burst_pause_ms = 600000   # 10 min
+```
+
+| Metric | 100 Chunks Exfil Time |
+|--------|----------------------|
+| Default | ~48 min |
+| Low-and-Slow | ~8-12 hours |
+
+#### Profile: Ultra-Stealth (Long-Term Access)
+Best for: Persistent access, high-security environments, avoiding ML detection
+
+```
+# ~0.02-0.03 queries/min - virtually undetectable by volume
+sleep_min = 1800         # 30 min
+sleep_max = 3600         # 60 min
+exfil_jitter_min_ms = 300000    # 5 min
+exfil_jitter_max_ms = 900000    # 15 min
+exfil_chunks_per_burst = 1
+exfil_burst_pause_ms = 1800000  # 30 min
+```
+
+#### Additional Recommendations
+
+**Domain Strategy:**
+- Use 5+ domains in Shadow Mesh for redundancy
+- Aged domains (>6 months) avoid "newly registered" flags
+- Categorized domains (tech, business) bypass reputation filters
+- Mixed TLDs (`.com`, `.net`, `.org`) - avoid `.pw`, `.tk`, `.xyz`
+
+**Operational Security:**
+- Operate during business hours to blend with legitimate traffic
+- Match target's typical DNS query volume
+- Use longer base domain names to improve subdomain:domain ratio
+
 ---
 
 **Version:** 0.3.0  
