@@ -21,7 +21,7 @@ import (
 
 // Build-time version information (set via -ldflags during build)
 var (
-	version   = "0.3.0-shadow-mesh"
+	version   = "0.5.0"
 	buildDate = "unknown"
 	gitCommit = "unknown"
 )

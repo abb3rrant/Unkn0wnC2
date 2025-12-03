@@ -1276,7 +1276,7 @@
         async function createTask() {
             // Prevent multiple simultaneous task submissions
             if (isCreatingTask) {
-                console.log('Task creation already in progress, ignoring...');
+                console.log('[Beacon] Task creation already in progress');
                 return;
             }
 
@@ -1436,11 +1436,11 @@
                         selectTask(taskId);
                     }
                 } else {
-                    alert('Failed to update task status');
+                    showToast('Failed to update task status', 'error');
                 }
             } catch (error) {
-                console.error('Error:', error);
-                alert('Failed to update task status');
+                console.error('[Beacon] Error:', error);
+                showToast('Failed to update task status', 'error');
             }
         }
 
@@ -1459,11 +1459,11 @@
                     }
                     loadTasks();
                 } else {
-                    alert('Failed to delete task');
+                    showToast('Failed to delete task', 'error');
                 }
             } catch (error) {
-                console.error('Error:', error);
-                alert('Failed to delete task');
+                console.error('[Beacon] Error:', error);
+                showToast('Failed to delete task', 'error');
             }
         }
 

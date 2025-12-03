@@ -701,12 +701,12 @@
                 const completedTasks = tasksByStatus['completed'] || 0;
                 document.getElementById('resultCount').textContent = completedTasks;
                 
-                // Log task status breakdown for operators to see in browser console
+                // Log task status breakdown for operators
                 if (tasksByStatus && Object.keys(tasksByStatus).length > 0) {
-                    console.log('📊 Task Status Breakdown:', tasksByStatus);
+                    console.log('[Dashboard] Task Status:', tasksByStatus);
                 }
             } catch (error) {
-                console.error('Error loading stats:', error);
+                console.error('[Dashboard] Error loading stats:', error);
                 document.getElementById('taskCount').textContent = 'N/A';
                 document.getElementById('resultCount').textContent = 'N/A';
             }

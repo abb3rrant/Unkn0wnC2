@@ -1006,11 +1006,11 @@
                 if (response && response.ok) {
                     loadExfilTransfers();
                 } else {
-                    alert('Failed to update transfer status');
+                    showToast('Failed to update transfer status', 'error');
                 }
             } catch (error) {
-                console.error('Error:', error);
-                alert('Failed to update transfer status');
+                console.error('[Exfils] Error:', error);
+                showToast('Failed to update transfer status', 'error');
             }
         }
 
@@ -1025,11 +1025,11 @@
                 if (response && response.ok) {
                     loadExfilTransfers();
                 } else {
-                    alert('Failed to delete transfer');
+                    showToast('Failed to delete transfer', 'error');
                 }
             } catch (error) {
-                console.error('Error:', error);
-                alert('Failed to delete transfer');
+                console.error('[Exfils] Error:', error);
+                showToast('Failed to delete transfer', 'error');
             }
         }
 

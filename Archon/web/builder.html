@@ -1066,42 +1066,36 @@
 
         async function loadClientBinaries() {
             try {
-                console.log('[DEBUG] Fetching client binaries from /api/builder/client-binaries');
+                console.log('[Builder] Fetching client binaries');
                 const response = await authFetch('/api/builder/client-binaries');
                 if (!response) {
-                    console.error('[ERROR] Failed to fetch client binaries - no response');
+                    console.error('[Builder] Failed to fetch client binaries - no response');
                     return;
                 }
 
-                console.log('[DEBUG] Response status:', response.status);
                 const binaries = await response.json();
-                console.log('[DEBUG] Client binaries loaded:', binaries);
-                console.log('[DEBUG] Number of binaries:', binaries.length);
+                console.log('[Builder] Loaded', binaries.length, 'client binaries');
                 
                 const stagerSelect = document.getElementById('stagerClientBinary');
 
                 stagerSelect.innerHTML = '<option value="">Select a client binary</option>';
                 
                 if (!binaries || binaries.length === 0) {
-                    console.warn('[WARN] No client binaries available - check /opt/unkn0wnc2/builds/ directory on server');
+                    console.warn('[Builder] No client binaries available');
                     stagerSelect.innerHTML = '<option value="" disabled>No client binaries available - build a client first</option>';
                     return;
                 }
 
-                console.log('[DEBUG] Adding binaries to dropdown...');
-                binaries.forEach((binary, index) => {
+                binaries.forEach((binary) => {
                     const option = document.createElement('option');
                     option.value = binary.id;
                     const sizeMB = (binary.compressed_size / 1024 / 1024).toFixed(2);
-                    // created_at is Unix timestamp in seconds, multiply by 1000 for JavaScript Date
                     const createdDate = new Date(binary.created_at * 1000).toLocaleDateString();
                     option.textContent = `${binary.os}/${binary.arch} - ${sizeMB}MB (${binary.total_chunks} chunks) - ${createdDate}`;
                     stagerSelect.appendChild(option);
-                    console.log(`[DEBUG] Added binary ${index + 1}:`, option.textContent);
                 });
-                console.log('[DEBUG] Client binaries loaded successfully');
             } catch (error) {
-                console.error('[ERROR] Failed to load client binaries:', error);
+                console.error('[Builder] Failed to load client binaries:', error);
                 showAlert('Failed to load client binaries. Check console for details.', 'error');
             }
         }

@@ -58,12 +58,6 @@
             background: linear-gradient(135deg, rgba(100, 149, 237, 0.1) 0%, rgba(20, 20, 20, 0.95) 100%);
         }
 
-        .infra-node.beacon.offline {
-            border-color: rgba(128, 128, 128, 0.4);
-            background: linear-gradient(135deg, rgba(128, 128, 128, 0.1) 0%, rgba(20, 20, 20, 0.95) 100%);
-            opacity: 0.6;
-        }
-
         .node-icon {
             font-size: 24px;
             margin-bottom: 8px;
@@ -82,28 +76,6 @@
             font-size: 11px;
             color: #666;
             text-align: center;
-        }
-
-        .node-status {
-            margin-top: 8px;
-            text-align: center;
-        }
-
-        .node-status .status-dot {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            margin-right: 5px;
-        }
-
-        .node-status .status-dot.online {
-            background: #00ff88;
-            box-shadow: 0 0 8px rgba(0, 255, 136, 0.5);
-        }
-
-        .node-status .status-dot.offline {
-            background: #ff4444;
         }
 
         .node-details {
@@ -530,21 +502,9 @@
 
             const dnsCount = infraData.dns_servers.length;
             const beaconCount = infraData.beacons.length;
-            const totalConnections = infraData.connections.length;
 
             document.getElementById('dnsCount').textContent = dnsCount;
             document.getElementById('beaconCount').textContent = beaconCount;
-            document.getElementById('connectionCount').textContent = totalConnections;
-
-            // Calculate health
-            const totalNodes = 1 + infraData.dns_servers.length + infraData.beacons.length;
-            const onlineNodes = 1 + dnsOnline + beaconsOnline;
-            const healthPercent = Math.round((onlineNodes / totalNodes) * 100);
-            
-            const healthEl = document.getElementById('healthStatus');
-            healthEl.textContent = `${healthPercent}%`;
-            healthEl.style.color = healthPercent >= 80 ? '#00ff88' : 
-                                   healthPercent >= 50 ? '#ffa500' : '#ff4444';
         }
 
         function renderMap() {
@@ -725,14 +685,8 @@
         // Initialize - wait a bit for shared.js to load ws
         document.addEventListener('DOMContentLoaded', () => {
             setupWebSocketHandlers();
-            loadInfrastructure();
-        });
-        
-        // Also try immediately in case DOM is already ready
-        if (document.readyState === 'complete' || document.readyState === 'interactive') {
-            setupWebSocketHandlers();
             loadAllData();
-        }
+        });
 
         // Load all report data
         async function loadAllData() {
@@ -819,28 +773,21 @@
             }).join('');
         }
 
-        function formatBytes(bytes) {
-            if (!bytes || bytes <= 0) return '0 B';
-            const units = ['B', 'KB', 'MB', 'GB'];
-            const i = Math.floor(Math.log(bytes) / Math.log(1024));
-            return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
-        }
-
         // TTP definitions based on Unkn0wnC2 capabilities
         const TTP_DEFINITIONS = [
             { id: 'T1587.001', name: 'Develop Capabilities: Malware', desc: 'WebUI Builder generates custom agents', check: () => true },
-            { id: 'T1583.002', name: 'Acquire Infrastructure: Domains', desc: 'Shadow Mesh domain rotation', check: () => infraData && infraData.dns_servers.length > 0 },
-            { id: 'T1583.006', name: 'Acquire Infrastructure: DNS Server', desc: 'Custom authoritative nameservers', check: () => infraData && infraData.dns_servers.length > 0 },
-            { id: 'T1059.003', name: 'Command and Scripting Interpreter: Windows', desc: 'Shell execution via cmd.exe', check: () => infraData && infraData.beacons.some(b => (b.os || '').toLowerCase().includes('windows')) },
-            { id: 'T1059.004', name: 'Command and Scripting Interpreter: Unix', desc: 'Shell execution via /bin/sh', check: () => infraData && infraData.beacons.some(b => (b.os || '').toLowerCase().includes('linux')) },
-            { id: 'T1105', name: 'Ingress Tool Transfer', desc: 'Staged beacon download over DNS', check: () => document.getElementById('stagerCount').textContent !== '0' },
-            { id: 'T1082', name: 'System Information Discovery', desc: 'Host survey on beacon startup', check: () => infraData && infraData.beacons.length > 0 },
-            { id: 'T1033', name: 'System Owner/User Discovery', desc: 'Username collection', check: () => infraData && infraData.beacons.length > 0 },
-            { id: 'T1027', name: 'Obfuscated Files or Information', desc: 'AES-GCM + Base36 encoding', check: () => infraData && infraData.beacons.length > 0 },
-            { id: 'T1071.004', name: 'Application Layer Protocol: DNS', desc: 'DNS tunneling for C2', check: () => infraData && infraData.dns_servers.length > 0 },
-            { id: 'T1573.001', name: 'Encrypted Channel: Symmetric Crypto', desc: 'AES-GCM encryption', check: () => infraData && infraData.beacons.length > 0 },
-            { id: 'T1041', name: 'Exfiltration Over C2 Channel', desc: 'Data exfiltration via DNS', check: () => document.getElementById('exfilCount').textContent !== '0' },
-            { id: 'T1030', name: 'Data Transfer Size Limits', desc: 'Chunked data transfer', check: () => document.getElementById('exfilCount').textContent !== '0' || document.getElementById('stagerCount').textContent !== '0' }
+            { id: 'T1583.002', name: 'Acquire Infrastructure: Domains', desc: 'Shadow Mesh domain rotation', check: () => infraData && infraData.dns_servers && infraData.dns_servers.length > 0 },
+            { id: 'T1583.006', name: 'Acquire Infrastructure: DNS Server', desc: 'Custom authoritative nameservers', check: () => infraData && infraData.dns_servers && infraData.dns_servers.length > 0 },
+            { id: 'T1059.003', name: 'Command and Scripting Interpreter: Windows', desc: 'Shell execution via cmd.exe', check: () => infraData && infraData.beacons && infraData.beacons.some(b => (b.os || '').toLowerCase().includes('windows')) },
+            { id: 'T1059.004', name: 'Command and Scripting Interpreter: Unix', desc: 'Shell execution via /bin/sh', check: () => infraData && infraData.beacons && infraData.beacons.some(b => (b.os || '').toLowerCase().includes('linux')) },
+            { id: 'T1105', name: 'Ingress Tool Transfer', desc: 'Staged beacon download over DNS', check: () => { const el = document.getElementById('stagerCount'); return el && el.textContent !== '0'; } },
+            { id: 'T1082', name: 'System Information Discovery', desc: 'Host survey on beacon startup', check: () => infraData && infraData.beacons && infraData.beacons.length > 0 },
+            { id: 'T1033', name: 'System Owner/User Discovery', desc: 'Username collection', check: () => infraData && infraData.beacons && infraData.beacons.length > 0 },
+            { id: 'T1027', name: 'Obfuscated Files or Information', desc: 'AES-GCM + Base36 encoding', check: () => infraData && infraData.beacons && infraData.beacons.length > 0 },
+            { id: 'T1071.004', name: 'Application Layer Protocol: DNS', desc: 'DNS tunneling for C2', check: () => infraData && infraData.dns_servers && infraData.dns_servers.length > 0 },
+            { id: 'T1573.001', name: 'Encrypted Channel: Symmetric Crypto', desc: 'AES-GCM encryption', check: () => infraData && infraData.beacons && infraData.beacons.length > 0 },
+            { id: 'T1041', name: 'Exfiltration Over C2 Channel', desc: 'Data exfiltration via DNS', check: () => { const el = document.getElementById('exfilCount'); return el && el.textContent !== '0'; } },
+            { id: 'T1030', name: 'Data Transfer Size Limits', desc: 'Chunked data transfer', check: () => { const s = document.getElementById('stagerCount'); const e = document.getElementById('exfilCount'); return (s && s.textContent !== '0') || (e && e.textContent !== '0'); } }
         ];
 
         function renderTTPs() {
@@ -860,17 +807,10 @@
 
         // PDF Export
         function exportToPDF() {
-            // Use browser print with PDF styling
             const title = `Unkn0wnC2 Operation Report - ${new Date().toLocaleDateString()}`;
             document.title = title;
             window.print();
         }
-
-        // Initialize
-        document.addEventListener('DOMContentLoaded', () => {
-            setupWebSocketHandlers();
-            loadAllData();
-        });
 
         // Auto-refresh every 30 seconds
         setInterval(loadAllData, 30000);

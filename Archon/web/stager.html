@@ -579,39 +579,37 @@
             
             if (autoRefreshEnabled) {
                 toggle.classList.add('active');
-                autoRefreshInterval = setInterval(loadStagerSessions, 3000); // Refresh every 3 seconds
-                console.log('Auto-refresh enabled');
+                autoRefreshInterval = setInterval(loadStagerSessions, 3000);
+                console.log('[Stager] Auto-refresh enabled');
             } else {
                 toggle.classList.remove('active');
                 if (autoRefreshInterval) {
                     clearInterval(autoRefreshInterval);
                     autoRefreshInterval = null;
                 }
-                console.log('Auto-refresh disabled');
+                console.log('[Stager] Auto-refresh disabled');
             }
         }
 
         async function loadStagerSessions() {
             try {
-                console.log('Fetching stager sessions...');
                 const response = await authFetch('/api/stager/sessions');
                 if (!response) {
-                    console.error('No response from authFetch');
+                    console.error('[Stager] No response from authFetch');
                     return;
                 }
 
                 if (!response.ok) {
                     const errorText = await response.text();
-                    console.error('API error:', response.status, errorText);
+                    console.error('[Stager] API error:', response.status, errorText);
                     throw new Error(`HTTP ${response.status}: ${errorText}`);
                 }
 
                 const sessions = await response.json();
-                console.log('Loaded sessions:', sessions);
                 
                 // Ensure sessions is an array
                 if (!Array.isArray(sessions)) {
-                                    console.error('Sessions is not an array:', sessions);
+                    console.error('[Stager] Invalid response format:', sessions);
                     throw new Error('Invalid response format: expected array');
                 }
                 

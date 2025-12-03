@@ -135,29 +135,30 @@ type StagerSession struct {
 
 // C2Manager handles beacon management and tasking
 type C2Manager struct {
-	beacons              map[string]*Beacon
-	tasks                map[string]*Task
-	masterTaskIDs        map[string]string               // key: local taskID, value: master taskID
-	resultChunks         map[string][]ResultChunk        // key: taskID (legacy)
-	expectedResults      map[string]*ExpectedResult      // key: taskID (new two-phase)
-	exfilSessions        map[string]*ExfilSession        // key: session hex string
-	exfilTagIndex        map[string]*ExfilTagTracker     // key: normalized session tag
-	stagerSessions       map[string]*StagerSession       // key: clientIP
-	cachedStagerSessions map[string]*CachedStagerSession // key: sessionID (for cache-based sessions)
-	recentMessages       map[string]time.Time            // key: message hash, value: timestamp (deduplication)
-	knownDomains         []string                        // Active DNS domains from Master (for first check-in)
-	db                   *Database                       // Database for persistent storage
-	resultBatchBuffer    map[string][]ResultChunk        // key: taskID, value: buffered chunks for batching
-	resultBatchTimer     map[string]*time.Timer          // key: taskID, value: batch flush timer
-	submittedData        map[string]bool                 // key: taskID, value: true if we submitted any data to Master
-	metadataAssemblers   map[string]*metadataAssembler   // key: normalized session tag, value: pending metadata buffers
-	pendingLabelChunks   map[string][]pendingLabelChunk  // key: normalized session tag, value: buffered data frames awaiting metadata
-	tasksInProgress      map[string]time.Time            // key: taskID, value: first chunk received time (prevents re-delivery)
-	mutex                sync.RWMutex
-	taskCounter          int // Counter for local tasks (standalone mode)
-	domainTaskCounter    int // Counter for domain update tasks (D prefix to avoid conflicts)
-	debug                bool
-	aesKey               []byte
+	beacons               map[string]*Beacon
+	tasks                 map[string]*Task
+	masterTaskIDs         map[string]string               // key: local taskID, value: master taskID
+	resultChunks          map[string][]ResultChunk        // key: taskID (legacy)
+	expectedResults       map[string]*ExpectedResult      // key: taskID (new two-phase)
+	exfilSessions         map[string]*ExfilSession        // key: session hex string
+	exfilTagIndex         map[string]*ExfilTagTracker     // key: normalized session tag
+	stagerSessions        map[string]*StagerSession       // key: clientIP
+	cachedStagerSessions  map[string]*CachedStagerSession // key: sessionID (for cache-based sessions)
+	completedStagerLogs   map[string]bool                 // key: sessionID, value: true if completion logged (prevents spam)
+	recentMessages        map[string]time.Time            // key: message hash, value: timestamp (deduplication)
+	knownDomains          []string                        // Active DNS domains from Master (for first check-in)
+	db                    *Database                       // Database for persistent storage
+	resultBatchBuffer     map[string][]ResultChunk        // key: taskID, value: buffered chunks for batching
+	resultBatchTimer      map[string]*time.Timer          // key: taskID, value: batch flush timer
+	submittedData         map[string]bool                 // key: taskID, value: true if we submitted any data to Master
+	metadataAssemblers    map[string]*metadataAssembler   // key: normalized session tag, value: pending metadata buffers
+	pendingLabelChunks    map[string][]pendingLabelChunk  // key: normalized session tag, value: buffered data frames awaiting metadata
+	tasksInProgress       map[string]time.Time            // key: taskID, value: first chunk received time (prevents re-delivery)
+	mutex                 sync.RWMutex
+	taskCounter           int // Counter for local tasks (standalone mode)
+	domainTaskCounter     int // Counter for domain update tasks (D prefix to avoid conflicts)
+	debug                 bool
+	aesKey                []byte
 	jitterConfig         StagerJitter // Stager timing configuration
 	domain               string       // The domain this server is authoritative for
 }
@@ -202,6 +203,7 @@ func NewC2Manager(debug bool, encryptionKey string, jitterConfig StagerJitter, d
 		pendingLabelChunks:   make(map[string][]pendingLabelChunk),
 		stagerSessions:       make(map[string]*StagerSession),
 		cachedStagerSessions: make(map[string]*CachedStagerSession),
+		completedStagerLogs:  make(map[string]bool),
 		recentMessages:       make(map[string]time.Time),
 		resultBatchBuffer:    make(map[string][]ResultChunk),
 		resultBatchTimer:     make(map[string]*time.Timer),
@@ -470,9 +472,9 @@ func (c2 *C2Manager) stopProgressUpdater(session *StagerSession) {
 
 // logStagerProgress displays or updates the progress bar for stager downloads
 func (c2 *C2Manager) logStagerProgress(session *StagerSession, chunkIndex int, clientIP string) {
-	// Skip if completion message was already printed
+	// Skip if completion message was already printed for this session ID
 	c2.mutex.RLock()
-	if session.ProgressCompleted {
+	if c2.completedStagerLogs[session.SessionID] || session.ProgressCompleted {
 		c2.mutex.RUnlock()
 		return
 	}
@@ -491,7 +493,8 @@ func (c2 *C2Manager) logStagerProgress(session *StagerSession, chunkIndex int, c
 		// Final chunk - stop updater and print completion
 		c2.mutex.Lock()
 		c2.stopProgressUpdater(session)
-		session.ProgressCompleted = true // Mark as complete to prevent spam
+		session.ProgressCompleted = true
+		c2.completedStagerLogs[session.SessionID] = true // Mark session ID as complete globally
 		c2.mutex.Unlock()
 		elapsed := time.Since(session.StartedAt)
 		fmt.Printf("\r[Stager] %s %.1f%% (%d/%d chunks) Complete in %s - %s\n",
