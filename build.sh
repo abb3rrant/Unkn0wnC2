@@ -111,6 +111,11 @@ if ! command -v aarch64-linux-gnu-gcc &>/dev/null; then
   MISSING_DEPS+=("aarch64-linux-gnu-gcc (ARM64 cross-compiler)")
 fi
 
+# Clang for macOS stager builds (native on macOS, optional on Linux)
+if ! command -v clang &>/dev/null; then
+  MISSING_DEPS+=("clang (C compiler for macOS stager builds)")
+fi
+
 # OpenSSL for certificate generation
 if ! command -v openssl &>/dev/null; then
   MISSING_DEPS+=("openssl")
@@ -162,6 +167,9 @@ if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
       *"ARM64 cross-compiler"*)
         PACKAGES+=("gcc-aarch64-linux-gnu")
         ;;
+      *"clang"*)
+        PACKAGES+=("clang")
+        ;;
       *"openssl"*)
         PACKAGES+=("openssl")
         ;;
@@ -174,7 +182,47 @@ if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
     echo -e "${GREEN}  ${INSTALL_CMD} ${PACKAGES[@]}${NC}"
 
   elif command -v yum &>/dev/null; then
-    echo -e "${GREEN}  sudo yum install -y golang gcc gcc-c++ mingw64-gcc mingw32-gcc gcc-arm-linux-gnu gcc-aarch64-linux-gnu openssl zlib-devel${NC}"
+    echo -e "${GREEN}  sudo yum install -y golang gcc gcc-c++ mingw64-gcc mingw32-gcc gcc-arm-linux-gnu gcc-aarch64-linux-gnu clang openssl zlib-devel${NC}"
+
+  elif command -v brew &>/dev/null; then
+    echo -e "${GREEN}  # macOS with Homebrew${NC}"
+    BREW_PACKAGES=()
+
+    for dep in "${MISSING_DEPS[@]}"; do
+      case "$dep" in
+      *"Go compiler"*)
+        BREW_PACKAGES+=("go")
+        ;;
+      *"Rust toolchain"*)
+        BREW_PACKAGES+=("rust")
+        ;;
+      *"GNU C compiler"*)
+        BREW_PACKAGES+=("gcc")
+        ;;
+      *"MinGW 64-bit"* | *"MinGW 32-bit"*)
+        BREW_PACKAGES+=("mingw-w64")
+        ;;
+      *"ARM cross-compiler"* | *"ARM64 cross-compiler"*)
+        echo -e "${YELLOW}  # Note: ARM cross-compilers for Linux require manual setup on macOS${NC}"
+        echo -e "${YELLOW}  # Consider using Docker or a Linux VM for ARM Linux builds${NC}"
+        ;;
+      *"clang"*)
+        echo -e "${YELLOW}  # clang is included with Xcode Command Line Tools${NC}"
+        echo -e "${GREEN}  xcode-select --install${NC}"
+        ;;
+      *"openssl"*)
+        BREW_PACKAGES+=("openssl")
+        ;;
+      *"zlib"*)
+        BREW_PACKAGES+=("zlib")
+        ;;
+      esac
+    done
+
+    if [ ${#BREW_PACKAGES[@]} -gt 0 ]; then
+      echo -e "${GREEN}  brew install ${BREW_PACKAGES[@]}${NC}"
+    fi
+
   else
     echo -e "${YELLOW}  Please install the missing dependencies using your system's package manager${NC}"
   fi
@@ -210,6 +258,9 @@ fi
 if command -v aarch64-linux-gnu-gcc &>/dev/null; then
   echo -e "${GREEN}  - ARM64: $(aarch64-linux-gnu-gcc --version | head -1 | awk '{print $NF}')${NC}"
 fi
+if command -v clang &>/dev/null; then
+  echo -e "${GREEN}  - Clang: $(clang --version | head -1 | awk '{print $NF}')${NC}"
+fi
 echo -e "${GREEN}  - OpenSSL: $(openssl version | awk '{print $2}')${NC}"
 echo -e "${GREEN}  - zlib: available${NC}"
 echo ""
@@ -223,6 +274,14 @@ REQUIRED_RUST_TARGETS=(
   "x86_64-pc-windows-gnu"
   "i686-pc-windows-gnu"
 )
+
+# Add macOS targets only when running on macOS (cross-compile not supported from Linux)
+if [ "$(uname -s)" = "Darwin" ]; then
+  REQUIRED_RUST_TARGETS+=(
+    "x86_64-apple-darwin"
+    "aarch64-apple-darwin"
+  )
+fi
 
 if command -v rustup &>/dev/null; then
   echo -e "${YELLOW}Validating Rust targets...${NC}"

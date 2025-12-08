@@ -605,6 +605,7 @@
                     <select id="clientPlatform" class="form-select">
                         <option value="linux">Linux</option>
                         <option value="windows">Windows</option>
+                        <option value="darwin">macOS</option>
                     </select>
                 </div>
 
@@ -696,6 +697,7 @@
                     <select id="exfilPlatform" class="form-select">
                         <option value="linux">Linux (recommended)</option>
                         <option value="windows">Windows (experimental)</option>
+                        <option value="darwin">macOS</option>
                     </select>
                 </div>
 
@@ -711,7 +713,7 @@
                 </div>
 
                 <div class="help-text" style="margin-top:-5px; margin-bottom:10px;">
-                    Windows ARM builds must run on a Windows host with Visual Studio Build Tools installed. Linux ARM targets require the matching <code>*-linux-gnu-gcc</code> cross toolchains.
+                    Windows ARM builds must run on a Windows host with Visual Studio Build Tools installed. Linux ARM targets require the matching <code>*-linux-gnu-gcc</code> cross toolchains. macOS builds require a macOS host or osxcross toolchain.
                 </div>
 
                 <button class="btn-build" onclick="buildExfilClient()">Build Exfil Client</button>
@@ -739,6 +741,7 @@
                     <select id="stagerPlatform" class="form-select">
                         <option value="linux">Linux</option>
                         <option value="windows">Windows</option>
+                        <option value="darwin">macOS</option>
                     </select>
                 </div>
 
