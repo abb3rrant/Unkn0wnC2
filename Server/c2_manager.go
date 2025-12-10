@@ -2273,8 +2273,9 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string) (string, 
 
 					c2.logStagerProgress(session, chunkIndex, clientIP)
 
-					// Report progress to Master (async) - report first, every 100th, and last chunk
-					if masterClient != nil && (chunkIndex == 0 || chunkIndex%100 == 0 || chunkIndex == totalChunks-1) {
+					// Report progress to Master (async) - report first, every 10th, and last chunk
+					// Reduced from 100 to 10 for better progress visibility with slow timing profiles
+					if masterClient != nil && (chunkIndex == 0 || chunkIndex%10 == 0 || chunkIndex == totalChunks-1) {
 						go masterClient.ReportStagerProgress(sessionID, chunkIndex, stagerIP)
 					}
 

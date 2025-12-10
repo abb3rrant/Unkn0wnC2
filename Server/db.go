@@ -899,6 +899,9 @@ func (d *Database) GetDatabaseStats() (map[string]int64, error) {
 }
 
 // CacheStagerChunks stores stager chunks in the database for quick retrieval
+// Uses INSERT OR REPLACE to avoid race conditions where a stager is downloading
+// chunks while the cache is being refreshed. This prevents a brief window where
+// chunks would be unavailable during DELETE + INSERT operations.
 func (d *Database) CacheStagerChunks(clientBinaryID string, chunks []string) error {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
@@ -911,14 +914,10 @@ func (d *Database) CacheStagerChunks(clientBinaryID string, chunks []string) err
 
 	now := time.Now().Unix()
 
-	// Clear existing cache for this binary
-	_, err = tx.Exec("DELETE FROM stager_chunk_cache WHERE client_binary_id = ?", clientBinaryID)
-	if err != nil {
-		return err
-	}
-
-	// Insert new chunks
-	stmt, err := tx.Prepare("INSERT INTO stager_chunk_cache (client_binary_id, chunk_index, chunk_data, cached_at) VALUES (?, ?, ?, ?)")
+	// Use INSERT OR REPLACE (SQLite UPSERT) to atomically update chunks
+	// This avoids the race condition where chunks are briefly unavailable
+	// during cache refresh (DELETE followed by INSERT)
+	stmt, err := tx.Prepare("INSERT OR REPLACE INTO stager_chunk_cache (client_binary_id, chunk_index, chunk_data, cached_at) VALUES (?, ?, ?, ?)")
 	if err != nil {
 		return err
 	}
