@@ -1031,7 +1031,7 @@ func (d *Database) GetLocalExfilChunks(sessionID string, tag string, chunkIndice
 			result[idx] = chunk
 			continue
 		}
-		
+
 		// Try tag-based storage (orphan chunks stored as tag_XXX)
 		if tag != "" {
 			tagSessionID := fmt.Sprintf("tag_%s", tag)

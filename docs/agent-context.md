@@ -96,7 +96,9 @@ Embedded at build time via `config.json`:
 
 ## Common Issues
 
-### Stager Dies with Slow Timings
+### Stager Dies with Slow Timings (FIXED 2025-12-10)
+**Status**: Fixed and validated - tested to 50+ chunks with slow timings.
+
 **Cause 1**: Race condition in stager chunk cache - DELETE + INSERT during refresh caused brief unavailability.
 **Fix**: Changed to `INSERT OR REPLACE` (atomic upsert) in `Server/db.go`.
 
@@ -105,6 +107,9 @@ Embedded at build time via `config.json`:
 - `RETRY` responses (cache not synced yet)
 - Empty/malformed responses (transient network issues)
 - Retry with exponential backoff before giving up
+
+**Cause 3**: Progress reporting only happened every 100 chunks - too infrequent for slow timings.
+**Fix**: Changed to report every 10 chunks in `Server/c2_manager.go` (all code paths).
 
 ### Session Timeouts
 - `StagerSessionTimeout` = 3 hours (Server/constants.go)

@@ -391,7 +391,7 @@ func readLogFile(filename string, numLines int) ([]LogEntry, error) {
 func readAllLines(file *os.File, numLines int) ([]LogEntry, error) {
 	var lines []string
 	scanner := bufio.NewScanner(file)
-	
+
 	// Use larger buffer for long lines
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, 1024*1024)
@@ -567,7 +567,7 @@ func (api *APIServer) handleGetInfrastructure(w http.ResponseWriter, r *http.Req
 		default:
 			lastSeen = 0
 		}
-		
+
 		// Determine online status based on last_seen timestamp only
 		// A beacon is online if it checked in within the last 10 minutes
 		// This is more reliable than the DB status field which isn't updated to 'offline'

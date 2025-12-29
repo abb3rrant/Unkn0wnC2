@@ -394,6 +394,7 @@ func isLikelyTimestampLabel(label string) bool {
 }
 
 // ackIPAddress returns the server IP or +1 (with carry) for ACK signaling.
+// DEPRECATED: Use buildTXTRData for TXT-based exfil ACK instead.
 func ackIPAddress(base string, ack bool) []byte {
 	ip, ok := toIPv4(base)
 	if !ok || len(ip) != 4 {
@@ -412,6 +413,31 @@ func ackIPAddress(base string, ack bool) []byte {
 			break
 		}
 	}
+	return result
+}
+
+// buildTXTRData creates properly formatted TXT record RData.
+// TXT records require a length prefix byte before each string segment.
+// For strings <= 255 bytes, this is simply: [len][data]
+func buildTXTRData(text string) []byte {
+	if len(text) == 0 {
+		return []byte{0} // Empty TXT record
+	}
+
+	var result []byte
+	data := []byte(text)
+
+	// Split into 255-byte chunks if needed (TXT segment max is 255)
+	for len(data) > 0 {
+		chunkSize := len(data)
+		if chunkSize > 255 {
+			chunkSize = 255
+		}
+		result = append(result, byte(chunkSize))
+		result = append(result, data[:chunkSize]...)
+		data = data[chunkSize:]
+	}
+
 	return result
 }
 

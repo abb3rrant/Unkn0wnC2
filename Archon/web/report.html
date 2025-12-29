@@ -312,6 +312,130 @@
             color: #00c853;
         }
 
+        /* Timeline Styles */
+        .timeline-container {
+            position: relative;
+            padding-left: 30px;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .timeline-container::before {
+            content: '';
+            position: absolute;
+            left: 10px;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            background: rgba(255, 51, 51, 0.2);
+        }
+
+        .timeline-event {
+            position: relative;
+            padding: 12px 15px;
+            margin-bottom: 10px;
+            background: rgba(20, 20, 20, 0.9);
+            border: 1px solid rgba(255, 51, 51, 0.15);
+            border-radius: 4px;
+            transition: all 0.2s;
+        }
+
+        .timeline-event:hover {
+            border-color: rgba(255, 51, 51, 0.4);
+            background: rgba(30, 30, 30, 0.95);
+        }
+
+        .timeline-event::before {
+            content: '';
+            position: absolute;
+            left: -24px;
+            top: 18px;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: rgba(255, 51, 51, 0.6);
+            border: 2px solid #0a0a0a;
+        }
+
+        .timeline-event.beacon::before { background: rgba(100, 149, 237, 0.8); }
+        .timeline-event.task::before { background: rgba(255, 193, 7, 0.8); }
+        .timeline-event.exfil::before { background: rgba(156, 39, 176, 0.8); }
+        .timeline-event.stager::before { background: rgba(0, 200, 83, 0.8); }
+
+        .timeline-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+
+        .timeline-title {
+            font-weight: 600;
+            color: #fff;
+            font-size: 13px;
+        }
+
+        .timeline-time {
+            font-size: 11px;
+            color: #666;
+        }
+
+        .timeline-desc {
+            font-size: 12px;
+            color: #888;
+        }
+
+        .timeline-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: 600;
+            margin-left: 8px;
+        }
+
+        .timeline-badge.success, .timeline-badge.completed, .timeline-badge.complete {
+            background: rgba(0, 200, 83, 0.15);
+            color: #00c853;
+        }
+        .timeline-badge.pending, .timeline-badge.receiving {
+            background: rgba(255, 193, 7, 0.15);
+            color: #ffc107;
+        }
+        .timeline-badge.failed {
+            background: rgba(255, 68, 68, 0.15);
+            color: #ff4444;
+        }
+
+        .timeline-filter {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+        }
+
+        .timeline-filter-btn {
+            padding: 6px 12px;
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 51, 51, 0.2);
+            border-radius: 4px;
+            color: #888;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+
+        .timeline-filter-btn:hover {
+            border-color: rgba(255, 51, 51, 0.4);
+            color: #fff;
+        }
+
+        .timeline-filter-btn.active {
+            background: rgba(255, 51, 51, 0.1);
+            border-color: rgba(255, 51, 51, 0.5);
+            color: rgba(255, 51, 51, 0.9);
+        }
+
         /* Print/PDF Styles */
         @media print {
             .navbar, .nav-menu, .map-controls, .btn-refresh, .loading-overlay { display: none !important; }
@@ -410,6 +534,24 @@
             </div>
         </div>
 
+        <!-- Operation Timeline Section -->
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">Operation Timeline</h2>
+                <button class="btn-refresh" onclick="loadTimeline()">↻ Refresh</button>
+            </div>
+            <div class="timeline-filter">
+                <button class="timeline-filter-btn active" data-filter="all" onclick="filterTimeline('all')">All</button>
+                <button class="timeline-filter-btn" data-filter="beacon" onclick="filterTimeline('beacon')">Beacons</button>
+                <button class="timeline-filter-btn" data-filter="task" onclick="filterTimeline('task')">Tasks</button>
+                <button class="timeline-filter-btn" data-filter="exfil" onclick="filterTimeline('exfil')">Exfils</button>
+                <button class="timeline-filter-btn" data-filter="stager" onclick="filterTimeline('stager')">Stagers</button>
+            </div>
+            <div class="timeline-container" id="timelineContainer">
+                <div style="text-align: center; color: #666; padding: 20px;">Loading timeline...</div>
+            </div>
+        </div>
+
         <!-- Stager Sessions Section -->
         <div class="section">
             <div class="section-header">
@@ -498,13 +640,24 @@
         }
 
         function updateStats() {
-            if (!infraData) return;
+            // Stats are now loaded from /api/stats for accurate totals
+        }
 
-            const dnsCount = infraData.dns_servers.length;
-            const beaconCount = infraData.beacons.length;
+        // Load stats from dedicated stats API for accurate total counts
+        async function loadStats() {
+            try {
+                const response = await authFetch('/api/stats');
+                if (!response) return;
+                const stats = await response.json();
 
-            document.getElementById('dnsCount').textContent = dnsCount;
-            document.getElementById('beaconCount').textContent = beaconCount;
+                // Use total counts from database, not just active
+                document.getElementById('dnsCount').textContent = stats.dns_servers || 0;
+                document.getElementById('beaconCount').textContent = stats.beacons || 0;
+                document.getElementById('stagerCount').textContent = stats.stager_sessions || 0;
+                document.getElementById('exfilCount').textContent = stats.exfil_transfers || 0;
+            } catch (error) {
+                console.error('Error loading stats:', error);
+            }
         }
 
         function renderMap() {
@@ -691,11 +844,81 @@
         // Load all report data
         async function loadAllData() {
             await Promise.all([
+                loadStats(),
                 loadInfrastructure(),
+                loadTimeline(),
                 loadStagerSessions(),
                 loadExfilSessions()
             ]);
             renderTTPs();
+        }
+
+        // Timeline data and current filter
+        let timelineEvents = [];
+        let currentTimelineFilter = 'all';
+
+        // Load timeline events
+        async function loadTimeline() {
+            try {
+                const response = await authFetch('/api/timeline?limit=200');
+                if (!response) return;
+                const result = await response.json();
+                if (result.success && result.data) {
+                    timelineEvents = result.data.events || [];
+                    renderTimeline();
+                }
+            } catch (error) {
+                console.error('Error loading timeline:', error);
+                document.getElementById('timelineContainer').innerHTML =
+                    '<div style="text-align: center; color: #666; padding: 20px;">Failed to load timeline</div>';
+            }
+        }
+
+        // Render timeline with current filter
+        function renderTimeline() {
+            const container = document.getElementById('timelineContainer');
+            let events = timelineEvents;
+
+            // Apply filter
+            if (currentTimelineFilter !== 'all') {
+                events = events.filter(e => e.category === currentTimelineFilter);
+            }
+
+            if (!events || events.length === 0) {
+                container.innerHTML = '<div style="text-align: center; color: #666; padding: 20px;">No timeline events</div>';
+                return;
+            }
+
+            container.innerHTML = events.map(event => {
+                const time = new Date(event.timestamp * 1000);
+                const timeStr = time.toLocaleString();
+                const statusClass = (event.status || '').toLowerCase();
+
+                return `
+                    <div class="timeline-event ${event.category}">
+                        <div class="timeline-header">
+                            <span class="timeline-title">
+                                ${escapeHtml(event.title)}
+                                ${event.status ? `<span class="timeline-badge ${statusClass}">${event.status}</span>` : ''}
+                            </span>
+                            <span class="timeline-time">${timeStr}</span>
+                        </div>
+                        <div class="timeline-desc">${escapeHtml(event.description)}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // Filter timeline by category
+        function filterTimeline(category) {
+            currentTimelineFilter = category;
+
+            // Update button states
+            document.querySelectorAll('.timeline-filter-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.filter === category);
+            });
+
+            renderTimeline();
         }
 
         // Load stager sessions
@@ -706,7 +929,6 @@
                 const result = await response.json();
                 if (result.success) {
                     renderStagerTable(result.data || []);
-                    document.getElementById('stagerCount').textContent = (result.data || []).length;
                 }
             } catch (error) {
                 console.error('Error loading stager sessions:', error);
@@ -719,7 +941,7 @@
                 tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: #666;">No stager sessions</td></tr>';
                 return;
             }
-            tbody.innerHTML = sessions.slice(0, 10).map(s => {
+            tbody.innerHTML = sessions.map(s => {
                 const progress = s.total_chunks > 0 ? Math.round((s.chunks_delivered / s.total_chunks) * 100) : 0;
                 const status = s.completed ? 'completed' : (s.chunks_delivered > 0 ? 'receiving' : 'pending');
                 return `
@@ -738,13 +960,12 @@
         // Load exfil sessions
         async function loadExfilSessions() {
             try {
-                const response = await authFetch('/api/exfil/transfers?limit=50');
+                const response = await authFetch('/api/exfil/transfers?limit=500');
                 if (!response) return;
                 const result = await response.json();
                 if (result.success && result.data) {
                     const transfers = result.data.transfers || [];
                     renderExfilTable(transfers);
-                    document.getElementById('exfilCount').textContent = transfers.length;
                 }
             } catch (error) {
                 console.error('Error loading exfil sessions:', error);
@@ -757,7 +978,7 @@
                 tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: #666;">No exfil sessions</td></tr>';
                 return;
             }
-            tbody.innerHTML = transfers.slice(0, 10).map(t => {
+            tbody.innerHTML = transfers.map(t => {
                 const progress = t.total_chunks > 0 ? Math.round((t.received_chunks / t.total_chunks) * 100) : 0;
                 const status = (t.status || 'receiving').toLowerCase();
                 return `

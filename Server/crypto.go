@@ -97,14 +97,14 @@ func base36Encode(data []byte) string {
 	if len(data) == 0 {
 		return ""
 	}
-	
+
 	// Prepend a 0x01 byte to preserve leading zeros
 	// This ensures the BigInt representation doesn't lose leading zeros
 	// The decoder will strip this sentinel byte
 	withSentinel := make([]byte, len(data)+1)
 	withSentinel[0] = 0x01
 	copy(withSentinel[1:], data)
-	
+
 	// Convert bytes to big integer
 	num := new(big.Int)
 	num.SetBytes(withSentinel)
@@ -120,7 +120,7 @@ func base36Decode(encoded string) ([]byte, error) {
 	if encoded == "" {
 		return []byte{}, nil
 	}
-	
+
 	// Parse base36 string to big integer
 	num := new(big.Int)
 	num, ok := num.SetString(encoded, 36)
@@ -130,13 +130,13 @@ func base36Decode(encoded string) ([]byte, error) {
 
 	// Convert to bytes
 	bytes := num.Bytes()
-	
+
 	// Check for and strip sentinel byte (0x01 prefix added by encoder)
 	// This restores the original byte array including any leading zeros
 	if len(bytes) > 0 && bytes[0] == 0x01 {
 		return bytes[1:], nil
 	}
-	
+
 	// Fallback for legacy data without sentinel (backward compatibility)
 	return bytes, nil
 }

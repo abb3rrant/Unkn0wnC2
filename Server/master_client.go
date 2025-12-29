@@ -88,19 +88,19 @@ type CheckinRequest struct {
 }
 
 type CheckinResponse struct {
-	Success                bool                   `json:"success"`
-	Message                string                 `json:"message"`
-	PendingCaches          []StagerCacheTask      `json:"pending_caches,omitempty"`          // Stager chunks to cache
-	DomainUpdates          []string               `json:"domain_updates,omitempty"`          // New domains to add
-	CompletedExfilSessions []string               `json:"completed_exfil_sessions,omitempty"`
-	MissingChunkRequests   []MissingChunkRequest  `json:"missing_chunk_requests,omitempty"`  // Chunks Master needs
+	Success                bool                  `json:"success"`
+	Message                string                `json:"message"`
+	PendingCaches          []StagerCacheTask     `json:"pending_caches,omitempty"` // Stager chunks to cache
+	DomainUpdates          []string              `json:"domain_updates,omitempty"` // New domains to add
+	CompletedExfilSessions []string              `json:"completed_exfil_sessions,omitempty"`
+	MissingChunkRequests   []MissingChunkRequest `json:"missing_chunk_requests,omitempty"` // Chunks Master needs
 }
 
 // MissingChunkRequest represents a request for missing chunks from Master
 type MissingChunkRequest struct {
-	Type          string `json:"type"`            // "task" or "exfil"
-	ID            string `json:"id"`              // task_id or session_id
-	Tag           string `json:"tag,omitempty"`   // exfil session tag for distributed lookup
+	Type          string `json:"type"`          // "task" or "exfil"
+	ID            string `json:"id"`            // task_id or session_id
+	Tag           string `json:"tag,omitempty"` // exfil session tag for distributed lookup
 	TotalChunks   int    `json:"total_chunks"`
 	MissingChunks []int  `json:"missing_chunks"`
 }

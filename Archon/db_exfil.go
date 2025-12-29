@@ -757,7 +757,7 @@ func (d *MasterDatabase) tryAssembleExfilTransferTx(tx *sql.Tx, sessionID string
 	// Debug: Get min and max chunk indices to identify gaps
 	var minIdx, maxIdx int
 	tx.QueryRow(`SELECT MIN(chunk_index), MAX(chunk_index) FROM exfil_chunks WHERE session_id = ?`, sessionID).Scan(&minIdx, &maxIdx)
-	
+
 	if actualChunkCount < total {
 		// Find missing chunks for debugging
 		missing := []int{}

