@@ -26,13 +26,85 @@ import (
 
 // Global variables
 var (
-	c2Manager              *C2Manager           // c2Manager handles all C2 operations including beacon management and tasking
-	masterClient           *MasterClient        // masterClient handles communication with Master Server (distributed mode only)
-	debugMode              bool                 // debugMode enables verbose logging for troubleshooting
-	encryptedResponseCache map[string]string    // Cache encrypted responses by query hash
-	responseCacheMutex     sync.RWMutex         // Mutex for encrypted response cache
-	responseCacheExpiry    map[string]time.Time // Track when cached responses should expire
+	c2Manager              *C2Manager             // c2Manager handles all C2 operations including beacon management and tasking
+	masterClient           *MasterClient          // masterClient handles communication with Master Server (distributed mode only)
+	debugMode              bool                   // debugMode enables verbose logging for troubleshooting
+	encryptedResponseCache map[string]string      // Cache encrypted responses by query hash
+	responseCacheMutex     sync.RWMutex           // Mutex for encrypted response cache
+	responseCacheExpiry    map[string]time.Time   // Track when cached responses should expire
+	forwardRateLimiter     *ForwardingRateLimiter // Rate limiter for DNS forwarding abuse prevention
 )
+
+// ForwardingRateLimiter tracks DNS query volume and pauses forwarding during abuse
+type ForwardingRateLimiter struct {
+	mutex          sync.RWMutex
+	queryCount     int64         // Queries in current window
+	windowStart    time.Time     // Start of current counting window
+	windowDuration time.Duration // How long each counting window lasts
+	threshold      int64         // Max queries per window before pausing
+	pausedUntil    time.Time     // When forwarding will resume
+	pauseDuration  time.Duration // How long to pause when threshold exceeded
+	totalPauses    int64         // Stats: total number of times we've paused
+	queriesBlocked int64         // Stats: queries blocked during pause
+}
+
+// NewForwardingRateLimiter creates a rate limiter with configurable thresholds
+func NewForwardingRateLimiter(queriesPerSecond int64, pauseSeconds int) *ForwardingRateLimiter {
+	return &ForwardingRateLimiter{
+		windowDuration: 1 * time.Second,
+		threshold:      queriesPerSecond,
+		pauseDuration:  time.Duration(pauseSeconds) * time.Second,
+		windowStart:    time.Now(),
+	}
+}
+
+// ShouldForward checks if forwarding is allowed and updates counters
+// Returns true if forwarding is allowed, false if rate limited
+func (r *ForwardingRateLimiter) ShouldForward() bool {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+
+	now := time.Now()
+
+	// Check if we're currently paused
+	if now.Before(r.pausedUntil) {
+		r.queriesBlocked++
+		return false
+	}
+
+	// Check if we need to start a new window
+	if now.Sub(r.windowStart) >= r.windowDuration {
+		r.queryCount = 0
+		r.windowStart = now
+	}
+
+	r.queryCount++
+
+	// Check if threshold exceeded
+	if r.queryCount > r.threshold {
+		r.pausedUntil = now.Add(r.pauseDuration)
+		r.totalPauses++
+		LogWarn("DNS forwarding paused for %v due to high query volume (%d queries/sec). Pause #%d",
+			r.pauseDuration, r.queryCount, r.totalPauses)
+		return false
+	}
+
+	return true
+}
+
+// IsPaused returns true if forwarding is currently paused
+func (r *ForwardingRateLimiter) IsPaused() bool {
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+	return time.Now().Before(r.pausedUntil)
+}
+
+// GetStats returns current rate limiter statistics
+func (r *ForwardingRateLimiter) GetStats() (pauses int64, blocked int64, currentRate int64) {
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+	return r.totalPauses, r.queriesBlocked, r.queryCount
+}
 
 // Build-time version information (set via -ldflags during build)
 var (
@@ -503,27 +575,10 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 						RData: ip4,
 					})
 				}
-			} else {
-				// In distributed mode, also respond to queries for other potential C2 domains
-				// Check if this looks like a C2 query (long subdomain with multiple labels)
-				parts := strings.Split(qname, ".")
-				if len(parts) >= 3 {
-					subdomain := strings.Join(parts[:len(parts)-2], ".")
-					// If subdomain is long and contains only alphanumeric chars, likely C2
-					if len(subdomain) > 20 {
-						randomIP := generateRandomIP()
-						if ip4, ok2 := toIPv4(randomIP); ok2 {
-							answers = append(answers, DNSResourceRecord{
-								Name:  q.Name,
-								Type:  1,
-								Class: 1,
-								TTL:   1, // Short TTL for C2-like queries
-								RData: ip4,
-							})
-						}
-					}
-				}
 			}
+			// NOTE: Removed fallback that responded to ANY long subdomain query
+			// This was acting as an open resolver and being abused by bots
+			// Legitimate C2 traffic is handled by processBeaconQuery() above
 
 		case 28: // AAAA
 			if ipStr, ok := zoneAAAA[qname]; ok {
@@ -661,8 +716,17 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 		}
 	}
 
-	// Query not for our domain - forward to upstream DNS server
+	// Query not for our domain - forward to upstream DNS server (with rate limiting)
 	if cfg.ForwardDNS {
+		// Check rate limiter to prevent DNS amplification abuse
+		if forwardRateLimiter != nil && !forwardRateLimiter.ShouldForward() {
+			// Rate limited - return REFUSED instead of forwarding
+			if debugMode {
+				logf("[RateLimit] Forwarding blocked due to high query volume")
+			}
+			respMsg := buildResponse(msg, nil, 5 /*REFUSED*/)
+			return serializeMessage(respMsg), nil
+		}
 		return forwardDNSQuery(packet, cfg.UpstreamDNS)
 	}
 
@@ -729,6 +793,12 @@ func main() {
 	// Initialize encrypted response cache
 	encryptedResponseCache = make(map[string]string)
 	responseCacheExpiry = make(map[string]time.Time)
+
+	// Initialize DNS forwarding rate limiter to prevent amplification abuse
+	// Threshold: 50 queries/second, Pause: 60 seconds when exceeded
+	// This only affects forwarding to upstream DNS, not C2 communications
+	forwardRateLimiter = NewForwardingRateLimiter(50, 60)
+	LogInfo("DNS forwarding rate limiter: 50 queries/sec, 60s pause on abuse")
 
 	// Start cache cleanup routine (runs every 10 minutes)
 	go func() {
