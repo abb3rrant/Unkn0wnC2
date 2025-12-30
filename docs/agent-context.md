@@ -132,6 +132,38 @@ cd Stager && make
 cd exfil-client && cargo build --release
 ```
 
+## Builder UI Options
+
+Operators build components via Archon WebUI (`/builder`). Available options:
+
+### Beacon Client
+| Option | Values | Effect |
+|--------|--------|--------|
+| Platform | linux, windows | Target OS |
+| Architecture | amd64, 386, arm64, armv7l, arm | Target arch |
+| Static Linking | ✓/✗ | CGO_ENABLED=0 for static |
+| Check-in Interval | min/max seconds | Sleep between check-ins |
+
+### Exfil Client
+| Option | Values | Effect |
+|--------|--------|--------|
+| Platform | linux, windows | Target OS |
+| Architecture | amd64, 386, arm64, armv7l, arm | Target arch |
+| Static Linking | ✓/✗ | musl (static) vs glibc (dynamic) |
+| Use TXT Records | ✓/✗ | TXT ACK vs A record IP+1 ACK |
+| Jitter | min/max ms | Delay between chunks |
+| Chunks Per Burst | count | Rapid chunks before pause |
+| Burst Pause | ms | Pause between bursts |
+
+### Stager
+| Option | Values | Effect |
+|--------|--------|--------|
+| Client Binary | dropdown | Pre-built beacon to stage |
+| Platform | linux, windows | Target OS |
+| Architecture | amd64, 386, arm64, armv7l, arm | Target arch |
+| Static Linking | ✓/✗ | -static flag for gcc |
+| Payload URL | URL (optional) | HTTP fallback instead of DNS |
+
 ## Testing
 
 ```bash
@@ -158,11 +190,19 @@ cd Client && go test -v
 **Problem**: Tasks assigned via one DNS server weren't visible to others in Shadow Mesh.
 **Fix**: Added `masterTaskIDs` map to track Master↔Local task ID mapping. All DNS servers now sync task IDs from Master and can forward results correctly.
 
-### TXT Record Exfil with ACK/NACK (NEW)
-**Change**: Exfil responses moved from A records to TXT records.
-- `ACK` - Frame received successfully
-- `NACK` - Frame rejected/error
-- Clients retry on NACK before continuing
+### Exfil ACK Modes (Configurable)
+**Change**: Exfil client now supports both A record and TXT record ACK modes.
+- **A Records (default)**: ACK = server IP + 1 (e.g., server `1.2.3.4` → ACK `1.2.3.5`)
+- **TXT Records (optional)**: ACK = "ACK" text, NACK = "NACK" text
+- Operators choose mode via "Use TXT Records" checkbox in builder UI
+
+### Static Linking Options (NEW)
+**Change**: Build UI now offers static vs dynamic linking for all components.
+- **Beacon Client (Go)**: `CGO_ENABLED=0` for static, `CGO_ENABLED=1` for dynamic
+- **Exfil Client (Rust)**: musl targets for static, glibc targets for dynamic
+- **Stager (C)**: `-static` flag for static linking
+- Default: Static (works on any glibc version, slightly larger binaries)
+- Operators toggle via "Static Linking" checkbox in builder UI
 
 ### Memory Leak Fixes
 - `masterTaskIDs` - Now cleaned up when tasks complete

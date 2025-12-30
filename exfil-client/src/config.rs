@@ -17,6 +17,7 @@ pub struct Config {
     pub burst_pause_ms: u64,
     pub chunk_retry_attempts: usize,
     pub chunk_retry_delay_ms: u64,
+    pub use_txt_records: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -37,6 +38,8 @@ struct FileConfig {
     chunk_retry_attempts: usize,
     #[serde(default = "default_chunk_retry_delay_ms")]
     chunk_retry_delay_ms: u64,
+    #[serde(default)]
+    use_txt_records: bool,
 }
 
 static EMBEDDED: Lazy<Config> = Lazy::new(|| Config {
@@ -51,6 +54,7 @@ static EMBEDDED: Lazy<Config> = Lazy::new(|| Config {
     burst_pause_ms: 12000,
     chunk_retry_attempts: default_chunk_retry_attempts(),
     chunk_retry_delay_ms: default_chunk_retry_delay_ms(),
+    use_txt_records: false, // Default to A records
 });
 
 static RUNTIME: OnceCell<Config> = OnceCell::new();
@@ -166,6 +170,7 @@ impl From<FileConfig> for Config {
             burst_pause_ms: value.burst_pause_ms,
             chunk_retry_attempts: value.chunk_retry_attempts,
             chunk_retry_delay_ms: value.chunk_retry_delay_ms,
+            use_txt_records: value.use_txt_records,
         }
     }
 }

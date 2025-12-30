@@ -726,6 +726,14 @@
                     <div class="help-text">Static binaries work on any glibc version but are ~10-20% larger</div>
                 </div>
 
+                <div class="form-group">
+                    <label class="form-label" style="display: flex; align-items: center; gap: 10px;">
+                        <input type="checkbox" id="exfilUseTxtRecords" style="width: 16px; height: 16px;">
+                        Use TXT Records
+                    </label>
+                    <div class="help-text">Default uses A records for ACK. TXT records provide explicit ACK/NACK responses</div>
+                </div>
+
                 <div class="help-text" style="margin-top:-5px; margin-bottom:10px;">
                     Windows ARM builds must run on a Windows host with Visual Studio Build Tools installed. Linux ARM targets require the matching cross toolchains.
                 </div>
@@ -1268,6 +1276,7 @@
             const chunksPerBurst = parseInt(document.getElementById('exfilChunksPerBurst').value, 10) || 0;
             const burstPause = parseInt(document.getElementById('exfilBurstPause').value, 10) || 0;
             const staticLink = document.getElementById('exfilStaticLink').checked;
+            const useTxtRecords = document.getElementById('exfilUseTxtRecords').checked;
 
             showLoading('Building exfil client... This can take a couple of minutes');
 
@@ -1282,7 +1291,8 @@
                         burst_pause_ms: burstPause,
                         platform,
                         architecture,
-                        static_link: staticLink
+                        static_link: staticLink,
+                        use_txt_records: useTxtRecords
                     })
                 });
 
