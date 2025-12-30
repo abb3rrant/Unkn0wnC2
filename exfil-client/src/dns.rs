@@ -165,7 +165,9 @@ impl DnsTransmitter {
             .iter()
             .find_map(|record| match record.data() {
                 Some(RData::TXT(txt)) => {
-                    let txt_data: String = txt.iter().map(|s| s.to_string()).collect();
+                    let txt_data: String = txt.iter()
+                        .map(|s| String::from_utf8_lossy(s).into_owned())
+                        .collect();
                     if txt_data == "ACK" {
                         Some(true)
                     } else {

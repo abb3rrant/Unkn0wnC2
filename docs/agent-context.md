@@ -152,6 +152,45 @@ cd Client && go test -v
 | `Archon/db.go` | Master database operations |
 | `Stager/stager.c` | C stager implementation |
 
+## Recent Changes (2025-12)
+
+### Shadow Mesh Task ID Sync (FIXED)
+**Problem**: Tasks assigned via one DNS server weren't visible to others in Shadow Mesh.
+**Fix**: Added `masterTaskIDs` map to track Master↔Local task ID mapping. All DNS servers now sync task IDs from Master and can forward results correctly.
+
+### TXT Record Exfil with ACK/NACK (NEW)
+**Change**: Exfil responses moved from A records to TXT records.
+- `ACK` - Frame received successfully
+- `NACK` - Frame rejected/error
+- Clients retry on NACK before continuing
+
+### Memory Leak Fixes
+- `masterTaskIDs` - Now cleaned up when tasks complete
+- `pendingLabelChunks` - Cleared after assembly to prevent unbounded growth
+
+### Report Page Enhancements
+- Shows total history (not just active sessions)
+- Added timeline view showing chronological events
+- Filter by event type: Beacons, Tasks, Exfils, Stagers
+
+### DNS Abuse Prevention (Rate Limiting)
+**Problem**: DNS servers were being abused by bots for resolution (amplification attacks).
+**Fix**: Added `ForwardingRateLimiter` in `Server/main.go`:
+- Threshold: 50 queries/sec (configurable)
+- Pause duration: 60 seconds when exceeded
+- Only affects forwarding to upstream - C2 comms unaffected
+- Removed open resolver fallback (random IP for unknown queries)
+
+### Test Coverage
+Comprehensive test suite in `Server/server_test.go`:
+- Crypto (AES-GCM, Base36 encoding)
+- Beacon registration, tasking, result processing
+- Stager session creation, message parsing
+- Exfil frame processing, tag tracking
+- DNS parsing helpers
+- Rate limiter functionality
+- Full integration workflow
+
 ## Related Docs
 
 - `docs/TTPS.md` - MITRE ATT&CK mapping

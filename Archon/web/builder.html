@@ -620,6 +620,14 @@
                 </div>
 
                 <div class="form-group">
+                    <label class="form-label" style="display: flex; align-items: center; gap: 10px;">
+                        <input type="checkbox" id="clientStaticLink" checked style="width: 16px; height: 16px;">
+                        Static Linking
+                    </label>
+                    <div class="help-text">Static binaries work on any glibc version but are slightly larger</div>
+                </div>
+
+                <div class="form-group">
                     <label class="form-label">Check-in Interval (seconds)</label>
                     <div class="form-row">
                         <input type="number" id="clientSleepMin" class="form-input" placeholder="Min" value="60">
@@ -710,8 +718,16 @@
                     </select>
                 </div>
 
+                <div class="form-group">
+                    <label class="form-label" style="display: flex; align-items: center; gap: 10px;">
+                        <input type="checkbox" id="exfilStaticLink" checked style="width: 16px; height: 16px;">
+                        Static Linking (musl)
+                    </label>
+                    <div class="help-text">Static binaries work on any glibc version but are ~10-20% larger</div>
+                </div>
+
                 <div class="help-text" style="margin-top:-5px; margin-bottom:10px;">
-                    Windows ARM builds must run on a Windows host with Visual Studio Build Tools installed. Linux ARM targets require the matching <code>*-linux-gnu-gcc</code> cross toolchains.
+                    Windows ARM builds must run on a Windows host with Visual Studio Build Tools installed. Linux ARM targets require the matching cross toolchains.
                 </div>
 
                 <button class="btn-build" onclick="buildExfilClient()">Build Exfil Client</button>
@@ -751,6 +767,14 @@
                         <option value="armv7l">ARM v7 (armv7l)</option>
                         <option value="arm">ARM (generic)</option>
                     </select>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" style="display: flex; align-items: center; gap: 10px;">
+                        <input type="checkbox" id="stagerStaticLink" checked style="width: 16px; height: 16px;">
+                        Static Linking
+                    </label>
+                    <div class="help-text">Static binaries work on any glibc version but are ~50-100KB larger</div>
                 </div>
 
                 <div class="form-group">
@@ -1178,6 +1202,7 @@
             const exfilJitterMax = parseInt(document.getElementById('clientExfilJitterMax').value);
             const chunksPerBurst = parseInt(document.getElementById('clientChunksPerBurst').value);
             const burstPause = parseInt(document.getElementById('clientBurstPause').value);
+            const staticLink = document.getElementById('clientStaticLink').checked;
 
             showLoading('Building client... This may take a minute');
 
@@ -1193,7 +1218,8 @@
                         exfil_jitter_min_ms: exfilJitterMin,
                         exfil_jitter_max_ms: exfilJitterMax,
                         exfil_chunks_per_burst: chunksPerBurst,
-                        exfil_burst_pause_ms: burstPause
+                        exfil_burst_pause_ms: burstPause,
+                        static_link: staticLink
                     })
                 });
 
@@ -1241,6 +1267,7 @@
             const jitterMax = parseInt(document.getElementById('exfilJitterMax').value, 10) || 0;
             const chunksPerBurst = parseInt(document.getElementById('exfilChunksPerBurst').value, 10) || 0;
             const burstPause = parseInt(document.getElementById('exfilBurstPause').value, 10) || 0;
+            const staticLink = document.getElementById('exfilStaticLink').checked;
 
             showLoading('Building exfil client... This can take a couple of minutes');
 
@@ -1254,7 +1281,8 @@
                         chunks_per_burst: chunksPerBurst,
                         burst_pause_ms: burstPause,
                         platform,
-                        architecture
+                        architecture,
+                        static_link: staticLink
                     })
                 });
 
@@ -1287,6 +1315,7 @@
             const jitterMax = parseInt(document.getElementById('stagerJitterMax').value);
             const chunksPerBurst = parseInt(document.getElementById('stagerChunksPerBurst').value);
             const burstPause = parseInt(document.getElementById('stagerBurstPause').value);
+            const staticLink = document.getElementById('stagerStaticLink').checked;
 
             if (!clientBinaryID) {
                 showAlert('Please select a client binary', 'error');
@@ -1306,7 +1335,8 @@
                         jitter_min_ms: jitterMin,
                         jitter_max_ms: jitterMax,
                         chunks_per_burst: chunksPerBurst,
-                        burst_pause_ms: burstPause
+                        burst_pause_ms: burstPause,
+                        static_link: staticLink
                     })
                 });
 
