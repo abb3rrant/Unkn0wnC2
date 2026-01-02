@@ -270,6 +270,7 @@ type DNSServerBuildRequest struct {
 	UpstreamDNS   string `json:"upstream_dns"`
 	ServerAddress string `json:"server_address"`
 	EncryptionKey string `json:"encryption_key"`
+	ForwardDNS    *bool  `json:"forward_dns"` // nil = default (true), explicit false disables forwarding
 }
 
 type ClientBuildRequest struct {
@@ -1021,6 +1022,10 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 		return "", fmt.Errorf("domain replacement failed - example.com still present")
 	}
 	configStr = strings.ReplaceAll(configStr, "UpstreamDNS:   \"8.8.8.8:53\",", fmt.Sprintf("UpstreamDNS:   \"%s\",", req.UpstreamDNS))
+	// ForwardDNS: if explicitly set to false, disable DNS forwarding (default is true)
+	if req.ForwardDNS != nil && !*req.ForwardDNS {
+		configStr = strings.ReplaceAll(configStr, "ForwardDNS:    true,", "ForwardDNS:    false,")
+	}
 	configStr = strings.ReplaceAll(configStr, "EncryptionKey: \"MySecretC2Key123!@#DefaultChange\",", fmt.Sprintf("EncryptionKey: \"%s\",", req.EncryptionKey))
 	if req.ServerAddress != "" {
 		configStr = strings.ReplaceAll(configStr, "SvrAddr:       \"1.2.3.4\",", fmt.Sprintf("SvrAddr:       \"%s\",", req.ServerAddress))

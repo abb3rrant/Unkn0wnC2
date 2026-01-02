@@ -566,6 +566,14 @@
                 </div>
 
                 <div class="form-group">
+                    <label class="form-label" style="display: flex; align-items: center; gap: 10px;">
+                        <input type="checkbox" id="dnsServerForwardDNS" checked style="width: 16px; height: 16px;">
+                        Enable DNS Forwarding
+                    </label>
+                    <div class="help-text">Forward non-C2 queries to upstream DNS. Disable to only respond to C2 traffic.</div>
+                </div>
+
+                <div class="form-group" id="dnsServerUpstreamGroup">
                     <label class="form-label">Upstream DNS</label>
                     <input type="text" id="dnsServerUpstream" class="form-input" placeholder="8.8.8.8:53" value="8.8.8.8:53">
                     <div class="help-text">DNS server to forward non-C2 queries to</div>
@@ -1137,6 +1145,7 @@
             const upstream = document.getElementById('dnsServerUpstream').value.trim();
             const address = document.getElementById('dnsServerAddress').value.trim();
             const encKey = document.getElementById('dnsServerEncKey').value.trim();
+            const forwardDNS = document.getElementById('dnsServerForwardDNS').checked;
 
             if (!domain) {
                 showAlert('Domain is required', 'error');
@@ -1159,7 +1168,8 @@
                         ns2: '', // Will be auto-generated as ns2.domain
                         upstream_dns: upstream || '8.8.8.8:53',
                         server_address: address,
-                        encryption_key: encKey || ''
+                        encryption_key: encKey || '',
+                        forward_dns: forwardDNS
                     })
                 });
 
@@ -1377,10 +1387,24 @@
             window.location.href = '/login';
         }
 
+        // Toggle upstream DNS field visibility based on forwarding checkbox
+        function setupForwardDNSToggle() {
+            const checkbox = document.getElementById('dnsServerForwardDNS');
+            const upstreamGroup = document.getElementById('dnsServerUpstreamGroup');
+
+            function updateVisibility() {
+                upstreamGroup.style.display = checkbox.checked ? 'block' : 'none';
+            }
+
+            checkbox.addEventListener('change', updateVisibility);
+            updateVisibility(); // Set initial state
+        }
+
         // Initialize
         loadDNSServers();
         loadClientBinaries();
         loadBuilds();
+        setupForwardDNSToggle();
 
         async function loadBuilds() {
             try {

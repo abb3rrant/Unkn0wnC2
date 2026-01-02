@@ -125,6 +125,92 @@ func logf(format string, args ...interface{}) {
 	}
 }
 
+// preFlightCheck performs diagnostic checks before attempting to bind to the DNS port.
+// It checks for common issues that prevent binding and provides actionable error messages.
+func preFlightCheck(bindAddr string, bindPort int) {
+	addr := fmt.Sprintf("%s:%d", bindAddr, bindPort)
+	LogInfo("Running pre-flight checks for %s...", addr)
+
+	// Check 1: Privileged port requires root or capabilities
+	if bindPort < 1024 {
+		if os.Geteuid() != 0 {
+			LogWarn("Port %d is privileged (< 1024) but not running as root (euid=%d)", bindPort, os.Geteuid())
+			LogWarn("Fix: Run with sudo, or grant capability: sudo setcap 'cap_net_bind_service=+ep' <binary>")
+		} else {
+			LogInfo("✓ Running as root (euid=0) - privileged port access OK")
+		}
+	}
+
+	// Check 2: Is the port already in use?
+	// Try a quick UDP dial to see if something responds, or try to bind briefly
+	testConn, err := net.ListenPacket("udp4", addr)
+	if err != nil {
+		if strings.Contains(err.Error(), "address already in use") {
+			LogError("Port %d is already in use!", bindPort)
+			LogError("Common causes:")
+			LogError("  - systemd-resolved (Ubuntu): sudo systemctl stop systemd-resolved")
+			LogError("  - dnsmasq: sudo systemctl stop dnsmasq")
+			LogError("  - Another DNS server (bind9, named, etc.)")
+			LogError("Diagnostic: sudo lsof -i :%d  OR  sudo ss -tulpn | grep :%d", bindPort, bindPort)
+		} else if strings.Contains(err.Error(), "permission denied") {
+			LogError("Permission denied binding to port %d", bindPort)
+			LogError("Fix: Run with sudo, or grant capability: sudo setcap 'cap_net_bind_service=+ep' <binary>")
+		} else if strings.Contains(err.Error(), "cannot assign requested address") {
+			LogError("Cannot assign address %s - IP does not exist on this system", bindAddr)
+			LogError("Available interfaces:")
+			if ifaces, ifErr := net.Interfaces(); ifErr == nil {
+				for _, iface := range ifaces {
+					if addrs, addrErr := iface.Addrs(); addrErr == nil {
+						for _, a := range addrs {
+							LogError("  - %s: %s", iface.Name, a.String())
+						}
+					}
+				}
+			}
+			LogError("Fix: Use -bind-addr 0.0.0.0 to bind to all interfaces")
+		} else {
+			LogError("Pre-flight bind test failed: %v", err)
+		}
+		// Don't return error here - let the actual bind attempt fail with full context
+	} else {
+		testConn.Close()
+		LogInfo("✓ Port %d is available", bindPort)
+	}
+
+	// Check 3: Verify bind address exists (if not 0.0.0.0)
+	if bindAddr != "0.0.0.0" && bindAddr != "" {
+		ip := net.ParseIP(bindAddr)
+		if ip == nil {
+			LogWarn("Invalid bind address format: %s", bindAddr)
+		} else {
+			found := false
+			if ifaces, err := net.Interfaces(); err == nil {
+				for _, iface := range ifaces {
+					if addrs, err := iface.Addrs(); err == nil {
+						for _, a := range addrs {
+							if ipnet, ok := a.(*net.IPNet); ok {
+								if ipnet.IP.Equal(ip) {
+									found = true
+									LogInfo("✓ Bind address %s found on interface %s", bindAddr, iface.Name)
+									break
+								}
+							}
+						}
+					}
+					if found {
+						break
+					}
+				}
+			}
+			if !found {
+				LogWarn("Bind address %s not found on any interface - binding may fail", bindAddr)
+			}
+		}
+	}
+
+	LogInfo("Pre-flight checks complete")
+}
+
 /*
 	forwardDNSQuery forwards a DNS query to an upstream DNS server and returns the response.
 	This is used to forward legitimate DNS queries when the server is acting as an
@@ -830,6 +916,9 @@ func main() {
 	// Initialize C2Manager with database for persistence
 	c2Manager = NewC2Manager(debugMode, cfg.EncryptionKey, cfg.StagerJitter, DatabaseFileName, cfg.Domain)
 	serverStart := time.Now()
+
+	// Run pre-flight checks to diagnose common binding issues
+	preFlightCheck(cfg.BindAddr, cfg.BindPort)
 
 	bindAddr := fmt.Sprintf("%s:%d", cfg.BindAddr, cfg.BindPort)
 

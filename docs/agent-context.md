@@ -119,6 +119,30 @@ Embedded at build time via `config.json`:
 ### Progress Reporting
 Stager progress reported to Master every 10 chunks (configurable in `c2_manager.go` line ~2278).
 
+### DNS Server Won't Bind to Port 53
+**Common causes and fixes:**
+
+| Issue | Diagnostic | Fix |
+|-------|-----------|-----|
+| Privileged port | `echo $EUID` (0 = root) | `sudo ./dns-server` or `sudo setcap 'cap_net_bind_service=+ep' ./dns-server` |
+| Port in use | `sudo lsof -i :53` | Stop conflicting service (see below) |
+| Address not found | Check pre-flight output | Use `-bind-addr 0.0.0.0` |
+
+**Common port 53 conflicts:**
+```bash
+# systemd-resolved (Ubuntu/Debian)
+sudo systemctl stop systemd-resolved
+sudo systemctl disable systemd-resolved
+
+# dnsmasq
+sudo systemctl stop dnsmasq
+
+# Check what's using port 53
+sudo ss -tulpn | grep :53
+```
+
+The DNS server runs pre-flight checks automatically and will log specific errors with suggested fixes.
+
 ## Build Commands
 
 ```bash
@@ -135,6 +159,15 @@ cd exfil-client && cargo build --release
 ## Builder UI Options
 
 Operators build components via Archon WebUI (`/builder`). Available options:
+
+### DNS Server
+| Option | Values | Effect |
+|--------|--------|--------|
+| Domain | string | Authoritative domain (e.g., c2.example.com) |
+| Server Address | IP | Public IP for A record responses |
+| Enable DNS Forwarding | ✓/✗ | Forward non-C2 queries to upstream (default: enabled) |
+| Upstream DNS | IP:port | Upstream resolver (default: 8.8.8.8:53) |
+| Encryption Key | string | AES key (auto-generated if empty) |
 
 ### Beacon Client
 | Option | Values | Effect |
@@ -183,6 +216,38 @@ cd Client && go test -v
 | `Archon/api.go` | REST API handlers |
 | `Archon/db.go` | Master database operations |
 | `Stager/stager.c` | C stager implementation |
+
+## Recent Changes (2026-01)
+
+### DNS Forwarding Toggle (NEW)
+**Change**: Added "Enable DNS Forwarding" checkbox to DNS Server builder UI.
+- **Enabled (default)**: Forwards non-C2 queries to upstream DNS (acts as resolver)
+- **Disabled**: Only responds to C2 traffic, returns REFUSED for all other queries
+- Upstream DNS field auto-hides when forwarding disabled
+- Files changed: `Archon/builder.go` (DNSServerBuildRequest struct), `Archon/web/builder.html`
+
+### Pre-flight Diagnostic Checks (NEW)
+**Change**: DNS server now runs diagnostic checks before binding to port 53.
+- Checks if running as root for privileged ports (< 1024)
+- Detects if port is already in use (systemd-resolved, dnsmasq, etc.)
+- Validates bind address exists on system interfaces
+- Provides actionable fix suggestions for each issue
+- File: `Server/main.go` (`preFlightCheck()` function)
+
+Example output:
+```
+[INFO] Running pre-flight checks for 0.0.0.0:53...
+[WARN] Port 53 is privileged (< 1024) but not running as root (euid=1000)
+[WARN] Fix: Run with sudo, or grant capability: sudo setcap 'cap_net_bind_service=+ep' <binary>
+[ERROR] Port 53 is already in use!
+[ERROR] Diagnostic: sudo lsof -i :53  OR  sudo ss -tulpn | grep :53
+```
+
+### Rate Limiter Does NOT Affect C2
+**Confirmed**: The `ForwardingRateLimiter` only affects DNS forwarding to upstream servers.
+- C2 traffic (beacons, exfil, stagers) is processed and returned BEFORE forwarding code path
+- Rate limiting at line 722 in `Server/main.go` is only reached for non-C2, non-domain queries
+- Tests `TestForwardingRateLimiter` and `TestQueryNotForOurDomain` validate this behavior
 
 ## Recent Changes (2025-12)
 
