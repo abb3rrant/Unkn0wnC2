@@ -43,6 +43,15 @@ Unkn0wnC2 addresses two critical gaps that plague traditional DNS C2 frameworks:
 - Simple domain management: check/uncheck configured domains in real-time
 - Resilient infrastructure that adapts to takedowns and blocking
 
+## **Bonus Feature: Malleable Payloads**
+- Supports payload formats to avoid entropy based detections. (ex. cdn-ani34dn343.asset-ndfhb328sdns93n.domain.com)
+- Utilize A records or TXT records for Communications
+- Staged registration to minimize payload size
+- Max sized payload options to get under 60 byte Payloads
+- Disable encryption to get even smaller Payloads
+
+
+
 ---
 
 ## 🎯 **The Goal of Unkn0wnC2**
