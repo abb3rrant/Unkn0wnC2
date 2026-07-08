@@ -1,0 +1,23 @@
+{
+  "bind_addr": "0.0.0.0",
+  "bind_port": 8443,
+  "tls_cert": "certs/master.crt",
+  "tls_key": "certs/master.key",
+  "database_path": "master.db",
+  "jwt_secret": "CHANGE_THIS_SECRET_IN_PRODUCTION",
+  "session_timeout": 60,
+  "debug": false,
+  "dns_servers": [
+    {
+      "id": "dns1",
+      "domain": "your-domain.com",
+      "api_key": "GENERATE_SECURE_API_KEY_HERE",
+      "address": "YOUR_DNS_SERVER_IP",
+      "enabled": true
+    }
+  ],
+  "admin_credentials": {
+    "username": "admin",
+    "password": "CHANGE_ME_ON_FIRST_LOGIN"
+  }
+}

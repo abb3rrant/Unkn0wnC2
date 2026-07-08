@@ -1,0 +1,1478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/png" href="/static/logo.png">
+    <title>Beacon Management - Unkn0wnC2</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=ITC+Benguiat:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 40px 30px;
+            overflow: hidden;
+        }
+
+        .beacon-header {
+            background: rgba(10, 10, 10, 0.98);
+            border: 1px solid rgba(255, 51, 51, 0.15);
+            border-top: 2px solid rgba(255, 51, 51, 0.3);
+            border-radius: 0;
+            padding: 25px;
+            margin-bottom: 30px;
+            clip-path: polygon(0 0, 100% 0, 100% calc(100% - 15px), calc(100% - 15px) 100%, 0 100%);
+            position: relative;
+        }
+
+        .beacon-header::before {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            right: 0;
+            width: 15px;
+            height: 15px;
+            background: linear-gradient(135deg, transparent 50%, rgba(255, 51, 51, 0.3) 50%);
+        }
+
+        .beacon-title {
+            font-family: 'Bebas Neue', 'Arial Narrow', sans-serif;
+            font-size: 36px;
+            font-weight: 700;
+            color: rgba(255, 51, 51, 0.8);
+            margin-bottom: 20px;
+            letter-spacing: 3px;
+            text-shadow: 0 0 15px rgba(255, 51, 51, 0.15);
+        }
+
+        .beacon-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            font-size: 13px;
+        }
+
+        .beacon-info-item {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .beacon-info-label {
+            color: #555;
+            font-size: 11px;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+        }
+
+        .beacon-info-value {
+            color: #fff;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+
+        .status-online {
+            background: rgba(0, 255, 0, 0.2);
+            color: #00ff00;
+        }
+
+        .status-offline {
+            background: rgba(255, 0, 0, 0.2);
+            color: #ff6666;
+        }
+
+        .status-exfiltrating {
+            background: rgba(255, 165, 0, 0.2);
+            color: #ffa500;
+        }
+
+        .status-registering {
+            background: rgba(79, 195, 247, 0.2);
+            color: #4fc3f7;
+        }
+
+        /* DNS Contacts Styling */
+        .dns-contact-item {
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 51, 51, 0.08);
+            border-radius: 6px;
+            padding: 15px;
+            margin-bottom: 10px;
+        }
+
+        .dns-contact-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid rgba(255, 51, 51, 0.08);
+        }
+
+        .dns-contact-domain {
+            font-family: 'Courier New', monospace;
+            font-size: 16px;
+            color: #00ff00;
+            font-weight: bold;
+        }
+
+        .dns-contact-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+        }
+
+        .dns-contact-detail {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .detail-label {
+            color: #555;
+            font-size: 11px;
+            text-transform: uppercase;
+        }
+
+        .detail-value {
+            color: #fff;
+            font-size: 13px;
+        }
+
+        .section {
+            background: rgba(10, 10, 10, 0.98);
+            border: 1px solid rgba(255, 51, 51, 0.15);
+            border-left: 3px solid rgba(255, 51, 51, 0.3);
+            border-radius: 0;
+            padding: 25px;
+            margin-bottom: 20px;
+            clip-path: polygon(0 0, 100% 0, 100% calc(100% - 20px), calc(100% - 20px) 100%, 0 100%);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .section::before {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            right: 0;
+            width: 20px;
+            height: 20px;
+            background: linear-gradient(135deg, transparent 50%, rgba(255, 51, 51, 0.3) 50%);
+        }
+
+        .section-title {
+            font-family: 'Bebas Neue', sans-serif;
+            font-size: 22px;
+            color: rgba(255, 51, 51, 0.8);
+            margin-bottom: 20px;
+            letter-spacing: 2px;
+        }
+
+        .task-form {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .task-input {
+            flex: 1;
+            padding: 12px;
+            padding-left: 18px;
+            background: rgba(0, 0, 0, 0.5);
+            border: none;
+            border-left: 3px solid rgba(255, 51, 51, 0.5);
+            border-bottom: 1px solid rgba(255, 51, 51, 0.15);
+            border-radius: 0;
+            color: #fff;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%);
+        }
+
+        .task-input:focus {
+            outline: none;
+            border-left-color: rgba(255, 51, 51, 0.8);
+            border-bottom-color: rgba(255, 51, 51, 0.8);
+            box-shadow: -2px 0 15px rgba(255, 51, 51, 0.15);
+        }
+
+        .btn-task {
+            padding: 12px 24px;
+            padding-left: 30px;
+            background: rgba(255, 51, 51, 0.08);
+            border: none;
+            border-left: 2px solid rgba(255, 51, 51, 0.15);
+            border-radius: 0;
+            color: rgba(255, 51, 51, 0.8);
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn-task::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 0;
+            height: 100%;
+            background: rgba(255, 51, 51, 0.08);
+            transition: width 0.3s ease;
+        }
+
+        .btn-task:hover::before {
+            width: 100%;
+        }
+
+        .btn-task:hover {
+            border-left-width: 4px;
+            box-shadow: -3px 0 12px rgba(255, 51, 51, 0.4);
+        }
+
+        .btn-task:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .tasks-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            min-width: 0;
+            overflow: hidden;
+        }
+
+        .task-item {
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 51, 51, 0.08);
+            border-radius: 6px;
+            padding: 15px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            overflow: hidden;
+            min-width: 0;
+            max-width: 100%;
+            box-sizing: border-box;
+        }
+
+        .task-item:hover {
+            border-color: rgba(255, 51, 51, 0.5);
+            background: rgba(255, 51, 51, 0.05);
+        }
+
+        .task-item.selected {
+            border-color: rgba(255, 51, 51, 0.8);
+            background: rgba(255, 51, 51, 0.05);
+        }
+
+        .task-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .task-id {
+            font-weight: bold;
+            color: rgba(255, 51, 51, 0.8);
+        }
+
+        .task-status {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+
+        .task-status.pending {
+            background: rgba(150, 150, 150, 0.2);
+            color: #999;
+        }
+
+        .task-status.sent {
+            background: rgba(135, 206, 250, 0.2);
+            color: #87ceeb;
+        }
+
+        .task-status.exfiltrating {
+            background: rgba(255, 165, 0, 0.2);
+            color: #ffa500;
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        .task-status.assembling {
+            background: rgba(100, 149, 237, 0.2);
+            color: #6495ed;
+        }
+
+        .task-status.completed {
+            background: rgba(0, 255, 0, 0.2);
+            color: #00ff00;
+        }
+
+        .task-status.failed {
+            background: rgba(255, 0, 0, 0.2);
+            color: #ff6666;
+        }
+
+        .task-status.expired {
+            background: rgba(128, 128, 128, 0.2);
+            color: #999;
+            border: 1px dashed #666;
+        }
+
+        .task-status.partial {
+            background: rgba(255, 140, 0, 0.2);
+            color: #ff8c00;
+            border: 1px solid rgba(255, 140, 0, 0.5);
+        }
+
+        .task-status.timeout {
+            background: rgba(160, 82, 45, 0.2);
+            color: #cd853f;
+        }
+
+        .task-command {
+            color: #ccc;
+            font-size: 13px;
+            margin-bottom: 5px;
+            word-break: break-all;
+            overflow-wrap: anywhere;
+            white-space: pre-wrap;
+            max-width: 100%;
+            overflow: hidden;
+        }
+
+        .task-time {
+            color: #444;
+            font-size: 11px;
+        }
+
+        .result-viewer {
+            background: rgba(0, 0, 0, 0.7);
+            border: 1px solid rgba(255, 51, 51, 0.15);
+            border-radius: 6px;
+            padding: 15px;
+            margin-top: 15px;
+            max-height: 400px;
+            overflow-y: auto;
+            overflow-x: hidden;
+        }
+
+        .result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid rgba(255, 51, 51, 0.08);
+        }
+
+        .result-title {
+            color: rgba(255, 51, 51, 0.8);
+            font-weight: bold;
+        }
+
+        .btn-copy {
+            padding: 6px 12px;
+            background: rgba(255, 51, 51, 0.05);
+            border: 1px solid rgba(255, 51, 51, 0.15);
+            border-radius: 4px;
+            color: rgba(255, 51, 51, 0.8);
+            cursor: pointer;
+            font-size: 11px;
+            transition: all 0.3s ease;
+        }
+
+        .btn-copy:hover {
+            background: rgba(255, 51, 51, 0.08);
+        }
+
+        .result-content {
+            color: #fff;
+            white-space: pre-wrap;
+            word-break: break-all;
+            overflow-wrap: anywhere;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.5;
+            max-width: 100%;
+            overflow: hidden;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #444;
+        }
+
+        .empty-state-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+            opacity: 0.3;
+        }
+
+        .no-result {
+            text-align: center;
+            padding: 20px;
+            color: #555;
+            font-style: italic;
+        }
+
+        .btn-refresh {
+            padding: 6px 12px;
+            background: rgba(255, 51, 51, 0.05);
+            border: 1px solid rgba(255, 51, 51, 0.15);
+            border-radius: 4px;
+            color: rgba(255, 51, 51, 0.8);
+            cursor: pointer;
+            font-size: 11px;
+            transition: all 0.3s ease;
+            margin-left: 10px;
+        }
+
+        .btn-refresh:hover {
+            background: rgba(255, 51, 51, 0.08);
+        }
+
+        .progress-bar-container {
+            width: 100%;
+            height: 8px;
+            background: rgba(0, 0, 0, 0.5);
+            border-radius: 4px;
+            margin-top: 5px;
+            overflow: hidden;
+        }
+
+        /* Inline progress bars for task list */
+        .task-progress-inline {
+            margin-top: 8px;
+            margin-bottom: 5px;
+        }
+
+        .progress-bar-container-small {
+            width: 100%;
+            height: 4px;
+            background: rgba(0, 0, 0, 0.5);
+            border-radius: 2px;
+            overflow: hidden;
+            margin-bottom: 3px;
+        }
+
+        .progress-bar-small {
+            height: 100%;
+            background: linear-gradient(90deg, #ff3333, #ff6666);
+            transition: width 0.3s ease;
+            border-radius: 2px;
+        }
+
+        .progress-text-small {
+            font-size: 10px;
+            color: #555;
+        }
+
+        .task-actions {
+            display: flex;
+            gap: 6px;
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .task-action-btn {
+            padding: 4px 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+            transition: all 0.2s;
+        }
+
+        .task-action-btn.fail-btn {
+            background: rgba(255, 100, 100, 0.2);
+            color: #ff6666;
+            border: 1px solid rgba(255, 100, 100, 0.3);
+        }
+
+        .task-action-btn.fail-btn:hover {
+            background: rgba(255, 100, 100, 0.4);
+        }
+
+        .task-action-btn.delete-btn {
+            background: rgba(255, 50, 50, 0.2);
+            color: #ff4444;
+            border: 1px solid rgba(255, 50, 50, 0.3);
+        }
+
+        .task-action-btn.delete-btn:hover {
+            background: rgba(255, 50, 50, 0.4);
+        }
+    </style>
+</head>
+<body>
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="spinner"></div>
+    </div>
+
+    <nav class="navbar">
+        <div class="navbar-brand">Unkn0wnC2</div>
+        <div class="navbar-right">
+            <div class="ws-status" id="wsStatus">
+                <div class="ws-status-dot"></div>
+                <span class="ws-status-text">Connecting...</span>
+            </div>
+            <div class="user-info">Logged in as <strong id="username">admin</strong></div>
+            <button class="btn-logout" onclick="logout()">Logout</button>
+        </div>
+    </nav>
+
+    <!-- Navigation Menu -->
+    <div class="nav-menu">
+        <a href="/dashboard" class="nav-btn">Dashboard</a>
+        <a href="/builder" class="nav-btn">Builder</a>
+        <a href="/stager" class="nav-btn">Stager Sessions</a>
+        <a href="/exfils" class="nav-btn">Exfils</a>
+        <a href="/logs" class="nav-btn">Logs</a>
+        <a href="/report" class="nav-btn">Report</a>
+        <a href="/users" class="nav-btn" id="usersNavBtn">Users</a>
+    </div>
+
+    <div class="container">
+        <!-- Beacon Info Header -->
+        <div class="beacon-header" id="beaconHeader">
+            <div class="beacon-title">Loading beacon information...</div>
+        </div>
+
+        <!-- Build Configuration Section -->
+        <div class="section" id="buildConfigSection" style="display: none;">
+            <h2 class="section-title">Build Configuration</h2>
+            <div id="buildConfigContent"></div>
+        </div>
+
+        <!-- DNS Contact History Section -->
+        <div class="section">
+            <h2 class="section-title">DNS-Server Contact History</h2>
+            <div id="dnsContactsSection">
+                <div class="empty-state">
+                    <div class="empty-state-icon" id="dnsEmptyIcon"></div>
+                    <div>Loading DNS contacts...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- DNS Domains Section -->
+        <div class="section" style="margin-bottom: 20px;">
+            <div class="section-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <h3 style="color: rgba(255, 51, 51, 0.8); margin: 0; font-size: 16px;">DNS Domains</h3>
+                <button class="btn-refresh" onclick="loadBeaconDomains()" style="font-size: 12px; padding: 4px 10px;">↻ Refresh</button>
+            </div>
+            <div id="beaconDomainsContainer" style="margin-bottom: 10px;">
+                <span style="color: #555;">Loading domains...</span>
+            </div>
+        </div>
+
+        <!-- Create Task Section -->
+        <div class="section">
+            <h2 class="section-title">Create Task</h2>
+            <div id="alertContainer"></div>
+            <div class="task-form">
+                <textarea
+                    id="commandInput"
+                    class="task-input"
+                    placeholder="Enter command (e.g., whoami, ls, ipconfig)"
+                    maxlength="10000"
+                    rows="2"
+                    oninput="updateCommandCounter()"
+                    onkeydown="handleEnterKey(event)"
+                    style="resize: vertical; min-height: 36px; font-family: monospace;"
+                ></textarea>
+                <span id="commandCounter" style="font-size: 11px; color: #888; margin-left: 10px;">0/10000</span>
+                <button class="btn-task" onclick="createTask()">Execute Task</button>
+            </div>
+            <div style="font-size: 11px; color: #888; margin-top: 5px;">
+                Commands over 150 chars are delivered in multiple DNS requests (chunked delivery)
+            </div>
+        </div>
+
+        <!-- Tasks List Section -->
+        <div class="section">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h2 class="section-title" style="margin: 0;">Task History</h2>
+                <button class="btn-refresh" onclick="loadTasks()">↻ Refresh</button>
+            </div>
+            <div id="tasksList" style="overflow: hidden; width: 100%;">
+                <div class="empty-state">
+                    <div class="empty-state-icon" id="tasksEmptyIcon"></div>
+                    <div>No tasks yet</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Result Viewer Section -->
+        <div id="resultSection" style="display: none;">
+            <div class="section">
+                <h2 class="section-title">Task Result</h2>
+                <div class="result-viewer">
+                    <div class="result-header">
+                        <div class="result-title" id="resultTitle">Task Output</div>
+                        <button class="btn-copy" id="btnCopy" onclick="copyResult()">Copy</button>
+                    </div>
+                    <div class="result-content" id="resultContent"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/shared.js"></script>
+    <script>
+        const API_BASE = window.location.origin;
+        const MAX_TASK_COMMAND_LENGTH = 10000; // must match MaxTaskCommandLength in Archon/db.go
+        const MAX_SINGLE_CHUNK_PAYLOAD = 150; // must match MaxTaskChunkPayload in Archon/db.go
+        let currentBeaconId = '';
+        let currentBeaconHostname = '';
+        let selectedTaskId = null;
+        let autoRefreshInterval = null;
+        let isCreatingTask = false; // Prevent multiple simultaneous task creations
+
+        // Get URL parameters
+        function getUrlParams() {
+            const params = new URLSearchParams(window.location.search);
+            return {
+                beaconId: params.get('id'),
+                hostname: params.get('hostname')
+            };
+        }
+
+        // Note: getCookie, authFetch, escapeHtml, formatTimestamp, isOnline, logout,
+        // showToast, showLoading, hideLoading, debounce are all in shared.js
+
+        async function loadBeaconDomains() {
+            try {
+                const response = await authFetch(`/api/beacons/${currentBeaconId}/domains`);
+                if (!response) return;
+                const result = await response.json();
+                if (!result.success) return;
+
+                const container = document.getElementById('beaconDomainsContainer');
+                const domains = result.data.domains || [];
+
+                if (domains.length === 0) {
+                    container.innerHTML = '<span style="color: #555;">No domains available. Beacon will register domains on next check-in.</span>';
+                } else {
+                    container.innerHTML = domains.map(d => {
+                        const checked = d.active ? 'checked' : '';
+                        const color = d.active ? '#4CAF50' : '#666';
+                        const label = d.active ? '' : ' (inactive)';
+                        return `<label style="display: flex; align-items: center; gap: 8px; padding: 5px; cursor: pointer; color: ${color};">
+                            <input type="checkbox" ${checked} data-domain="${escapeHtml(d.domain)}" onchange="toggleBeaconDomain(this)" style="width: 14px; height: 14px;">
+                            ${escapeHtml(d.domain)}${label}
+                        </label>`;
+                    }).join('');
+                }
+            } catch (error) {
+                console.error('Failed to load beacon domains:', error);
+            }
+        }
+
+        async function toggleBeaconDomain(checkbox) {
+            const domain = checkbox.dataset.domain;
+            const active = checkbox.checked;
+
+            try {
+                const response = await authFetch(`/api/beacons/${currentBeaconId}/domains`, {
+                    method: 'PUT',
+                    body: JSON.stringify({ domain, active })
+                });
+                if (!response) {
+                    checkbox.checked = !active; // revert
+                    return;
+                }
+                const result = await response.json();
+                if (!result.success) {
+                    showToast(result.message || 'Failed to update domain', 'error');
+                    checkbox.checked = !active; // revert
+                    return;
+                }
+                showToast(result.message, 'success');
+                loadBeaconDomains(); // refresh to show updated state
+            } catch (error) {
+                showToast('Failed to update domain', 'error');
+                checkbox.checked = !active; // revert
+            }
+        }
+
+        // Show alert message
+        function showAlert(message, type = 'success') {
+            const container = document.getElementById('alertContainer');
+            const alert = document.createElement('div');
+            alert.className = `alert alert-${type}`;
+            alert.textContent = message;
+            container.innerHTML = '';
+            container.appendChild(alert);
+
+            setTimeout(() => {
+                alert.remove();
+            }, 5000);
+        }
+
+        // Load beacon information
+        async function loadBeaconInfo() {
+            try {
+                const response = await authFetch(`/api/beacons/${currentBeaconId}`);
+                if (!response) return;
+
+                const beacon = await response.json();
+
+                const isOnlineStatus = isOnline(beacon.last_seen);
+                let statusBadge;
+                if (beacon.status === 'exfiltrating') {
+                    statusBadge = '<span class="status-badge status-exfiltrating">Exfiltrating</span>';
+                } else if (beacon.registration_stage != null && beacon.registration_stage < 3) {
+                    statusBadge = '<span class="status-badge status-registering">Registering ' + beacon.registration_stage + '/3</span>';
+                } else if (isOnlineStatus) {
+                    statusBadge = '<span class="status-badge status-online">Online</span>';
+                } else {
+                    statusBadge = '<span class="status-badge status-offline">Offline</span>';
+                }
+
+                document.getElementById('beaconHeader').innerHTML = `
+                    <div class="beacon-title">Beacon: ${escapeHtml(beacon.hostname || currentBeaconHostname || beacon.id)}</div>
+                    <div class="beacon-info">
+                        <div class="beacon-info-item">
+                            <div class="beacon-info-label">Beacon ID</div>
+                            <div class="beacon-info-value"><code>${escapeHtml(beacon.id)}</code></div>
+                        </div>
+                        <div class="beacon-info-item">
+                            <div class="beacon-info-label">Name</div>
+                            <div class="beacon-info-value">${beacon.beacon_name ? escapeHtml(beacon.beacon_name) : '<em style="color:#555">unnamed</em>'}</div>
+                        </div>
+                        <div class="beacon-info-item">
+                            <div class="beacon-info-label">Hostname</div>
+                            <div class="beacon-info-value">${beacon.hostname ? escapeHtml(beacon.hostname) : '<em style="color:#555">pending</em>'}</div>
+                        </div>
+                        <div class="beacon-info-item">
+                            <div class="beacon-info-label">User</div>
+                            <div class="beacon-info-value">${beacon.username ? escapeHtml(beacon.username) : '<em style="color:#555">pending</em>'}</div>
+                        </div>
+                        <div class="beacon-info-item">
+                            <div class="beacon-info-label">Operating System</div>
+                            <div class="beacon-info-value">${beacon.os ? escapeHtml(beacon.os) : '<em style="color:#555">pending</em>'}</div>
+                        </div>
+                        <div class="beacon-info-item">
+                            <div class="beacon-info-label">Architecture</div>
+                            <div class="beacon-info-value">${beacon.arch ? escapeHtml(beacon.arch) : '<em style="color:#555">pending</em>'}</div>
+                        </div>
+                        <div class="beacon-info-item">
+                            <div class="beacon-info-label">IP Address</div>
+                            <div class="beacon-info-value">${escapeHtml(beacon.ip_address)}</div>
+                        </div>
+                        <div class="beacon-info-item">
+                            <div class="beacon-info-label">Last Seen</div>
+                            <div class="beacon-info-value">${formatTimestamp(beacon.last_seen)}</div>
+                        </div>
+                        <div class="beacon-info-item">
+                            <div class="beacon-info-label">Status</div>
+                            <div class="beacon-info-value">${statusBadge}</div>
+                        </div>
+                        ${beacon.build_id ? `
+                        <div class="beacon-info-item">
+                            <div class="beacon-info-label">Build ID</div>
+                            <div class="beacon-info-value"><code style="color:#0f0">${escapeHtml(beacon.build_id)}</code></div>
+                        </div>` : ''}
+                    </div>
+                `;
+
+                // Load and display build config if available
+                if (beacon.build_config) {
+                    renderBuildConfig(beacon.build_config);
+                }
+
+                // Load DNS contact history
+                loadDNSContacts();
+            } catch (error) {
+                console.error('Error loading beacon info:', error);
+                showAlert('Failed to load beacon information', 'error');
+            }
+        }
+
+        function renderBuildConfig(config) {
+            const section = document.getElementById('buildConfigSection');
+            const content = document.getElementById('buildConfigContent');
+            if (!section || !content) return;
+
+            const sleepMin = config.sleep_min || 0;
+            const sleepMax = config.sleep_max || 0;
+            const jitterMin = config.exfil_jitter_min_ms || 0;
+            const jitterMax = config.exfil_jitter_max_ms || 0;
+            const chunksPerBurst = config.exfil_chunks_per_burst || 0;
+            const burstPause = config.exfil_burst_pause_ms || 0;
+            const maxSubdomain = config.max_subdomain_length || 0;
+            const payloadFmt = config.payload_format || '';
+            const encrypted = config.encrypted !== false;
+            const beaconName = config.beacon_name || '';
+            const resolver = config.resolver || 'system default';
+            const stagedReg = config.staged_registration || false;
+
+            content.innerHTML = `
+                <div class="beacon-info" style="flex-wrap: wrap;">
+                    <div class="beacon-info-item">
+                        <div class="beacon-info-label">Sleep Interval</div>
+                        <div class="beacon-info-value">${sleepMin}s – ${sleepMax}s</div>
+                    </div>
+                    <div class="beacon-info-item">
+                        <div class="beacon-info-label">Exfil Jitter</div>
+                        <div class="beacon-info-value">${jitterMin}ms – ${jitterMax}ms</div>
+                    </div>
+                    <div class="beacon-info-item">
+                        <div class="beacon-info-label">Chunks/Burst</div>
+                        <div class="beacon-info-value">${chunksPerBurst || 'default'}</div>
+                    </div>
+                    <div class="beacon-info-item">
+                        <div class="beacon-info-label">Burst Pause</div>
+                        <div class="beacon-info-value">${burstPause ? burstPause + 'ms' : 'default'}</div>
+                    </div>
+                    <div class="beacon-info-item">
+                        <div class="beacon-info-label">Max Subdomain</div>
+                        <div class="beacon-info-value">${maxSubdomain || 'auto'}</div>
+                    </div>
+                    <div class="beacon-info-item">
+                        <div class="beacon-info-label">Payload Format</div>
+                        <div class="beacon-info-value"><code>${payloadFmt ? escapeHtml(payloadFmt) : 'default'}</code></div>
+                    </div>
+                    <div class="beacon-info-item">
+                        <div class="beacon-info-label">Encrypted</div>
+                        <div class="beacon-info-value">${encrypted ? '<span style="color:#0f0">Yes</span>' : '<span style="color:#f33">No</span>'}</div>
+                    </div>
+                    <div class="beacon-info-item">
+                        <div class="beacon-info-label">Resolver</div>
+                        <div class="beacon-info-value">${escapeHtml(resolver)}</div>
+                    </div>
+                    <div class="beacon-info-item">
+                        <div class="beacon-info-label">Staged Registration</div>
+                        <div class="beacon-info-value">${stagedReg ? '<span style="color:#4fc3f7">Yes</span>' : 'No'}</div>
+                    </div>
+                    ${beaconName ? `
+                    <div class="beacon-info-item">
+                        <div class="beacon-info-label">Original Name</div>
+                        <div class="beacon-info-value">${escapeHtml(beaconName)}</div>
+                    </div>` : ''}
+                </div>
+                ${renderMalleablePhases(config)}
+            `;
+            section.style.display = '';
+        }
+
+        function renderMalleablePhases(config) {
+            const reg = config.registration_phase;
+            const poll = config.poll_phase;
+            const exfil = config.data_exfil_phase;
+            if (!reg && !poll && !exfil) return '';
+
+            function phaseRow(label, phase) {
+                if (!phase) return '';
+                const qt = phase.query_type || 'TXT';
+                const enc = phase.encrypted !== false ? '<span style="color:#0f0">AES</span>' : '<span style="color:#f33">plain</span>';
+                const fmt = phase.payload_format || 'default';
+                let extra = '';
+                if (qt === 'A') {
+                    const ack = phase.a_record_ack_ip || '127.0.0.1';
+                    extra = ' ACK=' + ack;
+                    if (phase.a_record_task_ip) extra += ' Task=' + phase.a_record_task_ip;
+                    if (phase.txt_follow_up_secs) extra += ' follow-up=' + phase.txt_follow_up_secs + 's';
+                }
+                return '<div class="beacon-info-item" style="min-width:220px;">' +
+                    '<div class="beacon-info-label">' + label + '</div>' +
+                    '<div class="beacon-info-value" style="font-size:11px;">' + qt + ' / ' + enc +
+                    (fmt !== 'default' ? ' / <code>' + escapeHtml(fmt) + '</code>' : '') +
+                    (extra ? ' <span style="color:#888;">' + extra + '</span>' : '') +
+                    '</div></div>';
+            }
+
+            return '<div style="margin-top:12px; padding-top:8px; border-top:1px solid rgba(255,51,51,0.1);">' +
+                '<div style="color:rgba(255,51,51,0.5); font-size:10px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">Malleable Phases</div>' +
+                '<div class="beacon-info" style="flex-wrap:wrap;">' +
+                phaseRow('Registration', reg) +
+                phaseRow('Poll', poll) +
+                phaseRow('Data Exfil', exfil) +
+                '</div></div>';
+        }
+
+        // Load DNS contact history for this beacon
+        async function loadDNSContacts() {
+            try {
+                const response = await authFetch(`/api/beacons/${currentBeaconId}/dns-contacts`);
+                if (!response) return;
+
+                const contacts = await response.json();
+
+                if (!contacts || contacts.length === 0) {
+                    document.getElementById('dnsContactsSection').innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-icon">${icons.listDashes}</div>
+                            <div>No DNS server contacts yet</div>
+                        </div>`;
+                    return;
+                }
+
+                const contactsHtml = contacts.map(contact => {
+                    return `
+                        <div class="dns-contact-item">
+                            <div class="dns-contact-header">
+                                <div class="dns-contact-domain">${escapeHtml(contact.dns_domain)}</div>
+                            </div>
+                            <div class="dns-contact-details">
+                                <div class="dns-contact-detail">
+                                    <span class="detail-label">First Contact:</span>
+                                    <span class="detail-value">${formatAbsoluteTimestamp(contact.first_contact)}</span>
+                                </div>
+                                <div class="dns-contact-detail">
+                                    <span class="detail-label">Last Contact:</span>
+                                    <span class="detail-value">${formatTimestamp(contact.last_contact)}</span>
+                                </div>
+                                <div class="dns-contact-detail">
+                                    <span class="detail-label">Total Contacts:</span>
+                                    <span class="detail-value">${contact.contact_count.toLocaleString()}</span>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+
+                document.getElementById('dnsContactsSection').innerHTML = contactsHtml;
+            } catch (error) {
+                console.error('Error loading DNS contacts:', error);
+                document.getElementById('dnsContactsSection').innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">${icons.warning}</div>
+                        <div>Failed to load DNS contact history</div>
+                    </div>`;
+            }
+        }
+
+        // Load tasks for this beacon
+        async function loadTasks() {
+            try {
+                const response = await authFetch('/api/tasks?limit=100');
+                if (!response) return;
+
+                const data = await response.json();
+                const allTasks = data.tasks || [];
+                
+                // Filter tasks for this beacon
+                const beaconTasks = allTasks.filter(task => task.beacon_id === currentBeaconId);
+
+                if (beaconTasks.length === 0) {
+                    document.getElementById('tasksList').innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-icon">${icons.listDashes}</div>
+                            <div>No tasks yet</div>
+                        </div>`;
+                    return;
+                }
+
+                const tasksHtml = beaconTasks.map(task => {
+                    // Determine display status and styling
+                    let displayStatus = task.status.toUpperCase();
+                    let statusClass = task.status;
+                    let progressHtml = '';
+
+                    // Enhanced status display for better clarity
+                    if (task.status === 'pending') {
+                        displayStatus = 'QUEUED';
+                    } else if (task.status === 'exfiltrating') {
+                        displayStatus = 'EXFILTRATING';
+                        statusClass = 'exfiltrating';
+                        // Show progress if available
+                        if (task.progress) {
+                            const prog = task.progress;
+                            progressHtml = `
+                                <div class="task-progress-inline">
+                                    <div class="progress-bar-container-small">
+                                        <div class="progress-bar-small" style="width: ${prog.progress}%"></div>
+                                    </div>
+                                    <div class="progress-text-small">${prog.received_chunks}/${prog.total_chunks} chunks (${prog.progress}%)</div>
+                                </div>`;
+                        }
+                    } else if (task.status === 'sent' && task.progress) {
+                        // Task is being executed and data is being exfiltrated
+                        const prog = task.progress;
+                        if (prog.received_chunks === 0) {
+                            displayStatus = 'EXECUTING';
+                        } else if (prog.received_chunks < prog.total_chunks) {
+                            displayStatus = 'EXFILTRATING';
+                            statusClass = 'exfiltrating';
+                            // Show inline progress bar
+                            progressHtml = `
+                                <div class="task-progress-inline">
+                                    <div class="progress-bar-container-small">
+                                        <div class="progress-bar-small" style="width: ${prog.progress}%"></div>
+                                    </div>
+                                    <div class="progress-text-small">${prog.received_chunks}/${prog.total_chunks} chunks (${prog.progress}%)</div>
+                                </div>`;
+                        } else {
+                            displayStatus = 'ASSEMBLING';
+                            statusClass = 'assembling';
+                        }
+                    } else if (task.status === 'sent') {
+                        displayStatus = 'SENT';
+                    } else if (task.status === 'failed') {
+                        displayStatus = 'FAILED';
+                        statusClass = 'failed';
+                    } else if (task.status === 'expired') {
+                        displayStatus = 'EXPIRED';
+                        statusClass = 'expired';
+                    } else if (task.status === 'partial') {
+                        displayStatus = 'PARTIAL';
+                        statusClass = 'partial';
+                        // Show what was received
+                        if (task.progress) {
+                            const prog = task.progress;
+                            progressHtml = `
+                                <div class="task-progress-inline">
+                                    <div style="color: #ff8c00; font-size: 11px;">
+                                        ${prog.received_chunks}/${prog.total_chunks} chunks received before failure
+                                    </div>
+                                </div>`;
+                        }
+                    } else if (task.status === 'timeout') {
+                        displayStatus = 'TIMEOUT';
+                        statusClass = 'timeout';
+                    }
+
+                    return `
+                        <div class="task-item ${selectedTaskId === task.id ? 'selected' : ''}" data-task-id="${escapeHtml(task.id)}" data-action="select-task">
+                            <div class="task-header">
+                                <span class="task-id">${escapeHtml(task.id)}</span>
+                                <span class="task-status ${statusClass}">${displayStatus}</span>
+                            </div>
+                            <div class="task-command">$ ${escapeHtml(task.command)}</div>
+                            ${progressHtml}
+                            <div class="task-time">Created: ${formatAbsoluteTimestamp(task.created_at)}</div>
+                            ${task.completed_at ? `<div class="task-time">Completed: ${formatAbsoluteTimestamp(task.completed_at)}</div>` : ''}
+                            <div class="task-actions" data-stop-propagation="true">
+                                ${task.status !== 'completed' && task.status !== 'failed' ? `<button class="task-action-btn fail-btn" data-task-id="${escapeHtml(task.id)}" data-action="fail-task" title="Mark as Failed">${icons.xCircle} Fail</button>` : ''}
+                                <button class="task-action-btn delete-btn" data-task-id="${escapeHtml(task.id)}" data-action="delete-task" title="Delete">${icons.trash} Delete</button>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+
+                document.getElementById('tasksList').innerHTML = tasksHtml;
+            } catch (error) {
+                console.error('Error loading tasks:', error);
+            }
+        }
+
+        // Select a task and load its result
+        async function selectTask(taskId) {
+            selectedTaskId = taskId;
+            loadTasks(); // Refresh to show selection
+
+            try {
+                const response = await authFetch(`/api/tasks/${taskId}`);
+                if (!response) return;
+
+                const task = await response.json();
+
+                const resultSection = document.getElementById('resultSection');
+                const resultTitle = document.getElementById('resultTitle');
+                const resultContent = document.getElementById('resultContent');
+
+                resultTitle.textContent = `Task ${task.id} - ${task.command}`;
+
+                if (task.status === 'completed' && task.result) {
+                    resultContent.textContent = task.result;
+                    resultSection.style.display = 'block';
+                } else if (task.status === 'exfiltrating' || (task.status === 'sent' && task.progress)) {
+                    // Show progress bar for tasks in progress
+                    const progress = task.progress;
+                    let statusMessage = '';
+                    let statusIcon = '';
+
+                    if (!progress || progress.received_chunks === 0) {
+                        statusIcon = icons.arrowUp;
+                        statusMessage = 'Beacon is sending results back...';
+                    } else if (progress.received_chunks < progress.total_chunks) {
+                        statusIcon = icons.arrowDown;
+                        statusMessage = `Exfiltrating results via Shadow Mesh (distributed across ${escapeHtml(String(task.dns_servers || 'multiple'))} DNS servers)`;
+                    } else {
+                        statusIcon = icons.dotsThree;
+                        statusMessage = 'All chunks received, assembling final result...';
+                    }
+
+                    if (progress) {
+                        resultContent.innerHTML = `
+                            <div class="no-result">
+                                <div style="margin-bottom: 10px;">${statusIcon}</div>
+                                <div style="font-size: 14px; margin-bottom: 20px;">${statusMessage}</div>
+                                <div class="progress-bar-container">
+                                    <div class="progress-bar" style="width: ${progress.progress}%"></div>
+                                </div>
+                                <div class="progress-text" style="margin-top: 10px; font-size: 13px;">
+                                    <strong>${progress.received_chunks} / ${progress.total_chunks} chunks</strong> (${progress.progress}%)
+                                </div>
+                                ${progress.status ? `<div style="color: #555; font-size: 11px; margin-top: 5px;">Status: ${progress.status}</div>` : ''}
+                            </div>`;
+                    } else {
+                        resultContent.innerHTML = `
+                            <div class="no-result">
+                                <div style="margin-bottom: 10px;">${statusIcon}</div>
+                                <div style="font-size: 14px;">${statusMessage}</div>
+                            </div>`;
+                    }
+                    resultSection.style.display = 'block';
+                } else if (task.status === 'pending') {
+                    resultContent.innerHTML = '<div class="no-result">Task queued, waiting for beacon check-in...</div>';
+                    resultSection.style.display = 'block';
+                } else if (task.status === 'sent') {
+                    resultContent.innerHTML = '<div class="no-result">Task sent, waiting for beacon to start execution...</div>';
+                    resultSection.style.display = 'block';
+                } else if (task.status === 'failed') {
+                    const failureReason = task.result || 'Unknown failure reason';
+                    resultContent.innerHTML = `
+                        <div class="no-result">
+                            <div style="margin-bottom: 10px;">${icon('xCircle', 32)}</div>
+                            <div style="font-size: 16px; margin-bottom: 10px; color: #ff6666;">Task Failed</div>
+                            <div style="color: #ff8888; margin: 15px 0; font-size: 13px; background: rgba(255,0,0,0.1); padding: 10px; border-radius: 4px;">
+                                ${escapeHtml(failureReason)}
+                            </div>
+                            <div style="color: #999; font-size: 12px; line-height: 1.6; margin-top: 15px;">
+                                Tasks are sent once and not retried automatically.<br>
+                                This task was marked as failed because the beacon did not execute it.<br>
+                                <br>
+                                <strong>Possible causes:</strong><br>
+                                • Beacon didn't receive the task (network issue)<br>
+                                • Beacon couldn't execute the command (permission/shell issue)<br>
+                                • Beacon crashed during execution<br>
+                                <br>
+                                You can create a new task if the beacon is still active.
+                            </div>
+                        </div>`;
+                    resultSection.style.display = 'block';
+                } else if (task.status === 'expired') {
+                    resultContent.innerHTML = `
+                        <div class="no-result">
+                            <div style="margin-bottom: 10px;">${icon('dotsThree', 32)}</div>
+                            <div style="font-size: 16px; margin-bottom: 10px;">Task Expired</div>
+                            <div style="color: #999; font-size: 13px;">
+                                Beacon did not check in within 48 hours
+                            </div>
+                            <div style="color: #444; margin-top: 15px; font-size: 12px; line-height: 1.6;">
+                                This task was automatically expired by the cleanup job.<br>
+                                The beacon may be offline or have a very long callback interval.<br>
+                                You can create a new task if the beacon comes back online.
+                            </div>
+                        </div>`;
+                    resultSection.style.display = 'block';
+                } else if (task.status === 'partial') {
+                    const prog = task.progress || {received_chunks: 0, total_chunks: 0};
+                    const percentReceived = prog.total_chunks > 0 
+                        ? Math.round((prog.received_chunks / prog.total_chunks) * 100) 
+                        : 0;
+                    resultContent.innerHTML = `
+                        <div class="no-result">
+                            <div style="margin-bottom: 10px;">${icon('warning', 32)}</div>
+                            <div style="font-size: 16px; margin-bottom: 10px;">Partial Result - Transfer Incomplete</div>
+                            <div style="color: #ff8c00; margin: 15px 0; font-size: 14px;">
+                                Received ${prog.received_chunks} of ${prog.total_chunks} chunks (${percentReceived}%)
+                            </div>
+                            <div style="color: #444; font-size: 12px; line-height: 1.6;">
+                                Beacon stopped responding before completing the transfer.<br>
+                                The beacon may have crashed, lost network, or been terminated.<br>
+                                <br>
+                                You can retry the task if the beacon comes back online.
+                            </div>
+                        </div>`;
+                    resultSection.style.display = 'block';
+                } else if (task.status === 'timeout') {
+                    resultContent.innerHTML = `
+                        <div class="no-result">
+                            <div style="margin-bottom: 10px;">${icon('dotsThree', 32)}</div>
+                            <div style="font-size: 16px; margin-bottom: 10px;">Task Timeout</div>
+                            <div style="color: #cd853f; margin: 15px 0; font-size: 13px;">
+                                Task execution exceeded the timeout limit
+                            </div>
+                            <div style="color: #444; font-size: 12px; line-height: 1.6;">
+                                The command may have hung or taken longer than expected.<br>
+                                Consider breaking down long-running tasks or increasing timeout limits.
+                            </div>
+                        </div>`;
+                    resultSection.style.display = 'block';
+                } else {
+                    resultContent.innerHTML = '<div class="no-result">No result available</div>';
+                    resultSection.style.display = 'block';
+                }
+            } catch (error) {
+                console.error('Error loading task result:', error);
+                showAlert('Failed to load task result', 'error');
+            }
+        }
+
+        // Create a new task
+        async function createTask() {
+            // Prevent multiple simultaneous task submissions
+            if (isCreatingTask) {
+                console.log('[Beacon] Task creation already in progress');
+                return;
+            }
+
+            const commandInput = document.getElementById('commandInput');
+            const command = commandInput.value.trim();
+
+            if (!command) {
+                showAlert('Please enter a command', 'error');
+                return;
+            }
+
+            const chunkCount = Math.ceil(command.length / MAX_SINGLE_CHUNK_PAYLOAD);
+            if (chunkCount > 1) {
+                if (!confirm(`This command is ${command.length} characters and will require ${chunkCount} DNS requests to deliver. Continue?`)) {
+                    return;
+                }
+            }
+
+            try {
+                isCreatingTask = true;
+                showLoading();
+
+                // Pause auto-refresh during task creation
+                if (autoRefreshInterval) {
+                    clearInterval(autoRefreshInterval);
+                    autoRefreshInterval = null;
+                }
+
+                const response = await authFetch(`/api/beacons/${currentBeaconId}/task`, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        beacon_id: currentBeaconId,
+                        command: command
+                    })
+                });
+
+                if (!response) {
+                    throw new Error('Failed to create task');
+                }
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showAlert(`Task created successfully: ${result.data.task_id}`, 'success');
+                    commandInput.value = '';
+                    
+                    // Reload tasks immediately
+                    await loadTasks();
+                } else {
+                    showAlert(result.message || 'Failed to create task', 'error');
+                }
+            } catch (error) {
+                console.error('Error creating task:', error);
+                showAlert('Failed to create task', 'error');
+            } finally {
+                isCreatingTask = false;
+                hideLoading();
+
+                // Resume auto-refresh after task creation
+                startAutoRefresh();
+            }
+        }
+
+        function handleEnterKey(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                createTask();
+            }
+        }
+
+        function updateCommandCounter() {
+            const input = document.getElementById('commandInput');
+            const counter = document.getElementById('commandCounter');
+            const len = input.value.length;
+            const limit = MAX_TASK_COMMAND_LENGTH;
+            const chunks = Math.ceil(len / MAX_SINGLE_CHUNK_PAYLOAD) || 0;
+            if (chunks > 1) {
+                counter.textContent = `${len}/${limit} (${chunks} chunks)`;
+            } else {
+                counter.textContent = `${len}/${limit}`;
+            }
+            counter.style.color = len > limit * 0.8 ? (len >= limit ? '#f44336' : '#ff9800') : '#888';
+        }
+
+        // Copy result to clipboard
+        function copyResult() {
+            const resultContent = document.getElementById('resultContent').textContent;
+            navigator.clipboard.writeText(resultContent).then(() => {
+                showAlert('Result copied to clipboard', 'success');
+            }).catch(err => {
+                showAlert('Failed to copy result', 'error');
+            });
+        }
+
+        // Note: formatTimestamp, isOnline, escapeHtml are in shared.js
+
+        // Start auto-refresh, always clearing any previous interval first
+        function startAutoRefresh() {
+            if (autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+                autoRefreshInterval = null;
+            }
+            autoRefreshInterval = setInterval(() => {
+                loadTasks();
+                if (selectedTaskId) {
+                    selectTask(selectedTaskId);
+                }
+            }, 5000);
+        }
+
+        // Initialize page
+        async function initializePage() {
+            document.querySelectorAll('#dnsEmptyIcon, #tasksEmptyIcon').forEach(el => { el.innerHTML = icons.listDashes; });
+            const btnCopy = document.getElementById('btnCopy');
+            if (btnCopy) btnCopy.innerHTML = icons.copy + ' Copy';
+
+            const cmdInput = document.getElementById('commandInput');
+            if (cmdInput) cmdInput.maxLength = MAX_TASK_COMMAND_LENGTH;
+            const cmdHint = document.getElementById('cmdLimitHint');
+            if (cmdHint) cmdHint.textContent = MAX_TASK_COMMAND_LENGTH;
+            updateCommandCounter();
+
+            const params = getUrlParams();
+
+            if (!params.beaconId) {
+                showAlert('No beacon ID specified', 'error');
+                setTimeout(() => {
+                    window.location.href = '/dashboard';
+                }, 2000);
+                return;
+            }
+
+            currentBeaconId = params.beaconId;
+            currentBeaconHostname = params.hostname || 'Unknown';
+
+            showLoading();
+
+            try {
+                await loadBeaconInfo();
+                await loadBeaconDomains();
+
+                // Set up event delegation for task actions once (not inside loadTasks)
+                document.getElementById('tasksList').addEventListener('click', function(e) {
+                    if (e.target.closest('[data-stop-propagation]')) {
+                        const actionBtn = e.target.closest('[data-action]');
+                        if (actionBtn) {
+                            const taskId = actionBtn.dataset.taskId;
+                            if (actionBtn.dataset.action === 'fail-task') {
+                                markTaskFailed(taskId);
+                            } else if (actionBtn.dataset.action === 'delete-task') {
+                                deleteTask(taskId);
+                            }
+                        }
+                        return;
+                    }
+                    const taskItem = e.target.closest('[data-action="select-task"]');
+                    if (taskItem) {
+                        selectTask(taskItem.dataset.taskId);
+                    }
+                });
+
+                await loadTasks();
+            } catch (error) {
+                console.error('Error initializing page:', error);
+                showAlert('Failed to load beacon data', 'error');
+            } finally {
+                hideLoading();
+            }
+
+            // Auto-refresh tasks every 5 seconds
+            startAutoRefresh();
+
+            // WebSocket handlers for real-time updates
+            ws.on('task_update', (payload) => {
+                if (payload && payload.beacon_id === currentBeaconId) {
+                    loadTasks();
+                }
+            });
+            ws.on('beacon_update', (payload) => {
+                if (payload && payload.id === currentBeaconId) {
+                    loadBeaconInfo();
+                }
+            });
+            // Re-subscribe on reconnect
+            ws.on('connected', () => {
+                loadTasks();
+                loadBeaconInfo();
+            });
+        }
+
+        async function markTaskFailed(taskId) {
+            if (!confirm('Mark this task as failed?')) return;
+            
+            try {
+                const response = await authFetch(`/api/tasks/${taskId}/status`, {
+                    method: 'PATCH',
+                    body: JSON.stringify({ status: 'failed' })
+                });
+                
+                if (response && response.ok) {
+                    loadTasks();
+                    if (selectedTaskId === taskId) {
+                        selectTask(taskId);
+                    }
+                } else {
+                    showToast('Failed to update task status', 'error');
+                }
+            } catch (error) {
+                console.error('[Beacon] Error:', error);
+                showToast('Failed to update task status', 'error');
+            }
+        }
+
+        async function deleteTask(taskId) {
+            if (!confirm('Delete this task? This cannot be undone.')) return;
+            
+            try {
+                const response = await authFetch(`/api/tasks/${taskId}`, {
+                    method: 'DELETE'
+                });
+                
+                if (response && response.ok) {
+                    if (selectedTaskId === taskId) {
+                        selectedTaskId = null;
+                        document.getElementById('resultSection').style.display = 'none';
+                    }
+                    loadTasks();
+                } else {
+                    showToast('Failed to delete task', 'error');
+                }
+            } catch (error) {
+                console.error('[Beacon] Error:', error);
+                showToast('Failed to delete task', 'error');
+            }
+        }
+
+        // Note: logout is in shared.js
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+            }
+        });
+
+        // Start the page
+        initializePage();
+    </script>
+</body>
+</html>

@@ -1,0 +1,872 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Unkn0wnC2 - Exfil Sessions</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/png" href="/static/logo.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=ITC+Benguiat:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        /* Page-specific overrides and unique styles for exfils.html */
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 40px 30px 80px;
+        }
+
+        .page-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            flex-wrap: wrap;
+            gap: 20px;
+            margin-bottom: 25px;
+        }
+
+        .page-header h1 {
+            font-family: 'Bebas Neue', 'Segoe UI', sans-serif;
+            font-size: 42px;
+            letter-spacing: 3px;
+            color: rgba(255, 51, 51, 0.8);
+            margin-bottom: 5px;
+        }
+
+        .page-subtitle {
+            color: #4c4c4c;
+            font-size: 13px;
+            max-width: 640px;
+            line-height: 1.4;
+        }
+
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .refresh-btn {
+            padding: 10px 20px;
+            padding-left: 26px;
+            background: rgba(255, 51, 51, 0.08);
+            border: none;
+            border-left: 3px solid rgba(255, 51, 51, 0.3);
+            color: rgba(255, 51, 51, 0.8);
+            cursor: pointer;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            font-weight: 600;
+            clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px));
+            position: relative;
+            overflow: hidden;
+        }
+
+        .refresh-btn::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            width: 0;
+            background: rgba(255, 51, 51, 0.1);
+            transition: width 0.3s ease;
+        }
+
+        .refresh-btn:hover::after {
+            width: 100%;
+        }
+
+        .auto-refresh {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #777;
+            font-size: 13px;
+        }
+
+        .toggle-switch {
+            width: 46px;
+            height: 24px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            position: relative;
+            cursor: pointer;
+            transition: background 0.2s;
+            border-left: 2px solid rgba(255, 51, 51, 0.4);
+        }
+
+        .toggle-switch.active {
+            background: rgba(255, 51, 51, 0.4);
+        }
+
+        .toggle-slider {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #fff;
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            transition: transform 0.2s;
+        }
+
+        .toggle-switch.active .toggle-slider {
+            transform: translateX(22px);
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+            gap: 18px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: rgba(10, 10, 10, 0.98);
+            border: 1px solid rgba(255, 51, 51, 0.15);
+            border-top: 2px solid rgba(255, 51, 51, 0.3);
+            padding: 25px;
+            min-height: 120px;
+            clip-path: polygon(0 0, 100% 0, 100% calc(100% - 15px), calc(100% - 15px) 100%, 0 100%);
+            position: relative;
+            transition: all 0.3s ease;
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            right: 0;
+            width: 15px;
+            height: 15px;
+            background: linear-gradient(135deg, transparent 50%, rgba(255, 51, 51, 0.3) 50%);
+        }
+
+        .stat-card:hover {
+            transform: translateY(-3px);
+            border-top-color: rgba(255, 51, 51, 0.5);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.8), 0 -2px 0 rgba(255, 51, 51, 0.2) inset;
+        }
+
+        .stat-label {
+            color: #555;
+            text-transform: uppercase;
+            font-size: 12px;
+            letter-spacing: 1px;
+        }
+
+        .stat-value {
+            font-size: 36px;
+            font-weight: 700;
+            margin-top: 6px;
+            color: rgba(255, 51, 51, 0.8);
+        }
+
+        .stat-note {
+            color: #444;
+            font-size: 12px;
+            margin-top: 6px;
+        }
+
+        .section-title {
+            font-family: 'Bebas Neue', 'Arial Narrow', sans-serif;
+            font-size: 36px;
+            font-weight: 700;
+            color: rgba(255, 51, 51, 0.8);
+            margin-bottom: 20px;
+            letter-spacing: 3px;
+            text-shadow: 0 0 15px rgba(255, 51, 51, 0.15);
+        }
+
+        .cards-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+            gap: 22px;
+        }
+
+        .transfer-card {
+            background: rgba(10, 10, 10, 0.98);
+            border: 1px solid rgba(255, 51, 51, 0.15);
+            border-top: 2px solid rgba(255, 51, 51, 0.3);
+            padding: 25px;
+            clip-path: polygon(0 0, 100% 0, 100% calc(100% - 15px), calc(100% - 15px) 100%, 0 100%);
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+            position: relative;
+            transition: all 0.3s ease;
+        }
+
+        .transfer-card::before {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            right: 0;
+            width: 15px;
+            height: 15px;
+            background: linear-gradient(135deg, transparent 50%, rgba(255, 51, 51, 0.3) 50%);
+        }
+
+        .transfer-card:hover {
+            transform: translateY(-3px);
+            border-top-color: rgba(255, 51, 51, 0.5);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.8), 0 -2px 0 rgba(255, 51, 51, 0.2) inset;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+            align-items: flex-start;
+        }
+
+        .file-name {
+            font-size: 22px;
+            font-weight: 600;
+            margin-bottom: 6px;
+            color: #f7f7f7;
+        }
+
+        .file-meta {
+            color: #666;
+            font-size: 13px;
+        }
+
+        .status-badge {
+            padding: 6px 14px;
+            border-radius: 999px;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            align-self: flex-start;
+        }
+
+        .status-receiving {
+            background: rgba(255, 153, 51, 0.15);
+            color: #ffb066;
+        }
+
+        .status-assembling {
+            background: rgba(78, 80, 255, 0.18);
+            color: #a5b4ff;
+        }
+
+        .status-complete {
+            background: rgba(46, 204, 113, 0.15);
+            color: #8be9a7;
+        }
+
+        .status-failed {
+            background: rgba(255, 77, 77, 0.2);
+            color: #ff9b9b;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 10px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.08);
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            border-radius: inherit;
+            background: linear-gradient(90deg, rgba(255, 51, 51, 0.8), rgba(255, 117, 80, 0.9));
+            transition: width 0.4s ease;
+        }
+
+        .progress-meta {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: #777;
+            margin-top: 6px;
+        }
+
+        .meta-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 14px;
+        }
+
+        .meta-label {
+            color: #555;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+        }
+
+        .meta-value {
+            color: #e6e6e6;
+            font-size: 14px;
+            margin-top: 3px;
+            word-break: break-all;
+        }
+
+        .card-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .download-btn {
+            padding: 10px 24px;
+            background: rgba(255, 51, 51, 0.08);
+            border: none;
+            border-left: 3px solid rgba(255, 51, 51, 0.35);
+            color: rgba(255, 51, 51, 0.85);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            cursor: pointer;
+            clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
+            position: relative;
+            overflow: hidden;
+        }
+
+        .download-btn::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            width: 0;
+            background: rgba(255, 51, 51, 0.2);
+            transition: width 0.3s ease;
+        }
+
+        .download-btn:hover::after {
+            width: 100%;
+        }
+
+        .download-btn.disabled {
+            opacity: 0.35;
+            cursor: not-allowed;
+        }
+
+        .timestamp {
+            font-size: 12px;
+            color: #555;
+        }
+
+        .empty-state {
+            grid-column: 1 / -1;
+            text-align: center;
+            padding: 80px 20px;
+            border: 1px dashed rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            background: rgba(10, 10, 10, 0.8);
+            color: #555;
+        }
+
+        .empty-state-icon {
+            font-size: 48px;
+            margin-bottom: 12px;
+        }
+
+        code {
+            background: rgba(255, 255, 255, 0.05);
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 12px;
+        }
+
+        .error-banner {
+            border: 1px solid rgba(255, 99, 99, 0.4);
+            background: rgba(255, 49, 49, 0.08);
+            color: #ff9f9f;
+            padding: 14px 18px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .loading-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.9);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1500;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s ease;
+        }
+
+        .loading-overlay.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        @media (max-width: 900px) {
+            .cards-grid {
+                grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            }
+        }
+
+        @media (max-width: 640px) {
+            .meta-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .card-footer {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .controls {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .navbar,
+            .nav-menu,
+            .container {
+                padding-left: 18px;
+                padding-right: 18px;
+            }
+        }
+
+        .action-btn {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+            transition: all 0.2s;
+        }
+
+        .fail-btn {
+            background: rgba(255, 100, 100, 0.2);
+            color: #ff6666;
+            border: 1px solid rgba(255, 100, 100, 0.3);
+        }
+
+        .fail-btn:hover {
+            background: rgba(255, 100, 100, 0.4);
+        }
+
+        .delete-btn {
+            background: rgba(255, 50, 50, 0.2);
+            color: #ff4444;
+            border: 1px solid rgba(255, 50, 50, 0.3);
+        }
+
+        .delete-btn:hover {
+            background: rgba(255, 50, 50, 0.4);
+        }
+    </style>
+</head>
+<body>
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="spinner"></div>
+    </div>
+
+    <nav class="navbar">
+        <div class="navbar-brand">Unkn0wnC2</div>
+        <div class="navbar-right">
+            <div class="ws-status" id="wsStatus">
+                <div class="ws-status-dot"></div>
+                <span class="ws-status-text">Connecting...</span>
+            </div>
+            <div class="user-info">Logged in as <strong id="username">admin</strong></div>
+            <button class="btn-logout" onclick="logout()">Logout</button>
+        </div>
+    </nav>
+
+    <div class="nav-menu">
+        <a href="/dashboard" class="nav-btn">Dashboard</a>
+        <a href="/builder" class="nav-btn">Builder</a>
+        <a href="/stager" class="nav-btn">Stager Sessions</a>
+        <a href="/exfils" class="nav-btn active">Exfils</a>
+        <a href="/logs" class="nav-btn">Logs</a>
+        <a href="/report" class="nav-btn">Report</a>
+        <a href="/users" class="nav-btn" id="usersNavBtn">Users</a>
+    </div>
+
+    <div class="container">
+        <div id="errorBanner" class="error-banner"></div>
+
+        <div class="page-header">
+            <div>
+                <h1>Exfil Sessions</h1>
+                <div class="page-subtitle">Track incoming artifacts, monitor chunk bursts, and pull completed payloads once assembly finalizes.</div>
+            </div>
+            <div class="controls">
+                <div class="auto-refresh">
+                    <span>Auto-refresh</span>
+                    <div class="toggle-switch" id="autoRefreshToggle" onclick="toggleAutoRefresh()">
+                        <div class="toggle-slider"></div>
+                    </div>
+                </div>
+                <button class="refresh-btn" onclick="loadExfilTransfers(true)">Refresh</button>
+            </div>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Total Sessions</div>
+                <div class="stat-value" id="statTotal">0</div>
+                <div class="stat-note">Last 100 rows</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Receiving</div>
+                <div class="stat-value" id="statReceiving">0</div>
+                <div class="stat-note">Actively ingesting chunks</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Completed</div>
+                <div class="stat-value" id="statCompleted">0</div>
+                <div class="stat-note">Ready for download</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Total Data</div>
+                <div class="stat-value" id="statData">0 B</div>
+                <div class="stat-note">Size reported by clients</div>
+            </div>
+        </div>
+
+        <div class="cards-grid" id="cardsGrid">
+            <div class="empty-state" id="emptyState">
+                <div class="empty-state-icon" id="emptyIcon"></div>
+                <div>No exfil sessions yet</div>
+                <div style="margin-top: 8px; font-size: 13px; color: #555;">
+                    Transfers will appear as soon as DNS servers stream chunks.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/shared.js"></script>
+    <script>
+        const API_BASE = window.location.origin;
+        const emptyIcon = document.getElementById('emptyIcon');
+        if (emptyIcon) emptyIcon.innerHTML = icons.listDashes;
+        let autoRefreshEnabled = false;
+        let autoRefreshInterval = null;
+
+        function setLoading(active) {
+            const overlay = document.getElementById('loadingOverlay');
+            if (!overlay) return;
+            if (active) {
+                overlay.classList.add('active');
+            } else {
+                overlay.classList.remove('active');
+            }
+        }
+
+        function showError(message) {
+            const banner = document.getElementById('errorBanner');
+            if (!banner) return;
+            banner.textContent = message;
+            banner.style.display = 'block';
+        }
+
+        function clearError() {
+            const banner = document.getElementById('errorBanner');
+            if (!banner) return;
+            banner.style.display = 'none';
+            banner.textContent = '';
+        }
+
+        function formatBytes(bytes) {
+            if (!bytes || bytes <= 0) return '0 B';
+            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+            const index = Math.floor(Math.log(bytes) / Math.log(1024));
+            return `${(bytes / Math.pow(1024, index)).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+        }
+
+        function formatTimestamp(value) {
+            if (!value) return '—';
+            const date = new Date(value);
+            if (isNaN(date.getTime())) return '—';
+            return date.toLocaleString();
+        }
+
+        function formatRelative(value) {
+            if (!value) return 'unknown';
+            const date = new Date(value);
+            if (isNaN(date.getTime())) return 'unknown';
+            const diff = Date.now() - date.getTime();
+            const seconds = Math.floor(diff / 1000);
+            if (seconds < 60) return `${seconds}s ago`;
+            const minutes = Math.floor(seconds / 60);
+            if (minutes < 60) return `${minutes}m ago`;
+            const hours = Math.floor(minutes / 60);
+            if (hours < 24) return `${hours}h ago`;
+            const days = Math.floor(hours / 24);
+            return `${days}d ago`;
+        }
+
+        function formatDuration(seconds) {
+            if (!seconds || seconds <= 0) return '—';
+            const mins = Math.floor(seconds / 60);
+            if (mins < 1) return `${seconds}s`;
+            const hrs = Math.floor(mins / 60);
+            if (hrs < 1) return `${mins}m`;
+            const remMins = mins % 60;
+            return `${hrs}h ${remMins}m`;
+        }
+
+        function getStatusClass(status) {
+            switch ((status || '').toLowerCase()) {
+                case 'complete':
+                    return 'status-complete';
+                case 'assembling':
+                    return 'status-assembling';
+                case 'failed':
+                case 'error':
+                    return 'status-failed';
+                default:
+                    return 'status-receiving';
+            }
+        }
+
+        function computeEta(transfer, rate) {
+            const total = transfer.total_chunks || 0;
+            const received = transfer.received_chunks || 0;
+            if ((transfer.status || '').toLowerCase() === 'complete') {
+                return 'Ready';
+            }
+            if (!total || total <= received || rate <= 0) {
+                return '—';
+            }
+            const remaining = total - received;
+            return formatDuration(Math.round(remaining / rate));
+        }
+
+        function renderTransfers(transfers) {
+            const grid = document.getElementById('cardsGrid');
+            if (!grid) return;
+
+            if (!transfers || transfers.length === 0) {
+                grid.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">${icons.listDashes}</div>
+                        <div>No exfil sessions yet</div>
+                        <div style="margin-top: 8px; font-size: 13px; color: #555;">
+                            Transfers will appear as soon as DNS servers stream chunks.
+                        </div>
+                    </div>`;
+                return;
+            }
+
+            const cards = transfers.map(transfer => {
+                const totalChunks = transfer.total_chunks || transfer.received_chunks || 0;
+                const received = transfer.received_chunks || 0;
+                const percent = totalChunks > 0 ? Math.min(100, Math.round((received / totalChunks) * 100)) : 0;
+                const chunkSummary = totalChunks > 0 ? `${received}/${totalChunks}` : `${received} / ?`;
+
+                let startTs = Date.now();
+                if (transfer.created_at) {
+                    const parsed = new Date(transfer.created_at).getTime();
+                    if (!Number.isNaN(parsed)) {
+                        startTs = parsed;
+                    }
+                }
+
+                let referenceTs = Date.now();
+                const statusValue = (transfer.status || 'receiving').toLowerCase();
+                if (statusValue === 'complete' && transfer.completed_at) {
+                    const completed = new Date(transfer.completed_at).getTime();
+                    if (!Number.isNaN(completed)) {
+                        referenceTs = completed;
+                    }
+                }
+
+                const elapsedSeconds = Math.max(1, Math.floor((referenceTs - startTs) / 1000));
+                let chunkRate = received > 0 ? received / elapsedSeconds : 0;
+                if (!isFinite(chunkRate) || chunkRate < 0) chunkRate = 0;
+                const eta = computeEta(transfer, chunkRate);
+                const safeSession = transfer.session_id || '';
+                const canDownload = Boolean(safeSession) && statusValue === 'complete';
+                const shortSession = safeSession ? safeSession.slice(0, 12) : 'unknown';
+
+                const escapedFileName = escapeHtml(transfer.file_name || 'Unknown Artifact');
+                const escapedSession = escapeHtml(safeSession);
+                const escapedShortSession = escapeHtml(shortSession);
+                const escapedSourceDns = escapeHtml(transfer.source_dns || 'Unknown');
+                const escapedJobId = escapeHtml(transfer.job_id || 'N/A');
+
+                return `
+                    <div class="transfer-card">
+                        <div class="card-header">
+                            <div>
+                                <div class="file-name">${escapedFileName}</div>
+                                <div class="file-meta">${formatBytes(transfer.file_size)} • Session <code style="color: rgba(255,255,255,0.7);">${escapedShortSession}</code></div>
+                            </div>
+                            <span class="status-badge ${getStatusClass(transfer.status)}">${escapeHtml(statusValue.toUpperCase())}</span>
+                        </div>
+                        <div>
+                            <div class="progress-bar">
+                                <div class="progress-fill" style="width: ${percent}%"></div>
+                            </div>
+                            <div class="progress-meta">
+                                <span>Chunks ${escapeHtml(chunkSummary)}</span>
+                                <span>${percent}%</span>
+                            </div>
+                        </div>
+                        <div class="meta-grid">
+                            <div>
+                                <div class="meta-label">Source DNS</div>
+                                <div class="meta-value">${escapedSourceDns}</div>
+                            </div>
+                            <div>
+                                <div class="meta-label">Job ID</div>
+                                <div class="meta-value">${escapedJobId}</div>
+                            </div>
+                            <div>
+                                <div class="meta-label">Last Chunk</div>
+                                <div class="meta-value">${formatTimestamp(transfer.last_chunk_at)}</div>
+                            </div>
+                            <div>
+                                <div class="meta-label">ETA</div>
+                                <div class="meta-value">${escapeHtml(eta)}</div>
+                            </div>
+                        </div>
+                        <div class="card-footer">
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                <button class="download-btn ${canDownload ? '' : 'disabled'}" ${canDownload ? '' : 'disabled'} data-action="download" data-session="${escapedSession}" data-allowed="${canDownload}">
+                                    ${canDownload ? 'Download Artifact' : 'Waiting on Completion'}
+                                </button>
+                                ${statusValue !== 'complete' ? `<button class="action-btn fail-btn" data-action="fail" data-session="${escapedSession}" title="Mark as Failed">${icons.xCircle} Fail</button>` : ''}
+                                <button class="action-btn delete-btn" data-action="delete" data-session="${escapedSession}" title="Delete">${icons.trash} Delete</button>
+                            </div>
+                            <div class="timestamp">
+                                Updated ${formatRelative(transfer.updated_at)}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            grid.innerHTML = cards;
+        }
+
+        async function loadExfilTransfers(showSpinner = false) {
+            try {
+                if (showSpinner) setLoading(true);
+                clearError();
+
+                const response = await authFetch('/api/exfil/transfers?limit=200');
+                if (!response) return;
+                if (!response.ok) {
+                    const text = await response.text();
+                    throw new Error(text || `Request failed with ${response.status}`);
+                }
+
+                const payload = await response.json();
+                const transfers = (payload && payload.data && Array.isArray(payload.data.transfers))
+                    ? payload.data.transfers
+                    : [];
+
+                updateStats(transfers);
+                renderTransfers(transfers);
+            } catch (err) {
+                console.error('Failed to load exfil transfers', err);
+                showError(err.message || 'Failed to load exfil transfers');
+            } finally {
+                if (showSpinner) setLoading(false);
+            }
+        }
+
+        function updateStats(transfers) {
+            const total = transfers.length;
+            const receiving = transfers.filter(t => (t.status || '').toLowerCase() === 'receiving' || (t.status || '').toLowerCase() === 'assembling').length;
+            const completed = transfers.filter(t => (t.status || '').toLowerCase() === 'complete').length;
+            const bytes = transfers.reduce((sum, t) => sum + (t.file_size || 0), 0);
+
+            const setText = (id, value) => {
+                const el = document.getElementById(id);
+                if (el) el.textContent = value;
+            };
+
+            setText('statTotal', total);
+            setText('statReceiving', receiving);
+            setText('statCompleted', completed);
+            setText('statData', formatBytes(bytes));
+        }
+
+        function toggleAutoRefresh() {
+            autoRefreshEnabled = !autoRefreshEnabled;
+            const toggle = document.getElementById('autoRefreshToggle');
+
+            if (autoRefreshEnabled) {
+                if (toggle) toggle.classList.add('active');
+                if (autoRefreshInterval) clearInterval(autoRefreshInterval);
+                autoRefreshInterval = setInterval(() => loadExfilTransfers(false), 5000);
+            } else {
+                if (toggle) toggle.classList.remove('active');
+                if (autoRefreshInterval) {
+                    clearInterval(autoRefreshInterval);
+                    autoRefreshInterval = null;
+                }
+            }
+        }
+
+        function downloadArtifact(sessionId, allowed) {
+            if (!allowed) return;
+            window.location.href = `/api/exfil/transfers/${sessionId}/download`;
+        }
+
+        async function markExfilFailed(sessionId) {
+            if (!confirm('Mark this exfil transfer as failed?')) return;
+            
+            try {
+                const response = await authFetch(`/api/exfil/transfers/${sessionId}/status`, {
+                    method: 'PATCH',
+                    body: JSON.stringify({ status: 'failed' })
+                });
+                
+                if (response && response.ok) {
+                    loadExfilTransfers();
+                } else {
+                    showToast('Failed to update transfer status', 'error');
+                }
+            } catch (error) {
+                console.error('[Exfils] Error:', error);
+                showToast('Failed to update transfer status', 'error');
+            }
+        }
+
+        async function deleteExfilTransfer(sessionId) {
+            if (!confirm('Delete this exfil transfer and all associated data? This cannot be undone.')) return;
+            
+            try {
+                const response = await authFetch(`/api/exfil/transfers/${sessionId}`, {
+                    method: 'DELETE'
+                });
+                
+                if (response && response.ok) {
+                    loadExfilTransfers();
+                } else {
+                    showToast('Failed to delete transfer', 'error');
+                }
+            } catch (error) {
+                console.error('[Exfils] Error:', error);
+                showToast('Failed to delete transfer', 'error');
+            }
+        }
+
+        // Event delegation for card actions
+        document.getElementById('cardsGrid').addEventListener('click', function(e) {
+            const btn = e.target.closest('[data-action]');
+            if (!btn) return;
+            const action = btn.dataset.action;
+            const sessionId = btn.dataset.session;
+            if (action === 'download') {
+                downloadArtifact(sessionId, btn.dataset.allowed === 'true');
+            } else if (action === 'fail') {
+                markExfilFailed(sessionId);
+            } else if (action === 'delete') {
+                deleteExfilTransfer(sessionId);
+            }
+        });
+
+        loadExfilTransfers(true);
+    </script>
+</body>
+</html>

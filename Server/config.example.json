@@ -1,0 +1,23 @@
+{
+  "bind_addr": "0.0.0.0",
+  "bind_port": 53,
+  "server_address": "YOUR_PUBLIC_IP",
+  "domain": "your-domain.com",
+  "ns1": "ns1.your-domain.com",
+  "ns2": "ns2.your-domain.com",
+  "forward_dns": true,
+  "upstream_dns": "8.8.8.8:53",
+  "encryption_key": "CHANGE_ME_GENERATED_AT_BUILD_TIME",
+  "debug": false,
+  "stager": {
+    "jitter_min_ms": 60000,
+    "jitter_max_ms": 120000,
+    "chunks_per_burst": 5,
+    "burst_pause_ms": 120000,
+    "retry_delay_seconds": 3,
+    "max_retries": 5
+  },
+  "master_server": "",
+  "master_api_key": "",
+  "master_server_id": "dns1"
+}

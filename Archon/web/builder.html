@@ -1,0 +1,1645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/png" href="/static/logo.png">
+    <title>Builder - Unkn0wnC2</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=ITC+Benguiat:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 40px 30px;
+        }
+
+        .builder-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 25px;
+            margin-bottom: 40px;
+        }
+
+        .builder-card-full {
+            grid-column: 1 / -1;
+            order: 1;
+        }
+
+        .builder-card {
+            background: rgba(10, 10, 10, 0.98);
+            border: 1px solid rgba(255, 51, 51, 0.15);
+            border-top: 2px solid rgba(255, 51, 51, 0.3);
+            border-radius: 0;
+            padding: 25px;
+            transition: all 0.3s ease;
+            clip-path: polygon(0 0, 100% 0, 100% calc(100% - 15px), calc(100% - 15px) 100%, 0 100%);
+            position: relative;
+        }
+
+        .builder-card::before {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            right: 0;
+            width: 15px;
+            height: 15px;
+            background: linear-gradient(135deg, transparent 50%, rgba(255, 51, 51, 0.3) 50%);
+        }
+
+        .builder-card:hover {
+            transform: translateY(-3px);
+            border-top-color: rgba(255, 51, 51, 0.5);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.8), 0 -2px 0 rgba(255, 51, 51, 0.2) inset;
+        }
+
+        .builder-title {
+            font-family: 'Bebas Neue', sans-serif;
+            font-size: 24px;
+            color: rgba(255, 51, 51, 0.8);
+            margin-bottom: 15px;
+            letter-spacing: 2px;
+        }
+
+        .builder-description {
+            color: #555;
+            margin-bottom: 20px;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        .form-label {
+            display: block;
+            color: #ccc;
+            margin-bottom: 5px;
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+
+        .form-input, .form-select {
+            width: 100%;
+            padding: 10px;
+            padding-left: 15px;
+            background: rgba(0, 0, 0, 0.5);
+            border: none;
+            border-left: 2px solid rgba(255, 51, 51, 0.5);
+            border-bottom: 1px solid rgba(255, 51, 51, 0.15);
+            border-radius: 0;
+            color: #fff;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            clip-path: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 0 100%);
+        }
+
+        .readonly-chip {
+            background: rgba(255, 51, 51, 0.08);
+            border-left: 2px solid rgba(255, 51, 51, 0.5);
+            border-bottom: 1px solid rgba(255, 51, 51, 0.2);
+            padding: 10px 15px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            color: #f5f5f5;
+            clip-path: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 0 100%);
+        }
+
+        .form-input:focus, .form-select:focus {
+            outline: none;
+            border-left-color: rgba(255, 51, 51, 0.8);
+            border-bottom-color: rgba(255, 51, 51, 0.8);
+            box-shadow: -2px 0 10px rgba(255, 51, 51, 0.15);
+        }
+
+        .form-input::placeholder {
+            color: #444;
+        }
+
+        .btn-build {
+            width: 100%;
+            padding: 12px;
+            padding-left: 25px;
+            background: rgba(255, 51, 51, 0.08);
+            border: none;
+            border-left: 3px solid rgba(255, 51, 51, 0.15);
+            border-radius: 0;
+            color: rgba(255, 51, 51, 0.8);
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 14px;
+            margin-top: 10px;
+            clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px));
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn-build::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 0;
+            height: 100%;
+            background: rgba(255, 51, 51, 0.15);
+            transition: width 0.4s ease;
+        }
+
+        .btn-build:hover::after {
+            width: 100%;
+        }
+
+        .btn-build:hover {
+            border-left-width: 6px;
+            box-shadow: -4px 0 15px rgba(255, 51, 51, 0.4);
+        }
+
+        .btn-build:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.9);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+            flex-direction: column;
+        }
+
+        .loading-overlay.show {
+            display: flex;
+        }
+
+        .loading-text {
+            color: rgba(255, 51, 51, 0.8);
+            font-size: 16px;
+        }
+
+        .section-title {
+            font-family: 'Bebas Neue', 'Arial Narrow', sans-serif;
+            font-size: 36px;
+            font-weight: 700;
+            color: rgba(255, 51, 51, 0.8);
+            margin-bottom: 25px;
+            letter-spacing: 3px;
+            text-shadow: 0 0 15px rgba(255, 51, 51, 0.15);
+        }
+
+        .help-text {
+            color: #444;
+            font-size: 11px;
+            margin-top: 3px;
+        }
+
+        .advanced-toggle {
+            color: #555;
+            cursor: pointer;
+            font-size: 12px;
+            margin-bottom: 10px;
+            user-select: none;
+        }
+
+        .advanced-toggle:hover {
+            color: rgba(255, 51, 51, 0.8);
+        }
+
+        .advanced-section {
+            display: none;
+        }
+
+        .advanced-section.show {
+            display: block;
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .job-controls {
+            display: flex;
+            gap: 15px;
+            align-items: flex-end;
+            flex-wrap: wrap;
+            margin-top: 15px;
+        }
+
+        .job-pagination {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 15px;
+            flex-wrap: wrap;
+        }
+
+        .pagination-btn {
+            background: rgba(255, 51, 51, 0.08);
+            border: 1px solid rgba(255, 51, 51, 0.25);
+            color: #ddd;
+            padding: 8px 16px;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .pagination-btn:hover:not(:disabled) {
+            border-color: rgba(255, 51, 51, 0.5);
+            background: rgba(255, 51, 51, 0.15);
+        }
+
+        .pagination-btn:disabled {
+            opacity: 0.35;
+            cursor: not-allowed;
+        }
+
+        .job-history-row {
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            padding: 14px 0;
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            justify-content: space-between;
+        }
+
+        .job-history-meta {
+            color: #777;
+            font-size: 12px;
+            margin-top: 4px;
+        }
+
+        .job-error {
+            color: #ff6666;
+            font-size: 12px;
+            margin-top: 6px;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 12px;
+            text-transform: capitalize;
+        }
+
+        .status-queued {
+            background: #ffc107;
+            color: #111;
+        }
+
+        .status-running {
+            background: #0dcaf0;
+            color: #111;
+        }
+
+        .status-completed {
+            background: #28a745;
+            color: #111;
+        }
+
+        .status-failed {
+            background: #dc3545;
+            color: #fff;
+        }
+    </style>
+</head>
+<body>
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="spinner"></div>
+        <div class="loading-text" id="loadingText">Building...</div>
+    </div>
+
+    <nav class="navbar">
+        <div class="navbar-brand">Unkn0wnC2</div>
+        <div class="navbar-right">
+            <div class="ws-status" id="wsStatus">
+                <div class="ws-status-dot"></div>
+                <span class="ws-status-text">Connecting...</span>
+            </div>
+            <div class="user-info">Logged in as <strong id="username">admin</strong></div>
+            <button class="btn-logout" onclick="logout()">Logout</button>
+        </div>
+    </nav>
+
+    <!-- Navigation Menu -->
+    <div class="nav-menu">
+        <a href="/dashboard" class="nav-btn">Dashboard</a>
+        <a href="/builder" class="nav-btn active">Builder</a>
+        <a href="/stager" class="nav-btn">Stager Sessions</a>
+        <a href="/exfils" class="nav-btn">Exfils</a>
+        <a href="/logs" class="nav-btn">Logs</a>
+        <a href="/report" class="nav-btn">Report</a>
+        <a href="/users" class="nav-btn" id="usersNavBtn">Users</a>
+    </div>
+
+    <div class="container">
+        <h1 class="section-title">Component Builder</h1>
+        <div id="alertContainer"></div>
+
+        <div class="builder-grid">
+            <!-- DNS Server Builder -->
+            <div class="builder-card">
+                <div class="builder-title">DNS-Server</div>
+                <div class="builder-description">
+                    Build a new DNS C2 server for a specific domain. The server will connect to this Archon and handle beacon communications. Ensure you configure glue records.
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Domain *</label>
+                    <input type="text" id="dnsServerDomain" class="form-input" placeholder="example.com" required>
+                    <div class="help-text">Domain this server will be authoritative for (NS records will be auto-generated as ns1/ns2.domain)</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Server Address *</label>
+                    <input type="text" id="dnsServerAddress" class="form-input" placeholder="1.2.3.4" required>
+                    <div class="help-text">Public IP address for A record responses (REQUIRED)</div>
+                </div>
+
+                <div class="advanced-toggle" onclick="toggleAdvanced('dnsServerAdvanced')">
+                    ▶ Advanced Options
+                </div>
+                <div id="dnsServerAdvanced" class="advanced-section">
+                    <div class="form-group">
+                        <label class="form-label">Encryption Key</label>
+                        <input type="text" id="dnsServerEncKey" class="form-input" placeholder="Auto-generated">
+                        <div class="help-text">Leave empty to auto-generate(recommended)</div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" style="display: flex; align-items: center; gap: 10px;">
+                            <input type="checkbox" id="dnsServerForwardDNS" style="width: 16px; height: 16px;">
+                            Enable DNS Forwarding
+                        </label>
+                        <div class="help-text">Forward non-C2 queries to upstream DNS. Disable to only respond to C2 traffic.</div>
+                    </div>
+                    <div class="form-group" id="dnsServerUpstreamGroup">
+                        <label class="form-label">Upstream DNS</label>
+                        <input type="text" id="dnsServerUpstream" class="form-input" placeholder="8.8.8.8:53" value="8.8.8.8:53">
+                        <div class="help-text">DNS server to forward non-C2 queries to</div>
+                    </div>
+                </div>
+
+                <button class="btn-build" onclick="buildDNSServer()">Build DNS-Server</button>
+            </div>
+
+            <!-- Client Builder -->
+            <div class="builder-card builder-card-full">
+                <div class="builder-title">Beacon Client</div>
+                <div class="builder-description">
+                    Build a beacon client that will connect to your registered DNS servers. Clients will automatically rotate through available domains.
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">DNS Servers</label>
+                    <div id="clientDNSServersList" style="background: rgba(255, 255, 255, 0.05); padding: 10px; border-radius: 4px; min-height: 40px; color: #444;">
+                        Loading DNS servers...
+                    </div>
+                    <div class="help-text">Select which DNS servers to embed. Beacon will rotate through selected domains.</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Platform *</label>
+                    <select id="clientPlatform" class="form-select">
+                        <option value="linux">Linux</option>
+                        <option value="windows">Windows</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Architecture *</label>
+                    <select id="clientArchitecture" class="form-select">
+                        <option value="amd64">x86_64 (amd64)</option>
+                        <option value="386">x86 (32-bit)</option>
+                        <option value="arm64">ARM 64-bit (arm64)</option>
+                        <option value="armv7l">ARM v7 (armv7l)</option>
+                        <option value="arm">ARM (generic)</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" style="display: flex; align-items: center; gap: 10px;">
+                        <input type="checkbox" id="clientStaticLink" checked style="width: 16px; height: 16px;">
+                        Static Linking
+                    </label>
+                    <div class="help-text">Static binaries work on any glibc version but are slightly larger</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Beacon Name (optional)</label>
+                    <input type="text" id="clientBeaconName" class="form-input" placeholder="recon-alpha" maxlength="12">
+                    <div class="form-hint" style="font-size: 11px; color: #666; margin-top: 4px;">
+                        Operator label for this beacon build. Same name on different hosts = different beacon IDs, same label.
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Check-in Interval (seconds)</label>
+                    <div class="form-row">
+                        <input type="number" id="clientSleepMin" class="form-input" placeholder="Min" value="60" min="1">
+                        <input type="number" id="clientSleepMax" class="form-input" placeholder="Max" value="120" min="1">
+                    </div>
+                    <div class="help-text">Random interval between check-ins</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">DNS Resolver</label>
+                    <input type="text" id="clientResolver" class="form-input" placeholder="Leave empty for system resolver">
+                    <div class="help-text">Specify resolver IP:port (e.g., 8.8.8.8:53) or leave empty to use host's configured DNS</div>
+                </div>
+
+                <div class="advanced-toggle" onclick="toggleAdvanced('clientAdvanced')">
+                    ▶ Advanced Options
+                </div>
+                <div id="clientAdvanced" class="advanced-section">
+                    <h4 style="color: rgba(255, 51, 51, 0.6); margin: 0 0 10px 0; font-size: 12px; text-transform: uppercase; letter-spacing: 1px;">Exfil Timing</h4>
+                    <div class="form-group">
+                        <label class="form-label">Exfil Jitter (ms)</label>
+                        <div class="form-row">
+                            <input type="number" id="clientExfilJitterMin" class="form-input" placeholder="Min" value="1000" min="0">
+                            <input type="number" id="clientExfilJitterMax" class="form-input" placeholder="Max" value="2000" min="0">
+                        </div>
+                        <div class="help-text">Random delay added between burst cycles when exfiltrating task results</div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Chunks Per Burst</label>
+                        <input type="number" id="clientChunksPerBurst" class="form-input" value="10" min="1">
+                        <div class="help-text">DNS queries sent rapidly before pausing (higher = faster exfil, more visible)</div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Burst Pause (ms)</label>
+                        <input type="number" id="clientBurstPause" class="form-input" value="5000" min="0">
+                        <div class="help-text">Fixed pause between bursts, added on top of jitter (5s default)</div>
+                    </div>
+
+                    <!-- Legacy global settings (hidden, per-phase config overrides these) -->
+                    <input type="hidden" id="clientMaxSubdomainLength" value="0">
+                    <input type="hidden" id="clientPayloadFormat" value="">
+
+                    <div class="form-group" style="margin-top:12px;">
+                        <label class="form-label" style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                            <input type="checkbox" id="clientStagedRegistration">
+                            <span>Staged registration (split initial check-in across 3 queries)</span>
+                        </label>
+                        <div class="form-hint" style="font-size:11px; color:#666; margin-top:4px;">
+                            Splits the initial CHK into 3 smaller DNS queries sent across consecutive check-in
+                            intervals. Works with Shadow Mesh — stages can hit different DNS servers.
+                        </div>
+                    </div>
+
+                    <h4 style="color: rgba(255, 51, 51, 0.6); margin: 15px 0 10px 0; font-size: 12px; text-transform: uppercase; letter-spacing: 1px;">Malleable Communications</h4>
+                    <div class="form-hint" style="font-size:11px; color:#666; margin-bottom:12px;">
+                        Independent DNS settings per communication phase. Each phase can use different query types, encryption, and payload formats.
+                    </div>
+
+                    <!-- Registration Phase -->
+                    <details class="phase-section" style="background:rgba(0,0,0,0.2); border:1px solid rgba(255,51,51,0.1); border-radius:6px; margin-bottom:8px;">
+                        <summary style="padding:10px 14px; cursor:pointer; color:rgba(255,51,51,0.7); font-size:11px; text-transform:uppercase; letter-spacing:0.5px; font-weight:600; user-select:none;">Registration</summary>
+                        <div style="padding:0 14px 14px 14px;">
+                            <div class="form-group">
+                                <label class="form-label">Query Type</label>
+                                <select id="regQueryType" class="form-input" onchange="togglePhaseARecord('reg'); updateBuildPreview();">
+                                    <option value="TXT" selected>TXT</option>
+                                    <option value="A">A Record</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                                    <input type="checkbox" id="regEncrypted" checked onchange="updateBuildPreview();">
+                                    <span>Encrypt (AES-GCM)</span>
+                                </label>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Max Payload (0 = auto)</label>
+                                <input type="number" id="regMaxPayload" class="form-input" value="0" min="0" max="200" onchange="updateBuildPreview();">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Payload Format</label>
+                                <input type="text" id="regPayloadFormat" class="form-input" placeholder="XXXX-XXXX.XXXX-XXXX" oninput="updateBuildPreview();">
+                                <div class="form-hint" style="font-size:10px; color:#555; margin-top:3px;">Note: CHK queries use default labels (bootstrap), but format is stored in config for server-side reference.</div>
+                            </div>
+                            <div id="regARecordSection" style="display:none;">
+                                <div class="form-group">
+                                    <label class="form-label">A Record ACK IP</label>
+                                    <input type="text" id="regACKIP" class="form-input" placeholder="127.0.0.1" value="" oninput="updateBuildPreview();">
+                                    <div class="form-hint" style="font-size:10px; color:#555; margin-top:3px;">IP server returns to acknowledge registration. Empty = 127.0.0.1</div>
+                                </div>
+                            </div>
+                        </div>
+                    </details>
+
+                    <!-- Poll (Heartbeat) Phase -->
+                    <details class="phase-section" style="background:rgba(0,0,0,0.2); border:1px solid rgba(255,51,51,0.1); border-radius:6px; margin-bottom:8px;">
+                        <summary style="padding:10px 14px; cursor:pointer; color:rgba(255,51,51,0.7); font-size:11px; text-transform:uppercase; letter-spacing:0.5px; font-weight:600; user-select:none;">Poll (Heartbeat)</summary>
+                        <div style="padding:0 14px 14px 14px;">
+                            <div class="form-group">
+                                <label class="form-label">Query Type</label>
+                                <select id="pollQueryType" class="form-input" onchange="togglePhaseARecord('poll'); updateBuildPreview();">
+                                    <option value="TXT" selected>TXT</option>
+                                    <option value="A">A Record</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                                    <input type="checkbox" id="pollEncrypted" checked onchange="updateBuildPreview();">
+                                    <span>Encrypt (AES-GCM)</span>
+                                </label>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Max Payload (0 = auto)</label>
+                                <input type="number" id="pollMaxPayload" class="form-input" value="0" min="0" max="200" onchange="updateBuildPreview();">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Payload Format</label>
+                                <input type="text" id="pollPayloadFormat" class="form-input" placeholder="XXXX-XXXX.XXXX-XXXX" oninput="updateBuildPreview();">
+                            </div>
+                            <div id="pollARecordSection" style="display:none;">
+                                <div class="form-group">
+                                    <label class="form-label">ACK IP (no task)</label>
+                                    <input type="text" id="pollACKIP" class="form-input" placeholder="127.0.0.1" value="" oninput="updateBuildPreview();">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">Task Pending IP</label>
+                                    <input type="text" id="pollTaskIP" class="form-input" placeholder="127.0.0.2" value="" oninput="updateBuildPreview();">
+                                    <div class="form-hint" style="font-size:10px; color:#555; margin-top:3px;">Client sees this IP → waits → follows up with TXT to retrieve task.</div>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">TXT Follow-up Delay (seconds)</label>
+                                    <input type="number" id="pollTxtFollowUp" class="form-input" value="0" min="0" max="300" onchange="updateBuildPreview();">
+                                    <div class="form-hint" style="font-size:10px; color:#555; margin-top:3px;">Seconds before TXT query to get task. 0 = use sleep interval.</div>
+                                </div>
+                            </div>
+                        </div>
+                    </details>
+
+                    <!-- Data Exfil Phase -->
+                    <details class="phase-section" style="background:rgba(0,0,0,0.2); border:1px solid rgba(255,51,51,0.1); border-radius:6px; margin-bottom:8px;">
+                        <summary style="padding:10px 14px; cursor:pointer; color:rgba(255,51,51,0.7); font-size:11px; text-transform:uppercase; letter-spacing:0.5px; font-weight:600; user-select:none;">Data Exfil</summary>
+                        <div style="padding:0 14px 14px 14px;">
+                            <div class="form-group">
+                                <label class="form-label">Query Type</label>
+                                <select id="exfilQueryType" class="form-input" onchange="togglePhaseARecord('exfil'); updateBuildPreview();">
+                                    <option value="TXT" selected>TXT</option>
+                                    <option value="A">A Record</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                                    <input type="checkbox" id="exfilEncrypted" checked onchange="updateBuildPreview();">
+                                    <span>Encrypt (AES-GCM)</span>
+                                </label>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Max Payload (0 = auto)</label>
+                                <input type="number" id="exfilMaxPayload" class="form-input" value="0" min="0" max="200" onchange="updateBuildPreview();">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Payload Format</label>
+                                <input type="text" id="exfilPayloadFormat" class="form-input" placeholder="XXXX-XXXX.XXXX-XXXX" oninput="updateBuildPreview();">
+                            </div>
+                            <div id="exfilARecordSection" style="display:none;">
+                                <div class="form-group">
+                                    <label class="form-label">A Record ACK IP</label>
+                                    <input type="text" id="exfilACKIP" class="form-input" placeholder="127.0.0.1" value="" oninput="updateBuildPreview();">
+                                    <div class="form-hint" style="font-size:10px; color:#555; margin-top:3px;">IP server returns to acknowledge each data chunk.</div>
+                                </div>
+                            </div>
+                        </div>
+                    </details>
+                </div>
+
+                <!-- Live Build Preview (collapsible) -->
+                <div id="clientBuildPreview" style="margin-top: 16px; display: none;">
+                    <div id="previewWarning" style="display:none; background:rgba(255,51,51,0.08); border:1px solid rgba(255,51,51,0.4);
+                         border-radius:4px; padding:8px 10px; margin-bottom:8px; font-size:11px; color:#f44336;"></div>
+
+                    <details style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,51,51,0.15);
+                         border-radius: 6px; font-size: 12px; line-height: 1.7; color: #999;">
+                        <summary style="padding: 12px 16px; cursor: pointer; color: rgba(255,51,51,0.8); font-size: 11px;
+                                 text-transform: uppercase; letter-spacing: 1px; font-weight: 600; user-select: none;">
+                            DNS Query Preview &amp; Timing
+                        </summary>
+                        <div style="padding: 0 16px 16px 16px;">
+
+                            <div id="previewRegistrationContainer" style="margin-bottom: 12px;"></div>
+
+                            <div id="previewPollContainer" style="margin-bottom: 12px;"></div>
+
+                            <div id="previewDataContainer" style="margin-bottom: 12px;"></div>
+
+                            <div>
+                                <div style="color: rgba(255,51,51,0.6); font-size: 11px; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;">Timing Estimates</div>
+                                <table style="width: 100%; border-collapse: collapse; font-size: 11px;">
+                                    <tr style="border-bottom: 1px solid rgba(255,51,51,0.1);">
+                                        <td style="padding: 4px 0; color: #888;">Check-in interval</td>
+                                        <td id="previewCheckinInterval" style="padding: 4px 0; text-align: right; color: #ccc;"></td>
+                                    </tr>
+                                    <tr style="border-bottom: 1px solid rgba(255,51,51,0.1);">
+                                        <td style="padding: 4px 0; color: #888;">Max bytes per query</td>
+                                        <td id="previewMaxBytes" style="padding: 4px 0; text-align: right; color: #ccc;"></td>
+                                    </tr>
+                                    <tr style="border-bottom: 1px solid rgba(255,51,51,0.1);">
+                                        <td style="padding: 4px 0; color: #888;">100-chunk exfil (est.)</td>
+                                        <td id="previewExfilTime" style="padding: 4px 0; text-align: right; color: #ccc;"></td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 4px 0; color: #888;">Queries per check-in cycle</td>
+                                        <td id="previewQueriesPerCycle" style="padding: 4px 0; text-align: right; color: #ccc;"></td>
+                                    </tr>
+                                </table>
+                            </div>
+                        </div>
+                    </details>
+                </div>
+
+                <button class="btn-build" onclick="buildClient()">Build Beacon Client</button>
+            </div>
+
+            <!-- Build warning confirmation modal -->
+            <div id="buildWarningModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.8);
+                 z-index:9000; align-items:center; justify-content:center;">
+                <div style="background:#1a1a1a; border:1px solid #f44336; border-radius:8px; padding:28px;
+                     max-width:500px; width:90%; color:#ccc; font-size:13px; line-height:1.6;">
+                    <div style="color:#f44336; font-size:15px; font-weight:600; margin-bottom:14px;">Build Warning</div>
+                    <div id="buildWarningBody"></div>
+                    <div style="margin-top:22px; display:flex; gap:10px; justify-content:flex-end;">
+                        <button onclick="cancelBuildWarning()"
+                                style="padding:7px 18px; background:#333; border:1px solid #555; border-radius:4px;
+                                       color:#ccc; cursor:pointer;">Cancel</button>
+                        <button onclick="confirmBuildWarning()"
+                                style="padding:7px 18px; background:#c62828; border:none; border-radius:4px;
+                                       color:#fff; cursor:pointer; font-weight:600;">Build Anyway</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Stager Builder -->
+            <div class="builder-card">
+                <div class="builder-title">Stager</div>
+                <div class="builder-description">
+                    Build a DNS-based stager that downloads and executes the full beacon. Used for initial access with minimal footprint.
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Client Binary *</label>
+                    <select id="stagerClientBinary" class="form-select">
+                        <option value="" disabled selected>Loading...</option>
+                    </select>
+                    <div class="help-text">Pre-built beacon to deploy via stager 
+                        <button onclick="loadClientBinaries(); return false;" style="background: none; border: none; color: rgba(255, 51, 51, 0.8); cursor: pointer; padding: 0 5px;">Refresh</button>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Platform *</label>
+                    <select id="stagerPlatform" class="form-select">
+                        <option value="linux">Linux</option>
+                        <option value="windows">Windows</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Architecture *</label>
+                    <select id="stagerArchitecture" class="form-select">
+                        <option value="amd64">x86_64 (amd64)</option>
+                        <option value="386">x86 (32-bit)</option>
+                        <option value="arm64">ARM 64-bit (arm64)</option>
+                        <option value="armv7l">ARM v7 (armv7l)</option>
+                        <option value="arm">ARM (generic)</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" style="display: flex; align-items: center; gap: 10px;">
+                        <input type="checkbox" id="stagerStaticLink" checked style="width: 16px; height: 16px;">
+                        Static Linking
+                    </label>
+                    <div class="help-text">Static binaries work on any glibc version but are ~50-100KB larger</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Payload URL</label>
+                    <input type="text" id="stagerPayloadURL" class="form-input" placeholder="http://example.com/beacon.bin">
+                    <div class="help-text">Optional: Download from HTTP instead of DNS</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">DNS Resolver</label>
+                    <input type="text" id="stagerResolver" class="form-input" placeholder="Leave empty for system resolver">
+                    <div class="help-text">Specify resolver IP (e.g., 8.8.8.8) or leave empty to use host's configured DNS</div>
+                </div>
+
+                <div class="advanced-toggle" onclick="toggleAdvanced('stagerAdvanced')">
+                    ▶ Advanced Options
+                </div>
+                <div id="stagerAdvanced" class="advanced-section">
+                    <div class="form-group">
+                        <label class="form-label">Jitter Between Bursts (ms)</label>
+                        <div class="form-row">
+                            <input type="number" id="stagerJitterMin" class="form-input" placeholder="Min (ms)" value="60000" min="0">
+                            <input type="number" id="stagerJitterMax" class="form-input" placeholder="Max (ms)" value="120000" min="0">
+                        </div>
+                        <div class="help-text">Random delay between bursts (60-120s default for stealth)</div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Chunks Per Burst</label>
+                        <input type="number" id="stagerChunksPerBurst" class="form-input" value="5" min="1">
+                        <div class="help-text">Number of chunks to request rapidly before pausing (5 default)</div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Burst Pause (ms)</label>
+                        <input type="number" id="stagerBurstPause" class="form-input" value="120000" min="0">
+                        <div class="help-text">Additional fixed pause between bursts (120s default)</div>
+                    </div>
+                </div>
+
+                <button class="btn-build" onclick="buildStager()">Build Stager</button>
+            </div>
+        </div>
+
+        <!-- Saved Builds Section -->
+        <h1 class="section-title" style="margin-top: 40px;">Saved Builds</h1>
+        <div class="builder-card" style="max-width: 100%;">
+            <div class="builder-description">
+                Download or delete previously built binaries
+            </div>
+            <div id="buildsContainer" style="margin-top: 20px;">
+                <div style="text-align: center; color: #444; padding: 20px;">Loading builds...</div>
+            </div>
+        </div>
+
+    </div>
+
+    <script src="/static/shared.js"></script>
+    <script>
+        const API_BASE = window.location.origin;
+        const BUILD_TYPES_WITH_TIMING = new Set(['client', 'stager']);
+
+        // Use escapeHtml from shared.js; alias for backward compat within this file
+        const escapeHTML = escapeHtml;
+
+        function formatRangeLabel(label, min, max, unit) {
+            const safeMin = Number.isFinite(min) ? min : 0;
+            const safeMax = Number.isFinite(max) ? max : 0;
+            if (safeMin <= 0 && safeMax <= 0) {
+                return '';
+            }
+            if (safeMin > 0 && safeMax > 0) {
+                if (safeMin === safeMax) {
+                    return `${label} ${safeMin}${unit}`;
+                }
+                return `${label} ${safeMin}-${safeMax}${unit}`;
+            }
+            const value = safeMin > 0 ? safeMin : safeMax;
+            return `${label} ${value}${unit}`;
+        }
+
+        function renderTimingLabel(build) {
+            if (!build) {
+                return '';
+            }
+            if (build.timing) {
+                return build.timing;
+            }
+            const metaTiming = build.metadata && build.metadata.timing;
+            if (!metaTiming) {
+                return '';
+            }
+
+            const parts = [];
+            const sleepLabel = formatRangeLabel('Sleep', metaTiming.sleep_min_sec, metaTiming.sleep_max_sec, ' s');
+            if (sleepLabel) {
+                parts.push(sleepLabel);
+            }
+
+            const jitterLabel = formatRangeLabel('Jitter', metaTiming.jitter_min_ms, metaTiming.jitter_max_ms, ' ms');
+            if (jitterLabel) {
+                parts.push(jitterLabel);
+            }
+
+            if (Number.isFinite(metaTiming.chunk_bytes) && metaTiming.chunk_bytes > 0) {
+                parts.push(`${metaTiming.chunk_bytes} byte chunks`);
+            }
+
+            if (Number.isFinite(metaTiming.chunks_per_burst) && metaTiming.chunks_per_burst > 0) {
+                parts.push(`${metaTiming.chunks_per_burst} chunks/burst`);
+            }
+
+            if (Number.isFinite(metaTiming.burst_pause_ms) && metaTiming.burst_pause_ms > 0) {
+                parts.push(`pause ${metaTiming.burst_pause_ms} ms`);
+            }
+
+            return parts.join(' · ');
+        }
+
+        function showAlert(message, type = 'success') {
+            const container = document.getElementById('alertContainer');
+            const alert = document.createElement('div');
+            alert.className = `alert alert-${type}`;
+            alert.textContent = message;
+            container.innerHTML = '';
+            container.appendChild(alert);
+
+            setTimeout(() => alert.remove(), 10000);
+        }
+
+        function toggleAdvanced(id) {
+            const element = document.getElementById(id);
+            const toggle = element.previousElementSibling;
+            element.classList.toggle('show');
+            toggle.textContent = element.classList.contains('show') ? '▼ Advanced Options' : '▶ Advanced Options';
+        }
+
+        function togglePhaseARecord(phase) {
+            const qt = document.getElementById(phase + 'QueryType').value;
+            const section = document.getElementById(phase + 'ARecordSection');
+            if (section) {
+                section.style.display = qt === 'A' ? 'block' : 'none';
+            }
+        }
+
+        function showBuildLoading(text) {
+            const loadingText = document.getElementById('loadingText');
+            if (loadingText) loadingText.textContent = text;
+            const overlay = document.getElementById('loadingOverlay');
+            if (overlay) overlay.classList.add('show');
+        }
+
+        function hideBuildLoading() {
+            const overlay = document.getElementById('loadingOverlay');
+            if (overlay) overlay.classList.remove('show');
+        }
+
+
+        async function loadDNSServers() {
+            try {
+                const response = await authFetch('/api/dns-servers');
+                if (!response) return;
+
+                const data = await response.json();
+                const servers = data.servers || [];
+
+                // Store servers globally for buildClient
+                window.availableDNSServers = servers;
+                setTimeout(updateBuildPreview, 100);
+
+                // Update client DNS servers display
+                const clientList = document.getElementById('clientDNSServersList');
+
+                if (servers.length === 0) {
+                    clientList.innerHTML = '<span style="color: #555;">No DNS servers registered yet. Build a DNS server first.</span>';
+                } else {
+                    const checkboxHtml = servers.map(server => {
+                        const isActive = server.status === 'active';
+                        const statusColor = isActive ? '#4CAF50' : '#777';
+                        const statusLabel = isActive ? '' : ' (inactive)';
+                        return `<label style="display: flex; align-items: center; gap: 8px; padding: 5px; cursor: pointer; color: ${statusColor};">
+                            <input type="checkbox" class="client-dns-checkbox" value="${escapeHTML(server.domain)}" data-server-id="${escapeHTML(server.id)}" ${isActive ? 'checked' : ''} style="width: 14px; height: 14px;">
+                            ${escapeHTML(server.domain)}${statusLabel}
+                        </label>`;
+                    }).join('');
+                    clientList.innerHTML = checkboxHtml;
+                }
+
+            } catch (error) {
+                console.error('Failed to load DNS servers:', error);
+            }
+        }
+
+        async function loadClientBinaries() {
+            try {
+                console.log('[Builder] Fetching client binaries');
+                const response = await authFetch('/api/builder/client-binaries');
+                if (!response) {
+                    console.error('[Builder] Failed to fetch client binaries - no response');
+                    return;
+                }
+
+                const binaries = await response.json();
+                console.log('[Builder] Loaded', binaries.length, 'client binaries');
+                
+                const stagerSelect = document.getElementById('stagerClientBinary');
+
+                stagerSelect.innerHTML = '<option value="">Select a client binary</option>';
+                
+                if (!binaries || binaries.length === 0) {
+                    console.warn('[Builder] No client binaries available');
+                    stagerSelect.innerHTML = '<option value="" disabled>No client binaries available - build a client first</option>';
+                    return;
+                }
+
+                binaries.forEach((binary) => {
+                    const option = document.createElement('option');
+                    option.value = binary.id;
+                    const sizeMB = (binary.compressed_size / 1024 / 1024).toFixed(2);
+                    const createdDate = new Date(binary.created_at * 1000).toLocaleDateString();
+                    option.textContent = `${binary.os}/${binary.arch} - ${sizeMB}MB (${binary.total_chunks} chunks) - ${createdDate}`;
+                    stagerSelect.appendChild(option);
+                });
+            } catch (error) {
+                console.error('[Builder] Failed to load client binaries:', error);
+                showAlert('Failed to load client binaries. Check console for details.', 'error');
+            }
+        }
+
+        async function buildDNSServer() {
+            const domain = document.getElementById('dnsServerDomain').value.trim();
+            const upstream = document.getElementById('dnsServerUpstream').value.trim();
+            const address = document.getElementById('dnsServerAddress').value.trim();
+            const encKey = document.getElementById('dnsServerEncKey').value.trim();
+            const forwardDNS = document.getElementById('dnsServerForwardDNS').checked;
+
+            if (!domain) {
+                showAlert('Domain is required', 'error');
+                return;
+            }
+
+            if (!address) {
+                showAlert('Server address is required for A records', 'error');
+                return;
+            }
+
+            if (forwardDNS) {
+                _pendingBuild = () => executeDNSServerBuild(domain, upstream, address, encKey, forwardDNS);
+                document.getElementById('buildWarningBody').innerHTML =
+                    '<p><strong style="color:#f44336;">DNS forwarding is enabled.</strong> ' +
+                    'An open DNS forwarder on a public IP can be abused for <strong>DNS amplification attacks</strong>. ' +
+                    'Only enable this if you need the server to blend in as a legitimate resolver. ' +
+                    'Consider rate-limiting or firewall rules on UDP/53.</p>';
+                document.getElementById('buildWarningModal').style.display = 'flex';
+                return;
+            }
+
+            executeDNSServerBuild(domain, upstream, address, encKey, forwardDNS);
+        }
+
+        async function executeDNSServerBuild(domain, upstream, address, encKey, forwardDNS) {
+            showBuildLoading('Building DNS server... This may take a minute');
+
+            try {
+                const response = await authFetch('/api/builder/dns-server', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        domain,
+                        ns1: '', // Will be auto-generated as ns1.domain
+                        ns2: '', // Will be auto-generated as ns2.domain
+                        upstream_dns: upstream || '8.8.8.8:53',
+                        server_address: address,
+                        encryption_key: encKey || '',
+                        forward_dns: forwardDNS
+                    })
+                });
+
+                if (!response) {
+                    throw new Error('Authentication failed or network error');
+                }
+
+                if (response.ok) {
+                    const payload = await response.json();
+                    const info = (payload && payload.data) || {};
+                    const note = info.download_path ? ` Saved at ${info.download_path}.` : '';
+                    const message = (payload && payload.message) || 'DNS server build saved.';
+                    showAlert(`${message}${note}`, 'success');
+                    await loadDNSServers(); // Refresh server list
+                    await loadBuilds(); // Refresh builds list
+                } else {
+                    let errorMsg = 'Build failed';
+                    try {
+                        const error = await response.json();
+                        errorMsg = error.message || error.error || errorMsg;
+                    } catch (e) {
+                        errorMsg = `HTTP ${response.status}: ${response.statusText}`;
+                    }
+                    throw new Error(errorMsg);
+                }
+            } catch (error) {
+                console.error('Build error:', error);
+                showAlert(`Build failed: ${error.message}`, 'error');
+            } finally {
+                hideBuildLoading();
+            }
+        }
+
+        // Pending build callback set when confirmation modal is shown
+        let _pendingBuild = null;
+
+        function cancelBuildWarning() {
+            document.getElementById('buildWarningModal').style.display = 'none';
+            _pendingBuild = null;
+        }
+
+        function confirmBuildWarning() {
+            document.getElementById('buildWarningModal').style.display = 'none';
+            if (_pendingBuild) {
+                const fn = _pendingBuild;
+                _pendingBuild = null;
+                fn();
+            }
+        }
+
+        function countXSlots(fmt) { return (fmt.match(/X/g) || []).length; }
+
+        // ---- Live Build Preview ----
+
+        function updateBuildPreview() {
+            const panel = document.getElementById('clientBuildPreview');
+
+            const checkedBoxes = document.querySelectorAll('.client-dns-checkbox:checked');
+            const domains = Array.from(checkedBoxes).map(cb => cb.value);
+            if (domains.length === 0) {
+                panel.style.display = 'none';
+                return;
+            }
+            panel.style.display = 'block';
+
+            // Per-phase settings
+            const regEnc = document.getElementById('regEncrypted').checked;
+            const regQT = document.getElementById('regQueryType').value;
+            const regFmt = document.getElementById('regPayloadFormat').value.trim();
+            const regMaxPayload = parseInt(document.getElementById('regMaxPayload').value, 10) || 0;
+
+            const pollEnc = document.getElementById('pollEncrypted').checked;
+            const pollQT = document.getElementById('pollQueryType').value;
+            const pollFmt = document.getElementById('pollPayloadFormat').value.trim();
+            const pollMaxPayload = parseInt(document.getElementById('pollMaxPayload').value, 10) || 0;
+
+            const exfilEnc = document.getElementById('exfilEncrypted').checked;
+            const exfilQT = document.getElementById('exfilQueryType').value;
+            const exfilFmt = document.getElementById('exfilPayloadFormat').value.trim();
+            const exfilMaxPayload = parseInt(document.getElementById('exfilMaxPayload').value, 10) || 0;
+
+            const sleepMin = parseInt(document.getElementById('clientSleepMin').value, 10) || 60;
+            const sleepMax = parseInt(document.getElementById('clientSleepMax').value, 10) || 120;
+            const jitterMin = parseInt(document.getElementById('clientExfilJitterMin').value, 10) || 1000;
+            const jitterMax = parseInt(document.getElementById('clientExfilJitterMax').value, 10) || 2000;
+            const chunksPerBurst = parseInt(document.getElementById('clientChunksPerBurst').value, 10) || 10;
+            const burstPause = parseInt(document.getElementById('clientBurstPause').value, 10) || 5000;
+
+            const domain = domains.reduce((a, b) => a.length >= b.length ? a : b);
+
+            const warnEl = document.getElementById('previewWarning');
+            warnEl.style.display = 'none';
+
+            const b36 = 'abcdefghijklmnopqrstuvwxyz0123456789';
+            function fakeB36(n) {
+                let s = '';
+                for (let i = 0; i < n; i++) s += b36[Math.floor(Math.random() * 36)];
+                return s;
+            }
+
+            function toLabels(encoded) {
+                const labels = [];
+                let r = encoded;
+                while (r > 0) {
+                    const seg = Math.min(r, 62);
+                    labels.push(fakeB36(seg));
+                    r -= seg;
+                }
+                return labels.join('.');
+            }
+
+            function applyFormat(encodedLen, format) {
+                const fakeData = fakeB36(encodedLen);
+                let result = '', idx = 0;
+                for (const ch of format) {
+                    if (idx >= fakeData.length) break;
+                    if (ch === 'X') {
+                        result += fakeData[idx++];
+                    } else {
+                        result += ch;
+                    }
+                }
+                return result;
+            }
+
+            function encodedCharsForBudget(budget) {
+                if (budget <= 62) return budget;
+                const dots = Math.floor(budget / 63);
+                return budget - dots;
+            }
+
+            // base36Encode prepends a 0x01 sentinel; AES-GCM adds 12-byte nonce + 16-byte tag
+            function computeEncodedLen(plaintextBytes, encrypted) {
+                const rawBytes = encrypted ? plaintextBytes + 29 : plaintextBytes + 1;
+                return Math.ceil(rawBytes * 1.6);
+            }
+
+            function renderPhasePreview(label, subtitle, encodedLen, phaseEnc, phaseQT, phaseFmt, maxPayload) {
+                const enc = encodedLen;
+                const xSlots = phaseFmt ? countXSlots(phaseFmt) : 0;
+
+                let sub, usedFormat = false;
+                if (phaseFmt && enc <= xSlots) {
+                    sub = applyFormat(enc, phaseFmt);
+                    usedFormat = true;
+                } else {
+                    sub = toLabels(enc);
+                }
+                const fqdn = sub + '.' + domain;
+
+                let color = '#7fdbca';
+                let extra = '';
+                const qtLabel = phaseQT === 'A' ? ' [A record]' : ' [TXT]';
+                const encLabel = phaseEnc ? 'AES-GCM' : 'plain base36';
+
+                if (maxPayload > 0 && enc > maxPayload) {
+                    extra = '\nWARN: encoded query ~' + enc + ' chars exceeds max payload ' + maxPayload + ' — query will fail!';
+                    color = '#f44336';
+                } else if (fqdn.length > 253) {
+                    extra = '\nWARN: FQDN ' + fqdn.length + ' chars — exceeds 253 limit!';
+                    color = '#f44336';
+                } else if (phaseFmt && !usedFormat) {
+                    extra = '\n↳ format too small (' + xSlots + ' X-slots, need ' + enc + ') — falls back to default labels';
+                    color = '#ff9800';
+                }
+
+                const fmtNote = usedFormat ? 'uses format' : 'default labels';
+                return '<div style="margin-bottom:8px;">' +
+                    '<div style="color:rgba(255,51,51,0.6);font-size:11px;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;">' +
+                    label + ' <span style="color:#555">— ' + subtitle + ' (' + fmtNote + ', ' + encLabel + qtLabel + ')</span></div>' +
+                    '<code style="display:block;background:rgba(0,0,0,0.5);border:1px solid rgba(255,51,51,0.1);padding:8px 10px;border-radius:4px;' +
+                    'font-family:monospace;font-size:11px;color:' + color + ';word-break:break-all;white-space:pre-wrap;">' +
+                    fqdn + extra + '</code></div>';
+            }
+
+            // -- Registration preview --
+            const staged = document.getElementById('clientStagedRegistration').checked;
+            const regContainer = document.getElementById('previewRegistrationContainer');
+
+            let regHtml;
+            if (staged) {
+                regHtml =
+                    renderPhasePreview('Stage 1 (S1)', 'beacon ID + build ID', computeEncodedLen(22, regEnc), regEnc, regQT, regFmt, regMaxPayload) +
+                    renderPhasePreview('Stage 2 (S2)', 'hostname + OS', computeEncodedLen(33, regEnc), regEnc, regQT, regFmt, regMaxPayload) +
+                    renderPhasePreview('Stage 3 (S3)', 'username + arch', computeEncodedLen(31, regEnc), regEnc, regQT, regFmt, regMaxPayload);
+            } else {
+                regHtml = renderPhasePreview('Registration (CHK)', 'first contact only', computeEncodedLen(56, regEnc), regEnc, regQT, regFmt, regMaxPayload);
+            }
+            if (regQT === 'A') {
+                const regACK = document.getElementById('regACKIP').value.trim() || '127.0.0.1';
+                regHtml += '<div style="font-size:11px;color:#888;margin-top:-4px;padding-left:10px;margin-bottom:8px;">' +
+                    '↳ Server responds with A record ACK: ' + regACK + '</div>';
+            }
+            regContainer.innerHTML = regHtml;
+
+            // -- POLL preview -- uses poll-phase settings
+            const pollEncLen = computeEncodedLen(15, pollEnc);
+            let pollHtml = renderPhasePreview('Poll (Check-in)', 'recurring heartbeat', pollEncLen, pollEnc, pollQT, pollFmt, pollMaxPayload);
+            if (pollQT === 'A') {
+                const ackIP = document.getElementById('pollACKIP').value.trim() || '127.0.0.1';
+                const taskIP = document.getElementById('pollTaskIP').value.trim() || '127.0.0.2';
+                const followUp = parseInt(document.getElementById('pollTxtFollowUp').value, 10) || 0;
+                pollHtml += '<div style="font-size:11px;color:#888;margin-top:-4px;padding-left:10px;margin-bottom:2px;">' +
+                    '↳ A record probe: ACK=' + ackIP + ', TaskPending=' + taskIP + '</div>';
+                pollHtml += '<div style="font-size:11px;color:#888;padding-left:10px;">' +
+                    '↳ On task: wait ' + (followUp > 0 ? followUp + 's' : 'sleep interval') + ' → TXT follow-up to retrieve task</div>';
+            }
+            document.getElementById('previewPollContainer').innerHTML = pollHtml;
+
+            // -- DATA (Exfil) preview -- uses exfil-phase settings
+            const exfilOverhead = exfilEnc ? 63 : 35;
+            let safeRawChunk;
+            if (exfilMaxPayload > 0) {
+                const subEncoded = encodedCharsForBudget(exfilMaxPayload);
+                safeRawChunk = Math.floor(subEncoded * 5 / 8) - exfilOverhead;
+                if (safeRawChunk < 1) safeRawChunk = 1;
+            } else {
+                safeRawChunk = Math.floor((400 - 100) / 2);
+                if (safeRawChunk < 8) safeRawChunk = 8;
+            }
+            if (exfilFmt) {
+                const xSlots = countXSlots(exfilFmt);
+                const formatChunk = Math.floor(xSlots * 5 / 8) - exfilOverhead;
+                if (formatChunk >= 1 && formatChunk < safeRawChunk) {
+                    safeRawChunk = formatChunk;
+                }
+            }
+            const subBudget = 253 - 1 - domain.length;
+            const fqdnEncoded = encodedCharsForBudget(subBudget);
+            const fqdnCap = Math.floor(fqdnEncoded * 5 / 8) - exfilOverhead;
+            if (fqdnCap >= 8 && safeRawChunk > fqdnCap) {
+                safeRawChunk = fqdnCap;
+            }
+            const maxRawBytes = Math.max(1, safeRawChunk);
+            const dataEncodedLen = Math.ceil((maxRawBytes + exfilOverhead) * 1.6);
+
+            let dataHtml = renderPhasePreview('Data (Task Output)', 'max-size result chunk', dataEncodedLen, exfilEnc, exfilQT, exfilFmt, exfilMaxPayload);
+            if (exfilQT === 'A') {
+                const exfilACK = document.getElementById('exfilACKIP').value.trim() || '127.0.0.1';
+                dataHtml += '<div style="font-size:11px;color:#888;margin-top:-4px;padding-left:10px;margin-bottom:8px;">' +
+                    '↳ Server responds with A record ACK: ' + exfilACK + ' per chunk</div>';
+            }
+            document.getElementById('previewDataContainer').innerHTML = dataHtml;
+
+            // -- Timing estimates --
+            const exfilQTLabel = exfilQT === 'A' ? ' [A record]' : ' [TXT]';
+            const exfilEncLabel = exfilEnc ? 'AES-GCM' : 'plain base36';
+            document.getElementById('previewCheckinInterval').textContent =
+                sleepMin === sleepMax ? sleepMin + 's' : sleepMin + 's – ' + sleepMax + 's';
+            document.getElementById('previewMaxBytes').textContent = maxRawBytes + ' bytes (' + exfilEncLabel + exfilQTLabel + ')';
+
+            const numChunks = 100;
+            const numBursts = Math.ceil(numChunks / chunksPerBurst);
+            const avgJitter = (jitterMin + jitterMax) / 2;
+            const totalMs = numBursts * (avgJitter + burstPause);
+            const totalSec = Math.round(totalMs / 1000);
+            if (totalSec < 120) {
+                document.getElementById('previewExfilTime').textContent = '~' + totalSec + 's';
+            } else {
+                document.getElementById('previewExfilTime').textContent = '~' + Math.round(totalSec / 60) + ' min';
+            }
+
+            const pollNote = pollQT === 'A' ? '1 (A probe) + 1 (TXT follow-up if task)' : '1 (POLL)';
+            document.getElementById('previewQueriesPerCycle').textContent = pollNote + ' + N (result chunks if task)';
+        }
+
+        // Attach listeners to all relevant inputs
+        (function() {
+            const ids = [
+                'clientSleepMin', 'clientSleepMax', 'clientExfilJitterMin', 'clientExfilJitterMax',
+                'clientChunksPerBurst', 'clientBurstPause', 'clientStagedRegistration',
+                'regQueryType', 'regEncrypted', 'regMaxPayload', 'regPayloadFormat', 'regACKIP',
+                'pollQueryType', 'pollEncrypted', 'pollMaxPayload', 'pollPayloadFormat', 'pollACKIP', 'pollTaskIP', 'pollTxtFollowUp',
+                'exfilQueryType', 'exfilEncrypted', 'exfilMaxPayload', 'exfilPayloadFormat', 'exfilACKIP'
+            ];
+            ids.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.addEventListener('input', updateBuildPreview);
+            });
+            const serverList = document.getElementById('clientDNSServersList');
+            if (serverList) serverList.addEventListener('change', updateBuildPreview);
+            // Initial update after servers load
+            setTimeout(updateBuildPreview, 1500);
+        })();
+
+        async function buildClient() {
+            const checkedBoxes = document.querySelectorAll('.client-dns-checkbox:checked');
+            const selectedServers = Array.from(checkedBoxes).map(cb => cb.value);
+            if (selectedServers.length === 0) {
+                showAlert('Select at least one DNS server to embed', 'error');
+                return;
+            }
+            const platform = document.getElementById('clientPlatform').value;
+            const architecture = document.getElementById('clientArchitecture').value;
+            const sleepMin = parseInt(document.getElementById('clientSleepMin').value, 10) || 60;
+            const sleepMax = parseInt(document.getElementById('clientSleepMax').value, 10) || 120;
+            const exfilJitterMin = parseInt(document.getElementById('clientExfilJitterMin').value, 10) || 1000;
+            const exfilJitterMax = parseInt(document.getElementById('clientExfilJitterMax').value, 10) || 2000;
+            const chunksPerBurst = parseInt(document.getElementById('clientChunksPerBurst').value, 10) || 10;
+            const burstPause = parseInt(document.getElementById('clientBurstPause').value, 10) || 5000;
+            const staticLink = document.getElementById('clientStaticLink').checked;
+            const resolver = document.getElementById('clientResolver').value.trim();
+
+            if (sleepMin > sleepMax) {
+                showAlert('Sleep min must be <= sleep max', 'error');
+                return;
+            }
+            if (exfilJitterMin > exfilJitterMax) {
+                showAlert('Exfil jitter min must be <= jitter max', 'error');
+                return;
+            }
+
+            // Gather per-phase config
+            const regEncrypted = document.getElementById('regEncrypted').checked;
+            const pollEncrypted = document.getElementById('pollEncrypted').checked;
+            const exfilEncrypted = document.getElementById('exfilEncrypted').checked;
+
+            // Warnings for unencrypted phases
+            const warnings = [];
+            const unencPhases = [];
+            if (!regEncrypted) unencPhases.push('Registration');
+            if (!pollEncrypted) unencPhases.push('Poll');
+            if (!exfilEncrypted) unencPhases.push('Data Exfil');
+            if (unencPhases.length > 0) {
+                warnings.push(
+                    '<p><strong style="color:#f44336;">Encryption disabled for: ' + unencPhases.join(', ') + '.</strong> ' +
+                    'Traffic for those phases will be plain base36 — readable in DNS logs.</p>'
+                );
+            }
+
+            const stagedRegistration = document.getElementById('clientStagedRegistration').checked;
+
+            const doExecute = () => executeBuildClient(selectedServers, platform, architecture, sleepMin, sleepMax,
+                exfilJitterMin, exfilJitterMax, chunksPerBurst, burstPause, staticLink, resolver, stagedRegistration);
+
+            if (warnings.length > 0) {
+                _pendingBuild = doExecute;
+                document.getElementById('buildWarningBody').innerHTML = warnings.join('');
+                document.getElementById('buildWarningModal').style.display = 'flex';
+                return;
+            }
+
+            doExecute();
+        }
+
+        async function executeBuildClient(
+            selectedServers, platform, architecture, sleepMin, sleepMax,
+            exfilJitterMin, exfilJitterMax, chunksPerBurst, burstPause,
+            staticLink, resolver, stagedRegistration
+        ) {
+            showBuildLoading('Building client... This may take a minute');
+
+            // Collect per-phase config from UI
+            const regPhase = {
+                query_type: document.getElementById('regQueryType').value,
+                encrypted: document.getElementById('regEncrypted').checked,
+                max_payload: parseInt(document.getElementById('regMaxPayload').value, 10) || 0,
+                payload_format: document.getElementById('regPayloadFormat').value.trim(),
+                a_record_ack_ip: document.getElementById('regACKIP').value.trim(),
+            };
+            const pollPhase = {
+                query_type: document.getElementById('pollQueryType').value,
+                encrypted: document.getElementById('pollEncrypted').checked,
+                max_payload: parseInt(document.getElementById('pollMaxPayload').value, 10) || 0,
+                payload_format: document.getElementById('pollPayloadFormat').value.trim(),
+                a_record_ack_ip: document.getElementById('pollACKIP').value.trim(),
+                a_record_task_ip: document.getElementById('pollTaskIP').value.trim(),
+                txt_follow_up_secs: parseInt(document.getElementById('pollTxtFollowUp').value, 10) || 0,
+            };
+            const exfilPhase = {
+                query_type: document.getElementById('exfilQueryType').value,
+                encrypted: document.getElementById('exfilEncrypted').checked,
+                max_payload: parseInt(document.getElementById('exfilMaxPayload').value, 10) || 0,
+                payload_format: document.getElementById('exfilPayloadFormat').value.trim(),
+                a_record_ack_ip: document.getElementById('exfilACKIP').value.trim(),
+            };
+
+            // Use exfil-phase encryption as the global default for backward compat
+            const globalEncrypted = regPhase.encrypted && pollPhase.encrypted && exfilPhase.encrypted;
+
+            try {
+                const response = await authFetch('/api/builder/client', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        dns_domains: selectedServers,
+                        platform,
+                        architecture,
+                        sleep_min: sleepMin,
+                        sleep_max: sleepMax,
+                        exfil_jitter_min_ms: exfilJitterMin,
+                        exfil_jitter_max_ms: exfilJitterMax,
+                        exfil_chunks_per_burst: chunksPerBurst,
+                        exfil_burst_pause_ms: burstPause,
+                        max_subdomain_length: 0,
+                        static_link: staticLink,
+                        resolver: resolver,
+                        beacon_name: document.getElementById('clientBeaconName').value.trim(),
+                        payload_format: '',
+                        encrypted: globalEncrypted,
+                        staged_registration: stagedRegistration,
+                        registration_phase: regPhase,
+                        poll_phase: pollPhase,
+                        data_exfil_phase: exfilPhase,
+                    })
+                });
+
+                if (!response) {
+                    throw new Error('Build failed');
+                }
+
+                if (response.ok) {
+                    const payload = await response.json();
+                    const info = (payload && payload.data) || {};
+                    const note = info.download_path ? ` Saved at ${info.download_path}.` : '';
+                    const buildNote = info.build_id ? ` Build ID: ${info.build_id}` : '';
+                    const message = (payload && payload.message) || 'Client build saved.';
+                    showAlert(`${message}${buildNote}${note}`, response.ok && !message.includes('WARNING') ? 'success' : 'error');
+                    await loadBuilds();
+                } else {
+                    const error = await response.json();
+                    throw new Error(error.message || 'Build failed');
+                }
+            } catch (error) {
+                showAlert(`Build failed: ${error.message}`, 'error');
+            } finally {
+                hideBuildLoading();
+            }
+        }
+
+        async function buildStager() {
+            const clientBinaryID = document.getElementById('stagerClientBinary').value;
+            const platform = document.getElementById('stagerPlatform').value;
+            const architecture = document.getElementById('stagerArchitecture').value;
+            const payloadURL = document.getElementById('stagerPayloadURL').value.trim();
+            const jitterMin = parseInt(document.getElementById('stagerJitterMin').value, 10) || 60000;
+            const jitterMax = parseInt(document.getElementById('stagerJitterMax').value, 10) || 120000;
+            const chunksPerBurst = parseInt(document.getElementById('stagerChunksPerBurst').value, 10) || 5;
+            const burstPause = parseInt(document.getElementById('stagerBurstPause').value, 10) || 120000;
+            const staticLink = document.getElementById('stagerStaticLink').checked;
+            const resolver = document.getElementById('stagerResolver').value.trim();
+
+            if (!clientBinaryID) {
+                showAlert('Please select a client binary', 'error');
+                return;
+            }
+
+            if (jitterMin > jitterMax) {
+                showAlert('Jitter min must be <= jitter max', 'error');
+                return;
+            }
+
+            showBuildLoading('Building stager... This may take a minute');
+
+            try {
+                const response = await authFetch('/api/builder/stager', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        client_binary_id: clientBinaryID,
+                        platform,
+                        architecture,
+                        payload_url: payloadURL,
+                        jitter_min_ms: jitterMin,
+                        jitter_max_ms: jitterMax,
+                        chunks_per_burst: chunksPerBurst,
+                        burst_pause_ms: burstPause,
+                        static_link: staticLink,
+                        resolver: resolver
+                    })
+                });
+
+                if (!response) {
+                    throw new Error('Build failed');
+                }
+
+                if (response.ok) {
+                    const payload = await response.json();
+                    const info = (payload && payload.data) || {};
+                    const note = info.download_path ? ` Saved at ${info.download_path}.` : '';
+                    const message = (payload && payload.message) || 'Stager build saved.';
+                    showAlert(`${message}${note}`, 'success');
+                    await loadBuilds(); // Refresh builds list
+                } else {
+                    const error = await response.json();
+                    throw new Error(error.message || 'Build failed');
+                }
+            } catch (error) {
+                showAlert(`Build failed: ${error.message}`, 'error');
+            } finally {
+                hideBuildLoading();
+            }
+        }
+
+        // Toggle upstream DNS field visibility based on forwarding checkbox
+        function setupForwardDNSToggle() {
+            const checkbox = document.getElementById('dnsServerForwardDNS');
+            const upstreamGroup = document.getElementById('dnsServerUpstreamGroup');
+
+            function updateVisibility() {
+                upstreamGroup.style.display = checkbox.checked ? 'block' : 'none';
+            }
+
+            checkbox.addEventListener('change', updateVisibility);
+            updateVisibility(); // Set initial state
+        }
+
+        // Initialize
+        loadDNSServers();
+        loadClientBinaries();
+        loadBuilds();
+        setupForwardDNSToggle();
+
+        async function loadBuilds() {
+            try {
+                const response = await authFetch('/api/builder/builds');
+                if (!response) return;
+
+                const builds = await response.json();
+                const container = document.getElementById('buildsContainer');
+
+                if (builds.length === 0) {
+                    container.innerHTML = '<div style="text-align: center; color: #444; padding: 20px;">No saved builds yet</div>';
+                    return;
+                }
+
+                // Group builds by type
+                const grouped = {};
+                builds.forEach(build => {
+                    if (!grouped[build.type]) {
+                        grouped[build.type] = [];
+                    }
+                    grouped[build.type].push(build);
+                });
+
+                let html = '';
+                const typeNames = {
+                    'dns-server': 'DNS Servers',
+                    'client': 'Clients',
+                    'stager': 'Stagers',
+                    'exfil': 'Exfil Clients (legacy)'
+                };
+
+                for (const [type, items] of Object.entries(grouped)) {
+                    const includeTiming = BUILD_TYPES_WITH_TIMING.has(type);
+                    html += `<div style="margin-bottom: 30px;">
+                        <h3 style="color: rgba(255, 51, 51, 0.8); font-size: 18px; margin-bottom: 10px;">${typeNames[type] || type}</h3>
+                        <table style="width: 100%; border-collapse: collapse;">
+                            <thead>
+                                <tr style="background: rgba(255, 51, 51, 0.05); text-align: left;">
+                                    <th style="padding: 10px;">Name</th>
+                                    <th style="padding: 10px;">Build ID</th>
+                                    <th style="padding: 10px;">Size</th>
+                                    ${includeTiming ? '<th style="padding: 10px;">Timing</th>' : ''}
+                                    <th style="padding: 10px;">Date</th>
+                                    <th style="padding: 10px; text-align: right;">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>`;
+
+                    items.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+                    
+                    items.forEach(build => {
+                        const sizeKB = (build.size / 1024).toFixed(1);
+                        const sizeMB = (build.size / 1024 / 1024).toFixed(2);
+                        const sizeStr = build.size > 1024 * 1024 ? `${sizeMB} MB` : `${sizeKB} KB`;
+                        const date = new Date(build.timestamp).toLocaleString();
+                        const timingText = includeTiming ? (renderTimingLabel(build) || '') : '';
+
+                        const buildId = build.metadata?.build_id || '';
+                        html += `<tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.05);">
+                            <td style="padding: 10px; color: #ccc;">${escapeHTML(build.name || '')}</td>
+                            <td style="padding: 10px; color: #888; font-family: monospace; font-size: 11px;">${buildId ? escapeHTML(buildId.substring(0, 8)) : '&mdash;'}</td>
+                            <td style="padding: 10px; color: #555;">${escapeHTML(sizeStr)}</td>
+                            ${includeTiming ? `<td style="padding: 10px; color: #888; font-size: 12px;">${timingText ? escapeHTML(timingText) : '&mdash;'}</td>` : ''}
+                            <td style="padding: 10px; color: #555;">${escapeHTML(date)}</td>
+                            <td style="padding: 10px; text-align: right;">
+                                <button data-action="download" data-path="${escapeHTML(build.path || '')}"
+                                    style="background: #28a745; color: white; border: none; padding: 5px 10px;
+                                    border-radius: 4px; cursor: pointer; margin-right: 5px; font-size: 11px;">
+                                    Download
+                                </button>
+                                <button data-action="delete" data-path="${escapeHTML(build.path || '')}" data-name="${escapeHTML(build.name || '')}"
+                                    style="background: #dc3545; color: white; border: none; padding: 5px 10px;
+                                    border-radius: 4px; cursor: pointer; font-size: 11px;">
+                                    Delete
+                                </button>
+                            </td>
+                        </tr>`;
+                    });
+
+                    html += `</tbody></table></div>`;
+                }
+
+                container.innerHTML = html;
+            } catch (error) {
+                console.error('Failed to load builds:', error);
+                document.getElementById('buildsContainer').innerHTML = 
+                    '<div style="text-align: center; color: #dc3545; padding: 20px;">Failed to load builds</div>';
+            }
+        }
+
+        async function downloadBuild(path) {
+            try {
+                // Cookie-based auth will be sent automatically
+                window.location.href = `${API_BASE}/api/builder/builds/download?path=${encodeURIComponent(path)}`;
+            } catch (error) {
+                console.error('Download failed:', error);
+                showAlert('Failed to download build', 'error');
+            }
+        }
+
+        async function deleteBuild(path, name) {
+            if (!confirm(`Delete build "${name}"?`)) {
+                return;
+            }
+
+            try {
+                const response = await authFetch(`/api/builder/builds/delete?path=${encodeURIComponent(path)}`, {
+                    method: 'DELETE'
+                });
+
+                if (!response) return;
+
+                showAlert('Build deleted successfully', 'success');
+                await loadBuilds(); // Reload builds list
+            } catch (error) {
+                console.error('Delete failed:', error);
+                showAlert('Failed to delete build', 'error');
+            }
+        }
+
+        // Event delegation for build actions
+        document.getElementById('buildsContainer').addEventListener('click', function(e) {
+            const btn = e.target.closest('[data-action]');
+            if (!btn) return;
+            const action = btn.dataset.action;
+            if (action === 'download') {
+                downloadBuild(btn.dataset.path);
+            } else if (action === 'delete') {
+                deleteBuild(btn.dataset.path, btn.dataset.name);
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,1212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/png" href="/static/logo.png">
+    <title>Report - Unkn0wnC2</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .map-container {
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 51, 51, 0.2);
+            border-radius: 4px;
+            min-height: 600px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .map-canvas {
+            width: 100%;
+            min-height: 600px;
+            position: relative;
+        }
+
+        .infra-node {
+            position: absolute;
+            padding: 15px 20px;
+            background: rgba(20, 20, 20, 0.95);
+            border: 2px solid rgba(255, 51, 51, 0.3);
+            border-radius: 8px;
+            cursor: move;
+            transition: box-shadow 0.3s, border-color 0.3s;
+            z-index: 10;
+            min-width: 150px;
+            user-select: none;
+        }
+
+        .infra-node:hover {
+            border-color: rgba(255, 51, 51, 0.6);
+            box-shadow: 0 0 25px rgba(255, 51, 51, 0.3);
+            z-index: 100;
+        }
+
+        .infra-node.archon {
+            border-color: rgba(255, 51, 51, 0.6);
+            background: linear-gradient(135deg, rgba(255, 51, 51, 0.15) 0%, rgba(20, 20, 20, 0.95) 100%);
+        }
+
+        .infra-node.dns-server {
+            border-color: rgba(0, 255, 136, 0.5);
+            background: linear-gradient(135deg, rgba(0, 255, 136, 0.1) 0%, rgba(20, 20, 20, 0.95) 100%);
+        }
+
+        .infra-node.beacon {
+            border-color: rgba(100, 149, 237, 0.5);
+            background: linear-gradient(135deg, rgba(100, 149, 237, 0.1) 0%, rgba(20, 20, 20, 0.95) 100%);
+        }
+
+        .node-icon {
+            margin-bottom: 8px;
+            text-align: center;
+            line-height: 0;
+        }
+
+        .infra-node.archon .node-icon { color: rgba(255, 51, 51, 0.8); }
+        .infra-node.dns-server .node-icon { color: rgba(0, 255, 136, 0.8); }
+        .infra-node.beacon .node-icon { color: rgba(100, 149, 237, 0.8); }
+
+        .node-title {
+            font-weight: 600;
+            color: #fff;
+            margin-bottom: 5px;
+            text-align: center;
+            font-size: 14px;
+        }
+
+        .node-subtitle {
+            font-size: 11px;
+            color: #666;
+            text-align: center;
+        }
+
+        .node-details {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            font-size: 10px;
+            color: #555;
+        }
+
+        .node-details div {
+            margin: 3px 0;
+        }
+
+        svg.connections {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        svg.connections line {
+            stroke: rgba(255, 51, 51, 0.2);
+            stroke-width: 2;
+            stroke-dasharray: 5, 5;
+        }
+
+        svg.connections line.dns-connection {
+            stroke: rgba(0, 255, 136, 0.3);
+            stroke-dasharray: none;
+        }
+
+        svg.connections line.beacon-connection {
+            stroke: rgba(100, 149, 237, 0.2);
+        }
+
+        .map-legend {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            border: 1px solid rgba(255, 51, 51, 0.2);
+            border-radius: 4px;
+            padding: 15px;
+            z-index: 1000;
+        }
+
+        .legend-title {
+            font-weight: 600;
+            color: rgba(255, 51, 51, 0.8);
+            margin-bottom: 10px;
+            font-size: 12px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 5px 0;
+            font-size: 11px;
+            color: #888;
+        }
+
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            border-radius: 4px;
+            border: 2px solid;
+        }
+
+        .legend-color.archon {
+            border-color: rgba(255, 51, 51, 0.6);
+            background: rgba(255, 51, 51, 0.1);
+        }
+
+        .legend-color.dns {
+            border-color: rgba(0, 255, 136, 0.5);
+            background: rgba(0, 255, 136, 0.1);
+        }
+
+        .legend-color.beacon {
+            border-color: rgba(100, 149, 237, 0.5);
+            background: rgba(100, 149, 237, 0.1);
+        }
+
+        .map-controls {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .map-btn {
+            padding: 8px 12px;
+            background: rgba(0, 0, 0, 0.8);
+            border: 1px solid rgba(255, 51, 51, 0.3);
+            border-radius: 4px;
+            color: #fff;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+
+        .map-btn:hover {
+            background: rgba(255, 51, 51, 0.1);
+            border-color: rgba(255, 51, 51, 0.5);
+        }
+
+        .stats-summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .summary-card {
+            background: rgba(10, 10, 10, 0.98);
+            border: 1px solid rgba(255, 51, 51, 0.15);
+            border-left: 3px solid rgba(255, 51, 51, 0.4);
+            padding: 15px 20px;
+            border-radius: 0;
+        }
+
+        .summary-card .label {
+            color: #555;
+            font-size: 12px;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+        }
+
+        .summary-card .value {
+            font-size: 28px;
+            font-weight: 700;
+            color: rgba(255, 51, 51, 0.8);
+        }
+
+        .summary-card .change {
+            font-size: 11px;
+            margin-top: 5px;
+        }
+
+        .summary-card .change.positive { color: #00ff88; }
+        .summary-card .change.negative { color: #ff4444; }
+
+        /* Data Table Styles */
+        .data-table-container {
+            overflow-x: auto;
+        }
+
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        .data-table th, .data-table td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid rgba(255, 51, 51, 0.1);
+        }
+
+        .data-table th {
+            background: rgba(255, 51, 51, 0.08);
+            color: rgba(255, 51, 51, 0.8);
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 11px;
+            letter-spacing: 1px;
+        }
+
+        .data-table tr:hover {
+            background: rgba(255, 51, 51, 0.03);
+        }
+
+        .status-badge {
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .status-badge.completed { background: rgba(0, 200, 83, 0.15); color: #00c853; }
+        .status-badge.receiving { background: rgba(255, 193, 7, 0.15); color: #ffc107; }
+        .status-badge.failed { background: rgba(255, 68, 68, 0.15); color: #ff4444; }
+
+        /* TTP Grid Styles */
+        .ttp-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 15px;
+        }
+
+        .ttp-card {
+            background: rgba(20, 20, 20, 0.9);
+            border: 1px solid rgba(255, 51, 51, 0.2);
+            border-left: 3px solid rgba(255, 51, 51, 0.5);
+            padding: 15px;
+            border-radius: 4px;
+        }
+
+        .ttp-card.active {
+            border-left-color: #00c853;
+            background: rgba(0, 200, 83, 0.05);
+        }
+
+        .ttp-id {
+            font-size: 12px;
+            color: rgba(255, 51, 51, 0.7);
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+
+        .ttp-name {
+            font-size: 14px;
+            color: #fff;
+            margin-bottom: 8px;
+        }
+
+        .ttp-desc {
+            font-size: 11px;
+            color: #888;
+            line-height: 1.4;
+        }
+
+        .ttp-status {
+            margin-top: 10px;
+            font-size: 11px;
+            color: #00c853;
+        }
+
+        /* Timeline Styles */
+        .timeline-container {
+            position: relative;
+            padding-left: 30px;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .timeline-container::before {
+            content: '';
+            position: absolute;
+            left: 10px;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            background: rgba(255, 51, 51, 0.2);
+        }
+
+        .timeline-event {
+            position: relative;
+            padding: 12px 15px;
+            margin-bottom: 10px;
+            background: rgba(20, 20, 20, 0.9);
+            border: 1px solid rgba(255, 51, 51, 0.15);
+            border-radius: 4px;
+            transition: all 0.2s;
+        }
+
+        .timeline-event:hover {
+            border-color: rgba(255, 51, 51, 0.4);
+            background: rgba(30, 30, 30, 0.95);
+        }
+
+        .timeline-event::before {
+            content: '';
+            position: absolute;
+            left: -24px;
+            top: 18px;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: rgba(255, 51, 51, 0.6);
+            border: 2px solid #0a0a0a;
+        }
+
+        .timeline-event.beacon::before { background: rgba(100, 149, 237, 0.8); }
+        .timeline-event.task::before { background: rgba(255, 193, 7, 0.8); }
+        .timeline-event.exfil::before { background: rgba(156, 39, 176, 0.8); }
+        .timeline-event.stager::before { background: rgba(0, 200, 83, 0.8); }
+
+        .timeline-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+
+        .timeline-title {
+            font-weight: 600;
+            color: #fff;
+            font-size: 13px;
+        }
+
+        .timeline-time {
+            font-size: 11px;
+            color: #666;
+        }
+
+        .timeline-desc {
+            font-size: 12px;
+            color: #888;
+        }
+
+        .timeline-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: 600;
+            margin-left: 8px;
+        }
+
+        .timeline-badge.success, .timeline-badge.completed, .timeline-badge.complete {
+            background: rgba(0, 200, 83, 0.15);
+            color: #00c853;
+        }
+        .timeline-badge.pending, .timeline-badge.receiving {
+            background: rgba(255, 193, 7, 0.15);
+            color: #ffc107;
+        }
+        .timeline-badge.failed {
+            background: rgba(255, 68, 68, 0.15);
+            color: #ff4444;
+        }
+
+        .timeline-filter {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+        }
+
+        .timeline-filter-btn {
+            padding: 6px 12px;
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 51, 51, 0.2);
+            border-radius: 4px;
+            color: #888;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+
+        .timeline-filter-btn:hover {
+            border-color: rgba(255, 51, 51, 0.4);
+            color: #fff;
+        }
+
+        .timeline-filter-btn.active {
+            background: rgba(255, 51, 51, 0.1);
+            border-color: rgba(255, 51, 51, 0.5);
+            color: rgba(255, 51, 51, 0.9);
+        }
+
+        /* Print/PDF Styles */
+        @media print {
+            .navbar, .nav-menu, .map-controls, .map-legend, .btn-refresh, .loading-overlay,
+            .timeline-filter, .ws-status { display: none !important; }
+            .container { padding: 0; max-width: 100%; }
+            .section { page-break-inside: avoid; margin: 10px 0; padding: 10px; border: 1px solid #ccc; clip-path: none; }
+            body { background: #fff !important; color: #000 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+            .map-container { border-color: #ccc; background: #fafafa !important; }
+            .infra-node { background: #fff !important; border-color: #666 !important; color: #000; }
+            .infra-node .node-title { color: #000; }
+            .infra-node .node-subtitle, .infra-node .node-details { color: #555; }
+            .summary-card { background: #fff !important; border-color: #ccc !important; border-left-color: #333 !important; }
+            .summary-card .label { color: #666; }
+            .summary-card .value { color: #333; }
+            .ttp-card { background: #fff !important; border-color: #ccc !important; border-left-color: #999 !important; }
+            .ttp-card.active { border-left-color: #00aa44 !important; }
+            .ttp-id { color: #333; }
+            .ttp-name { color: #000; }
+            .ttp-desc { color: #555; }
+            .timeline-event { background: #fff !important; border-color: #ccc !important; color: #000; }
+            .timeline-title { color: #000; }
+            .timeline-desc { color: #444; }
+            .timeline-time { color: #666; }
+            .timeline-container::before { background: #ccc; }
+            .data-table th { background: #f0f0f0 !important; color: #333 !important; }
+            .data-table td { color: #000; border-color: #ddd; }
+            svg.connections line { stroke: #999 !important; }
+            h2.section-title { color: #000 !important; }
+            /* Print header */
+            .print-header { display: block !important; text-align: center; margin-bottom: 20px; border-bottom: 2px solid #333; padding-bottom: 10px; }
+            .print-header h1 { font-size: 22px; color: #000; margin: 0; }
+            .print-header .print-date { font-size: 12px; color: #666; }
+        }
+    </style>
+</head>
+<body>
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="spinner"></div>
+    </div>
+
+    <nav class="navbar">
+        <div class="navbar-brand">Unkn0wnC2</div>
+        <div class="navbar-right">
+            <div class="ws-status" id="wsStatus">
+                <div class="ws-status-dot"></div>
+                <span class="ws-status-text">Connecting...</span>
+            </div>
+            <div class="user-info">Logged in as <strong id="username">admin</strong></div>
+            <button class="btn-logout" onclick="logout()">Logout</button>
+        </div>
+    </nav>
+
+    <div class="nav-menu">
+        <a href="/dashboard" class="nav-btn">Dashboard</a>
+        <a href="/builder" class="nav-btn">Builder</a>
+        <a href="/stager" class="nav-btn">Stager Sessions</a>
+        <a href="/exfils" class="nav-btn">Exfils</a>
+        <a href="/logs" class="nav-btn">Logs</a>
+        <a href="/report" class="nav-btn active">Report</a>
+        <a href="/users" class="nav-btn">Users</a>
+    </div>
+
+    <div class="container">
+        <!-- Print-only header -->
+        <div class="print-header" style="display: none;">
+            <h1>Unkn0wnC2 Operation Report</h1>
+            <div class="print-date" id="printDate"></div>
+        </div>
+
+        <!-- Summary Stats -->
+        <div class="stats-summary" id="statsSummary">
+            <div class="summary-card">
+                <div class="label">DNS Servers</div>
+                <div class="value" id="dnsCount">0</div>
+            </div>
+            <div class="summary-card">
+                <div class="label">Beacons</div>
+                <div class="value" id="beaconCount">0</div>
+            </div>
+            <div class="summary-card">
+                <div class="label">Stager Sessions</div>
+                <div class="value" id="stagerCount">0</div>
+            </div>
+            <div class="summary-card">
+                <div class="label">Exfil Sessions</div>
+                <div class="value" id="exfilCount">0</div>
+            </div>
+        </div>
+
+        <!-- Export Button -->
+        <div style="text-align: right; margin-bottom: 20px;">
+            <button class="btn-refresh" onclick="exportMarkdown()" style="background: rgba(100, 149, 237, 0.1); border-left-color: rgba(100, 149, 237, 0.5); color: rgba(100, 149, 237, 0.9);">Export Markdown</button>
+        </div>
+
+        <!-- Infrastructure Map -->
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">Infrastructure Map</h2>
+                <button class="btn-refresh" onclick="loadInfrastructure()">↻ Refresh</button>
+            </div>
+
+            <div class="map-container">
+                <div class="map-canvas" id="mapCanvas">
+                    <svg class="connections" id="connectionsSvg"></svg>
+                </div>
+
+                <div class="map-legend">
+                    <div class="legend-title">LEGEND</div>
+                    <div class="legend-item">
+                        <div class="legend-color archon"></div>
+                        <span>Archon Master Server</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color dns"></div>
+                        <span>DNS Server</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color beacon"></div>
+                        <span>Beacon Client</span>
+                    </div>
+                </div>
+
+                <div class="map-controls">
+                    <button class="map-btn" onclick="autoLayout()">Auto Layout</button>
+                    <button class="map-btn" onclick="resetLayout()">↺ Reset</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Operation Timeline Section -->
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">Operation Timeline</h2>
+                <button class="btn-refresh" onclick="loadTimeline()">↻ Refresh</button>
+            </div>
+            <div class="timeline-filter">
+                <button class="timeline-filter-btn active" data-filter="all" onclick="filterTimeline('all')">All</button>
+                <button class="timeline-filter-btn" data-filter="beacon" onclick="filterTimeline('beacon')">Beacons</button>
+                <button class="timeline-filter-btn" data-filter="task" onclick="filterTimeline('task')">Tasks</button>
+                <button class="timeline-filter-btn" data-filter="exfil" onclick="filterTimeline('exfil')">Exfils</button>
+                <button class="timeline-filter-btn" data-filter="stager" onclick="filterTimeline('stager')">Stagers</button>
+            </div>
+            <div class="timeline-container" id="timelineContainer">
+                <div style="text-align: center; color: #666; padding: 20px;">Loading timeline...</div>
+            </div>
+        </div>
+
+        <!-- Stager Sessions Section -->
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">Stager Sessions</h2>
+            </div>
+            <div class="data-table-container">
+                <table class="data-table" id="stagerTable">
+                    <thead>
+                        <tr>
+                            <th>Session ID</th>
+                            <th>Client IP</th>
+                            <th>OS/Arch</th>
+                            <th>Progress</th>
+                            <th>Status</th>
+                            <th>Created</th>
+                        </tr>
+                    </thead>
+                    <tbody id="stagerTableBody">
+                        <tr><td colspan="6" style="text-align: center; color: #666;">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Exfil Sessions Section -->
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">Exfil Sessions</h2>
+            </div>
+            <div class="data-table-container">
+                <table class="data-table" id="exfilTable">
+                    <thead>
+                        <tr>
+                            <th>Session ID</th>
+                            <th>File Name</th>
+                            <th>Size</th>
+                            <th>Progress</th>
+                            <th>Status</th>
+                            <th>Created</th>
+                        </tr>
+                    </thead>
+                    <tbody id="exfilTableBody">
+                        <tr><td colspan="6" style="text-align: center; color: #666;">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- TTPs Conducted Section -->
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">MITRE ATT&CK TTPs Conducted</h2>
+            </div>
+            <div class="ttp-grid" id="ttpGrid">
+                <!-- TTPs will be populated dynamically -->
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/shared.js"></script>
+    <script>
+        let infraData = null;
+        let nodePositions = {};
+        let draggingNode = null;
+        let dragOffset = { x: 0, y: 0 };
+
+        async function loadInfrastructure() {
+            showLoading();
+
+            try {
+                const response = await authFetch('/api/infrastructure');
+                if (!response) return;
+
+                const result = await response.json();
+                if (result.success) {
+                    infraData = result.data;
+                    updateStats();
+                    renderMap();
+                }
+            } catch (error) {
+                console.error('Error loading infrastructure:', error);
+                showToast('Failed to load infrastructure data', 'error');
+            } finally {
+                hideLoading();
+            }
+        }
+
+        function updateStats() {
+            // Resize map canvas to fit all nodes
+            if (infraData) {
+                const canvas = document.getElementById('mapCanvas');
+                const nodes = canvas.querySelectorAll('.infra-node');
+                let maxBottom = 600;
+                nodes.forEach(n => {
+                    const bottom = parseInt(n.style.top) + n.offsetHeight + 40;
+                    if (bottom > maxBottom) maxBottom = bottom;
+                });
+                canvas.style.minHeight = maxBottom + 'px';
+            }
+        }
+
+        // Load stats from dedicated stats API for accurate total counts
+        async function loadStats() {
+            try {
+                const response = await authFetch('/api/stats');
+                if (!response) return;
+                const stats = await response.json();
+
+                // Cache for TTP checks
+                statsCache = stats;
+
+                // Use total counts from database, not just active
+                document.getElementById('dnsCount').textContent = stats.dns_servers || 0;
+                document.getElementById('beaconCount').textContent = stats.beacons || 0;
+                document.getElementById('stagerCount').textContent = stats.stager_sessions || 0;
+                document.getElementById('exfilCount').textContent = stats.exfil_transfers || 0;
+            } catch (error) {
+                console.error('Error loading stats:', error);
+            }
+        }
+
+        function renderMap() {
+            const canvas = document.getElementById('mapCanvas');
+            const svg = document.getElementById('connectionsSvg');
+            
+            // Clear existing nodes (keep SVG)
+            canvas.querySelectorAll('.infra-node').forEach(n => n.remove());
+            svg.innerHTML = '';
+
+            if (!infraData) return;
+
+            const canvasRect = canvas.getBoundingClientRect();
+            const centerX = canvasRect.width / 2;
+            const centerY = 150;
+
+            // Create Archon node (center top)
+            createNode(infraData.archon, centerX - 75, 30);
+
+            // Create DNS server nodes (row below Archon)
+            const dnsY = 180;
+            const dnsSpacing = Math.min(200, (canvasRect.width - 100) / Math.max(infraData.dns_servers.length, 1));
+            const dnsStartX = centerX - ((infraData.dns_servers.length - 1) * dnsSpacing) / 2 - 75;
+            
+            infraData.dns_servers.forEach((dns, i) => {
+                createNode(dns, dnsStartX + i * dnsSpacing, dnsY);
+            });
+
+            // Create beacon nodes (row below DNS)
+            const beaconY = 380;
+            const beaconSpacing = Math.min(180, (canvasRect.width - 100) / Math.max(infraData.beacons.length, 1));
+            const beaconStartX = centerX - ((infraData.beacons.length - 1) * beaconSpacing) / 2 - 75;
+            
+            infraData.beacons.forEach((beacon, i) => {
+                createNode(beacon, beaconStartX + i * beaconSpacing, beaconY);
+            });
+
+            // Draw connections
+            requestAnimationFrame(drawConnections);
+        }
+
+        function createNode(data, x, y) {
+            const canvas = document.getElementById('mapCanvas');
+            
+            // Use saved position if available
+            const savedPos = nodePositions[data.id];
+            if (savedPos) {
+                x = savedPos.x;
+                y = savedPos.y;
+            }
+
+            const node = document.createElement('div');
+            node.className = `infra-node ${data.type}`;
+            node.id = `node-${data.id}`;
+            node.style.left = `${x}px`;
+            node.style.top = `${y}px`;
+
+            const nodeIcon = data.type === 'archon' ? icon('shield', 28) :
+                        data.type === 'dns-server' ? icon('globe', 28) : icon('terminal', 28);
+
+            node.innerHTML = `
+                <div class="node-icon">${nodeIcon}</div>
+                <div class="node-title">${escapeHtml(data.name || data.id)}</div>
+                <div class="node-subtitle">${escapeHtml(data.address || '')}</div>
+                ${data.type === 'beacon' ? `
+                <div class="node-details">
+                    <div>OS: ${escapeHtml(data.os || '-')}</div>
+                    <div>User: ${escapeHtml(data.user || '-')}</div>
+                </div>` : ''}
+            `;
+
+            // Make draggable
+            node.addEventListener('mousedown', startDrag);
+            
+            canvas.appendChild(node);
+        }
+
+        function drawConnections() {
+            const svg = document.getElementById('connectionsSvg');
+            svg.innerHTML = '';
+
+            if (!infraData) return;
+
+            infraData.connections.forEach(conn => {
+                const fromNode = document.getElementById(`node-${conn.from}`);
+                const toNode = document.getElementById(`node-${conn.to}`);
+
+                if (!fromNode || !toNode) return;
+
+                const fromRect = fromNode.getBoundingClientRect();
+                const toRect = toNode.getBoundingClientRect();
+                const svgRect = svg.getBoundingClientRect();
+
+                const x1 = fromRect.left + fromRect.width / 2 - svgRect.left;
+                const y1 = fromRect.top + fromRect.height - svgRect.top;
+                const x2 = toRect.left + toRect.width / 2 - svgRect.left;
+                const y2 = toRect.top - svgRect.top;
+
+                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                line.setAttribute('x1', x1);
+                line.setAttribute('y1', y1);
+                line.setAttribute('x2', x2);
+                line.setAttribute('y2', y2);
+                line.classList.add(`${conn.type}-connection`);
+                svg.appendChild(line);
+            });
+        }
+
+        function startDrag(e) {
+            if (e.button !== 0) return;
+            
+            draggingNode = e.currentTarget;
+            const rect = draggingNode.getBoundingClientRect();
+            dragOffset.x = e.clientX - rect.left;
+            dragOffset.y = e.clientY - rect.top;
+
+            document.addEventListener('mousemove', drag);
+            document.addEventListener('mouseup', stopDrag);
+            e.preventDefault();
+        }
+
+        function drag(e) {
+            if (!draggingNode) return;
+
+            const canvas = document.getElementById('mapCanvas');
+            const canvasRect = canvas.getBoundingClientRect();
+
+            let x = e.clientX - canvasRect.left - dragOffset.x;
+            let y = e.clientY - canvasRect.top - dragOffset.y;
+
+            // Keep within bounds
+            x = Math.max(0, Math.min(x, canvasRect.width - draggingNode.offsetWidth));
+            y = Math.max(0, Math.min(y, canvasRect.height - draggingNode.offsetHeight));
+
+            draggingNode.style.left = `${x}px`;
+            draggingNode.style.top = `${y}px`;
+
+            // Save position
+            const nodeId = draggingNode.id.replace('node-', '');
+            nodePositions[nodeId] = { x, y };
+
+            // Redraw connections
+            drawConnections();
+        }
+
+        function stopDrag() {
+            draggingNode = null;
+            document.removeEventListener('mousemove', drag);
+            document.removeEventListener('mouseup', stopDrag);
+        }
+
+        function autoLayout() {
+            nodePositions = {};
+            // Arrange nodes in a grid pattern instead of default hierarchical layout
+            const nodes = document.querySelectorAll('.infra-node');
+            const cols = Math.ceil(Math.sqrt(nodes.length));
+            nodes.forEach((node, i) => {
+                const row = Math.floor(i / cols);
+                const col = i % cols;
+                nodePositions[node.id.replace('node-', '')] = {
+                    x: 100 + col * 200,
+                    y: 100 + row * 150
+                };
+            });
+            renderMap();
+        }
+
+        function resetLayout() {
+            nodePositions = {};
+            renderMap();
+        }
+
+        // WebSocket handlers for real-time updates
+        // Wait for ws to be available before setting handlers
+        function setupWebSocketHandlers() {
+            if (typeof ws !== 'undefined' && ws) {
+                ws.on('beacon_update', () => loadInfrastructure());
+                ws.on('dns_server_update', () => loadInfrastructure());
+                ws.on('connected', () => {
+                    // Re-subscribe on reconnect
+                    loadAllData();
+                });
+            }
+        }
+
+        // Window resize handler
+        window.addEventListener('resize', () => {
+            if (infraData) {
+                drawConnections();
+            }
+        });
+
+        // Initialize - wait a bit for shared.js to load ws
+        document.addEventListener('DOMContentLoaded', () => {
+            setupWebSocketHandlers();
+            loadAllData();
+        });
+
+        // Load all report data
+        async function loadAllData() {
+            await Promise.all([
+                loadStats(),
+                loadInfrastructure(),
+                loadTimeline(),
+                loadStagerSessions(),
+                loadExfilSessions()
+            ]);
+            renderTTPs();
+        }
+
+        // Timeline data and current filter
+        let timelineEvents = [];
+        let currentTimelineFilter = 'all';
+
+        // Load timeline events
+        async function loadTimeline() {
+            try {
+                const response = await authFetch('/api/timeline?limit=200');
+                if (!response) return;
+                const result = await response.json();
+                if (result.success && result.data) {
+                    timelineEvents = result.data.events || [];
+                    renderTimeline();
+                }
+            } catch (error) {
+                console.error('Error loading timeline:', error);
+                document.getElementById('timelineContainer').innerHTML =
+                    '<div style="text-align: center; color: #666; padding: 20px;">Failed to load timeline</div>';
+            }
+        }
+
+        // Render timeline with current filter
+        function renderTimeline() {
+            const container = document.getElementById('timelineContainer');
+            let events = timelineEvents;
+
+            // Apply filter
+            if (currentTimelineFilter !== 'all') {
+                events = events.filter(e => e.category === currentTimelineFilter);
+            }
+
+            if (!events || events.length === 0) {
+                container.innerHTML = '<div style="text-align: center; color: #666; padding: 20px;">No timeline events</div>';
+                return;
+            }
+
+            container.innerHTML = events.map(event => {
+                const time = new Date(event.timestamp * 1000);
+                const timeStr = time.toLocaleString();
+                const statusClass = (event.status || '').toLowerCase();
+
+                return `
+                    <div class="timeline-event ${event.category}">
+                        <div class="timeline-header">
+                            <span class="timeline-title">
+                                ${escapeHtml(event.title)}
+                                ${event.status ? `<span class="timeline-badge ${statusClass}">${escapeHtml(event.status)}</span>` : ''}
+                            </span>
+                            <span class="timeline-time">${timeStr}</span>
+                        </div>
+                        <div class="timeline-desc">${escapeHtml(event.description)}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // Filter timeline by category
+        function filterTimeline(category) {
+            currentTimelineFilter = category;
+
+            // Update button states
+            document.querySelectorAll('.timeline-filter-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.filter === category);
+            });
+
+            renderTimeline();
+        }
+
+        // Load stager sessions
+        async function loadStagerSessions() {
+            try {
+                const response = await authFetch('/api/stager/sessions');
+                if (!response) return;
+                const result = await response.json();
+                if (result.success) {
+                    renderStagerTable(result.data || []);
+                }
+            } catch (error) {
+                console.error('Error loading stager sessions:', error);
+            }
+        }
+
+        function renderStagerTable(sessions) {
+            const tbody = document.getElementById('stagerTableBody');
+            if (!sessions || sessions.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: #666;">No stager sessions</td></tr>';
+                return;
+            }
+            tbody.innerHTML = sessions.map(s => {
+                const progress = s.total_chunks > 0 ? Math.round((s.chunks_delivered / s.total_chunks) * 100) : 0;
+                const status = s.completed ? 'completed' : (s.chunks_delivered > 0 ? 'receiving' : 'pending');
+                return `
+                    <tr>
+                        <td><code>${escapeHtml(s.session_id || '-')}</code></td>
+                        <td>${escapeHtml(s.stager_ip || '-')}</td>
+                        <td>${escapeHtml(s.os || '-')}/${escapeHtml(s.arch || '-')}</td>
+                        <td>${s.chunks_delivered || 0}/${s.total_chunks || 0} (${progress}%)</td>
+                        <td><span class="status-badge ${status}">${status}</span></td>
+                        <td>${formatTimestamp(s.created_at)}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // Load exfil sessions
+        async function loadExfilSessions() {
+            try {
+                const response = await authFetch('/api/exfil/transfers?limit=500');
+                if (!response) return;
+                const result = await response.json();
+                if (result.success && result.data) {
+                    const transfers = result.data.transfers || [];
+                    renderExfilTable(transfers);
+                }
+            } catch (error) {
+                console.error('Error loading exfil sessions:', error);
+            }
+        }
+
+        function renderExfilTable(transfers) {
+            const tbody = document.getElementById('exfilTableBody');
+            if (!transfers || transfers.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: #666;">No exfil sessions</td></tr>';
+                return;
+            }
+            tbody.innerHTML = transfers.map(t => {
+                const progress = t.total_chunks > 0 ? Math.round((t.received_chunks / t.total_chunks) * 100) : 0;
+                const status = (t.status || 'receiving').toLowerCase();
+                return `
+                    <tr>
+                        <td><code>${escapeHtml((t.session_id || '-').slice(0, 12))}</code></td>
+                        <td>${escapeHtml(t.file_name || 'Unknown')}</td>
+                        <td>${formatBytes(t.file_size || 0)}</td>
+                        <td>${t.received_chunks || 0}/${t.total_chunks || '?'} (${progress}%)</td>
+                        <td><span class="status-badge ${status === 'complete' ? 'completed' : status}">${status}</span></td>
+                        <td>${formatTimestamp(t.created_at)}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // Stats cache for TTP checks (populated by loadStats)
+        let statsCache = {};
+
+        // TTP definitions based on Unkn0wnC2 capabilities
+        const TTP_DEFINITIONS = [
+            { id: 'T1587.001', name: 'Develop Capabilities: Malware', desc: 'WebUI Builder generates custom agents', check: () => true },
+            { id: 'T1583.002', name: 'Acquire Infrastructure: Domains', desc: 'Shadow Mesh domain rotation', check: () => infraData && infraData.dns_servers && infraData.dns_servers.length > 0 },
+            { id: 'T1583.006', name: 'Acquire Infrastructure: DNS Server', desc: 'Custom authoritative nameservers', check: () => infraData && infraData.dns_servers && infraData.dns_servers.length > 0 },
+            { id: 'T1059.003', name: 'Command and Scripting Interpreter: Windows', desc: 'Shell execution via cmd.exe', check: () => infraData && infraData.beacons && infraData.beacons.some(b => (b.os || '').toLowerCase().includes('windows')) },
+            { id: 'T1059.004', name: 'Command and Scripting Interpreter: Unix', desc: 'Shell execution via /bin/sh', check: () => infraData && infraData.beacons && infraData.beacons.some(b => (b.os || '').toLowerCase().includes('linux')) },
+            { id: 'T1105', name: 'Ingress Tool Transfer', desc: 'Staged beacon download over DNS', check: () => (statsCache.stager_sessions || 0) > 0 },
+            { id: 'T1082', name: 'System Information Discovery', desc: 'Host survey on beacon startup', check: () => infraData && infraData.beacons && infraData.beacons.length > 0 },
+            { id: 'T1033', name: 'System Owner/User Discovery', desc: 'Username collection', check: () => infraData && infraData.beacons && infraData.beacons.length > 0 },
+            { id: 'T1027', name: 'Obfuscated Files or Information', desc: 'AES-GCM + Base36 encoding', check: () => infraData && infraData.beacons && infraData.beacons.length > 0 },
+            { id: 'T1071.004', name: 'Application Layer Protocol: DNS', desc: 'DNS tunneling for C2', check: () => infraData && infraData.dns_servers && infraData.dns_servers.length > 0 },
+            { id: 'T1573.001', name: 'Encrypted Channel: Symmetric Crypto', desc: 'AES-GCM encryption', check: () => infraData && infraData.beacons && infraData.beacons.length > 0 },
+            { id: 'T1041', name: 'Exfiltration Over C2 Channel', desc: 'Data exfiltration via DNS', check: () => (statsCache.exfil_transfers || 0) > 0 },
+            { id: 'T1030', name: 'Data Transfer Size Limits', desc: 'Chunked data transfer', check: () => (statsCache.stager_sessions || 0) > 0 || (statsCache.exfil_transfers || 0) > 0 },
+            { id: 'T1001', name: 'Data Obfuscation', desc: 'Malleable timing with jitter/sleep/burst', check: () => infraData && infraData.beacons && infraData.beacons.length > 0 },
+            { id: 'T1005', name: 'Data from Local System', desc: 'Exfil client reads local files for exfiltration', check: () => (statsCache.exfil_transfers || 0) > 0 },
+            { id: 'T1016', name: 'System Network Configuration Discovery', desc: 'Stager parses resolv.conf for DNS servers', check: () => (statsCache.stager_sessions || 0) > 0 },
+            { id: 'T1036', name: 'Masquerading', desc: 'DNS server forwards non-C2 queries to mimic legitimate DNS', check: () => infraData && infraData.dns_servers && infraData.dns_servers.length > 0 },
+            { id: 'T1070.004', name: 'Indicator Removal: File Deletion', desc: 'Beacon selfdestruct deletes binary from disk', check: () => infraData && infraData.beacons && infraData.beacons.length > 0 },
+            { id: 'T1140', name: 'Deobfuscate/Decode Files or Information', desc: 'In-memory Base36/Base64 decoding before execution', check: () => (statsCache.stager_sessions || 0) > 0 },
+            { id: 'T1560.002', name: 'Archive Collected Data: Archive via Library', desc: 'Stager decompresses GZIP beacon binary', check: () => (statsCache.stager_sessions || 0) > 0 }
+        ];
+
+        function renderTTPs() {
+            const grid = document.getElementById('ttpGrid');
+            grid.innerHTML = TTP_DEFINITIONS.map(ttp => {
+                const isActive = ttp.check();
+                return `
+                    <div class="ttp-card ${isActive ? 'active' : ''}">
+                        <div class="ttp-id">${ttp.id}</div>
+                        <div class="ttp-name">${ttp.name}</div>
+                        <div class="ttp-desc">${ttp.desc}</div>
+                        ${isActive ? '<div class="ttp-status">Conducted</div>' : ''}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // Export as Markdown text file
+        async function exportMarkdown() {
+            const date = new Date().toLocaleString();
+            const lines = [`# Unkn0wnC2 Operation Report`, `Generated: ${date}`, ''];
+
+            // Summary stats
+            lines.push('## Summary');
+            lines.push(`- DNS Servers: ${document.getElementById('dnsCount').textContent}`);
+            lines.push(`- Beacons: ${document.getElementById('beaconCount').textContent}`);
+            lines.push(`- Stager Sessions: ${document.getElementById('stagerCount').textContent}`);
+            lines.push(`- Exfil Sessions: ${document.getElementById('exfilCount').textContent}`);
+            lines.push('');
+
+            // Infrastructure
+            if (infraData) {
+                lines.push('## Infrastructure');
+                lines.push('### DNS Servers');
+                if (infraData.dns_servers && infraData.dns_servers.length > 0) {
+                    lines.push('| Name | Address | Status |');
+                    lines.push('|------|---------|--------|');
+                    infraData.dns_servers.forEach(s => {
+                        lines.push(`| ${s.name || s.id} | ${s.address || '-'} | ${s.status || '-'} |`);
+                    });
+                } else {
+                    lines.push('No DNS servers registered.');
+                }
+                lines.push('');
+
+                lines.push('### Beacons');
+                if (infraData.beacons && infraData.beacons.length > 0) {
+                    lines.push('| Hostname | IP | OS | Arch | User | Build ID | Status |');
+                    lines.push('|----------|----|----|------|------|----------|--------|');
+                    infraData.beacons.forEach(b => {
+                        lines.push(`| ${b.hostname || b.id} | ${b.ip_address || '-'} | ${b.os || '-'} | ${b.arch || '-'} | ${b.username || '-'} | ${b.build_id || '-'} | ${b.status || '-'} |`);
+                    });
+                    lines.push('');
+
+                    // Fetch and include build configs for beacons that have build IDs
+                    const beaconsWithBuilds = infraData.beacons.filter(b => b.build_id);
+                    if (beaconsWithBuilds.length > 0) {
+                        lines.push('### Beacon Build Configurations');
+                        for (const b of beaconsWithBuilds) {
+                            try {
+                                const resp = await authFetch(`/api/beacons/${b.id}/build-config`);
+                                if (resp && resp.ok) {
+                                    const config = await resp.json();
+                                    lines.push(`\n**${b.hostname || b.id}** (Build: \`${b.build_id}\`)`);
+                                    lines.push(`- Sleep: ${config.sleep_min || 0}s – ${config.sleep_max || 0}s`);
+                                    lines.push(`- Exfil Jitter: ${config.exfil_jitter_min_ms || 0}ms – ${config.exfil_jitter_max_ms || 0}ms`);
+                                    lines.push(`- Chunks/Burst: ${config.exfil_chunks_per_burst || 'default'}`);
+                                    lines.push(`- Burst Pause: ${config.exfil_burst_pause_ms || 'default'}ms`);
+                                    lines.push(`- Payload Format: ${config.payload_format || 'default'}`);
+                                    lines.push(`- Encoding: ${b.encoding || 'aes-gcm-base36'}`);
+                                    lines.push(`- Encrypted: ${config.encrypted !== false ? 'Yes' : 'No'}`);
+                                    if (config.beacon_name) {
+                                        lines.push(`- Beacon Name: ${config.beacon_name}`);
+                                    }
+                                }
+                            } catch (e) {
+                                lines.push(`\n**${b.hostname || b.id}** (Build: \`${b.build_id}\`)`);
+                                lines.push(`- Build config unavailable`);
+                            }
+                        }
+                        lines.push('');
+                    }
+                } else {
+                    lines.push('No beacons registered.');
+                }
+                lines.push('');
+            }
+
+            // TTPs
+            lines.push('## MITRE ATT&CK TTPs Conducted');
+            lines.push('| ID | Name | Description | Status |');
+            lines.push('|----|------|-------------|--------|');
+            TTP_DEFINITIONS.forEach(ttp => {
+                const active = ttp.check() ? 'Conducted' : 'Not Observed';
+                lines.push(`| ${ttp.id} | ${ttp.name} | ${ttp.desc} | ${active} |`);
+            });
+            lines.push('');
+
+            // Timeline
+            if (timelineEvents.length > 0) {
+                lines.push('## Operation Timeline');
+                lines.push('| Time | Event | Description | Status |');
+                lines.push('|------|-------|-------------|--------|');
+                timelineEvents.slice(0, 100).forEach(e => {
+                    const time = new Date(e.timestamp * 1000).toLocaleString();
+                    lines.push(`| ${time} | ${e.title || '-'} | ${e.description || '-'} | ${e.status || '-'} |`);
+                });
+                lines.push('');
+            }
+
+            // Download as .md file
+            const content = lines.join('\n');
+            const blob = new Blob([content], { type: 'text/markdown' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `unkn0wnc2_report_${new Date().toISOString().slice(0, 10)}.md`;
+            a.click();
+            URL.revokeObjectURL(url);
+            showToast('Report downloaded as Markdown', 'success');
+        }
+
+        // Auto-refresh every 30 seconds
+        setInterval(loadAllData, 30000);
+    </script>
+</body>
+</html>

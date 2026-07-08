@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/png" href="/static/logo.png">
+    <title>User Management - Unkn0wnC2</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=ITC+Benguiat:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .section-title {
+            font-size: 24px;
+            font-weight: 600;
+            color: rgba(255, 51, 51, 0.8);
+            font-family: 'Bebas Neue', 'Arial Narrow', sans-serif;
+            letter-spacing: 2px;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            padding-left: 22px;
+            background: rgba(255, 51, 51, 0.05);
+            border: none;
+            border-left: 3px solid rgba(255, 51, 51, 0.5);
+            border-radius: 0;
+            color: rgba(255, 51, 51, 0.8);
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            clip-path: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 0 100%);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 0;
+            height: 100%;
+            background: rgba(255, 51, 51, 0.15);
+            transition: width 0.3s ease;
+        }
+
+        .btn:hover::before {
+            width: 100%;
+        }
+
+        .btn:hover {
+            border-left-color: rgba(255, 51, 51, 0.8);
+            transform: translateY(-2px);
+            box-shadow: -2px 0 12px rgba(255, 50, 50, 0.05);
+        }
+
+        .btn-primary {
+            background: rgba(255, 51, 51, 0.08);
+            border-left-color: rgba(255, 51, 51, 0.8);
+        }
+
+        .btn-primary:hover {
+            background: rgba(255, 51, 51, 0.15);
+        }
+
+        .btn-danger {
+            background: rgba(255, 50, 50, 0.08);
+            border-left-color: #ff5555;
+            color: #ff5555;
+        }
+
+        .btn-danger:hover {
+            background: rgba(255, 50, 50, 0.15);
+        }
+
+        .btn-success {
+            background: rgba(0, 255, 136, 0.2);
+            border-color: #00ff88;
+            color: #00ff88;
+        }
+
+        .btn-success:hover {
+            background: rgba(0, 255, 136, 0.3);
+        }
+
+        .btn-small {
+            padding: 6px 12px;
+            font-size: 12px;
+            margin: 0 2px;
+        }
+
+        .table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+
+        .table thead {
+            background: rgba(255, 51, 51, 0.05);
+        }
+
+        .table th {
+            padding: 12px;
+            text-align: left;
+            font-size: 13px;
+            color: rgba(255, 51, 51, 0.8);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 600;
+        }
+
+        .table td {
+            padding: 15px 12px;
+            border-top: 1px solid #2a2a2a;
+            font-size: 14px;
+        }
+
+        .table tbody tr {
+            transition: all 0.2s ease;
+        }
+
+        .table tbody tr:hover {
+            background: rgba(255, 51, 51, 0.05);
+        }
+
+        .role-badge {
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .role-admin {
+            background: rgba(255, 50, 50, 0.08);
+            color: #ff5555;
+        }
+
+        .role-operator {
+            background: rgba(0, 136, 255, 0.2);
+            color: #0088ff;
+        }
+
+        .role-viewer {
+            background: rgba(0, 255, 136, 0.2);
+            color: #00ff88;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .status-active {
+            background: #00ff88;
+            box-shadow: 0 0 8px #00ff88;
+        }
+
+        .status-inactive {
+            background: #666;
+        }
+
+        .status-inactive {
+            background: #666;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            z-index: 2000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: rgba(10, 10, 10, 0.98);
+            border: 1px solid rgba(255, 51, 51, 0.15);
+            border-top: 2px solid rgba(255, 51, 51, 0.3);
+            border-radius: 0;
+            padding: 30px;
+            max-width: 500px;
+            width: 90%;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.9);
+            clip-path: polygon(0 0, 100% 0, 100% calc(100% - 20px), calc(100% - 20px) 100%, 0 100%);
+            position: relative;
+        }
+
+        .modal-content::before {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            right: 0;
+            width: 20px;
+            height: 20px;
+            background: linear-gradient(135deg, transparent 50%, rgba(255, 51, 51, 0.3) 50%);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #333;
+        }
+
+        .modal-header h2 {
+            color: rgba(255, 51, 51, 0.8);
+            font-size: 20px;
+            font-weight: 600;
+            margin: 0;
+            font-family: 'Bebas Neue', 'Arial Narrow', sans-serif;
+            letter-spacing: 2px;
+        }
+
+        .close-btn {
+            background: none;
+            border: none;
+            color: #444;
+            font-size: 28px;
+            cursor: pointer;
+            line-height: 1;
+            transition: color 0.3s;
+        }
+
+        .close-btn:hover {
+            color: #ff5555;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            color: rgba(255, 51, 51, 0.8);
+            margin-bottom: 8px;
+            font-size: 13px;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 10px 12px;
+            padding-left: 16px;
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid #333;
+            border-left: 2px solid #ff3333;
+            border-radius: 0;
+            color: #e0e0e0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-size: 14px;
+            transition: all 0.3s;
+            clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%);
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-left-color: #ff5555;
+            border-left-width: 3px;
+            box-shadow: -2px 0 8px rgba(255, 51, 51, 0.15);
+        }
+
+        .form-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 25px;
+        }
+
+        .error-message {
+            color: #ff5555;
+            margin-top: 10px;
+            padding: 10px 12px;
+            padding-left: 18px;
+            background: rgba(255, 50, 50, 0.05);
+            border: 1px solid rgba(255, 50, 50, 0.15);
+            border-left: 3px solid #ff5555;
+            border-radius: 0;
+            font-size: 14px;
+            clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%);
+        }
+
+        .success-message {
+            color: #00ff88;
+            margin-top: 10px;
+            padding: 10px 12px;
+            padding-left: 18px;
+            background: rgba(0, 255, 136, 0.1);
+            border: 1px solid rgba(0, 255, 136, 0.3);
+            border-left: 3px solid #00ff88;
+            border-radius: 0;
+            font-size: 14px;
+            clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%);
+        }
+
+        .loading {
+            text-align: center;
+            padding: 60px 20px;
+            color: #444;
+            font-size: 16px;
+        }
+
+        .no-data {
+            text-align: center;
+            padding: 60px 20px;
+            color: #444;
+            font-size: 16px;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #444;
+        }
+
+        .empty-state-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+            opacity: 0.3;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-brand">Unkn0wnC2</div>
+        <div class="navbar-right">
+            <div class="ws-status" id="wsStatus">
+                <div class="ws-status-dot"></div>
+                <span class="ws-status-text">Connecting...</span>
+            </div>
+            <div class="user-info">Logged in as <strong id="username">admin</strong></div>
+            <button class="btn-logout" onclick="logout()">Logout</button>
+        </div>
+    </nav>
+
+    <div class="nav-menu">
+        <a href="/dashboard" class="nav-btn">Dashboard</a>
+        <a href="/builder" class="nav-btn">Builder</a>
+        <a href="/stager" class="nav-btn">Stager Sessions</a>
+        <a href="/exfils" class="nav-btn">Exfils</a>
+        <a href="/logs" class="nav-btn">Logs</a>
+        <a href="/report" class="nav-btn">Report</a>
+        <a href="/users" class="nav-btn active">Users</a>
+    </div>
+
+    <div class="container">
+        <div class="section">
+            <div class="section-header">
+                <h1 class="section-title">User Management</h1>
+                <button class="btn btn-primary" onclick="openCreateModal()" id="createUserBtn">
+                    Create User
+                </button>
+            </div>
+
+            <div id="loadingIndicator" class="loading">Loading users...</div>
+            <div id="noDataIndicator" class="no-data" style="display: none;">No users found</div>
+
+            <table class="table" id="usersTable" style="display: none;">
+                <thead>
+                    <tr>
+                        <th>Username</th>
+                        <th>Role</th>
+                        <th>Email</th>
+                        <th>Last Login</th>
+                        <th>Created</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="usersTableBody">
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Create User Modal -->
+    <div id="createModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Create New User</h2>
+                <button class="close-btn" onclick="closeCreateModal()">&times;</button>
+            </div>
+            <form id="createForm" onsubmit="createUser(event)">
+                <div class="form-group">
+                    <label for="createUsername">Username</label>
+                    <input type="text" id="createUsername" required>
+                </div>
+                <div class="form-group">
+                    <label for="createPassword">Password</label>
+                    <input type="password" id="createPassword" required>
+                </div>
+                <div class="form-group">
+                    <label for="createRole">Role</label>
+                    <select id="createRole" required>
+                        <option value="viewer">Viewer</option>
+                        <option value="operator">Operator</option>
+                        <option value="admin">Admin</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="createEmail">Email (optional)</label>
+                    <input type="email" id="createEmail">
+                </div>
+                <div id="createError" class="error-message" style="display: none;"></div>
+                <div class="form-actions">
+                    <button type="button" class="btn" onclick="closeCreateModal()">Cancel</button>
+                    <button type="submit" class="btn btn-success">Create</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Edit User Modal -->
+    <div id="editModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Edit User</h2>
+                <button class="close-btn" onclick="closeEditModal()">&times;</button>
+            </div>
+            <form id="editForm" onsubmit="updateUser(event)">
+                <input type="hidden" id="editUserId">
+                <div class="form-group">
+                    <label for="editUsername">Username</label>
+                    <input type="text" id="editUsername" required>
+                </div>
+                <div class="form-group">
+                    <label for="editRole">Role</label>
+                    <select id="editRole" required>
+                        <option value="viewer">Viewer</option>
+                        <option value="operator">Operator</option>
+                        <option value="admin">Admin</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="editEmail">Email</label>
+                    <input type="email" id="editEmail">
+                </div>
+                <div id="editError" class="error-message" style="display: none;"></div>
+                <div class="form-actions">
+                    <button type="button" class="btn" onclick="closeEditModal()">Cancel</button>
+                    <button type="submit" class="btn btn-success">Update</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Change Password Modal -->
+    <div id="passwordModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Change Password</h2>
+                <button class="close-btn" onclick="closePasswordModal()">&times;</button>
+            </div>
+            <form id="passwordForm" onsubmit="changePassword(event)">
+                <input type="hidden" id="passwordUserId">
+                <div class="form-group" id="currentPasswordGroup">
+                    <label for="currentPassword">Current Password</label>
+                    <input type="password" id="currentPassword">
+                </div>
+                <div class="form-group">
+                    <label for="newPassword">New Password</label>
+                    <input type="password" id="newPassword" required>
+                </div>
+                <div class="form-group">
+                    <label for="confirmPassword">Confirm New Password</label>
+                    <input type="password" id="confirmPassword" required>
+                </div>
+                <div id="passwordError" class="error-message" style="display: none;"></div>
+                <div class="form-actions">
+                    <button type="button" class="btn" onclick="closePasswordModal()">Cancel</button>
+                    <button type="submit" class="btn btn-success">Change Password</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div id="deleteModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Confirm Delete</h2>
+                <button class="close-btn" onclick="closeDeleteModal()">&times;</button>
+            </div>
+            <p style="color: #f00; margin-bottom: 20px;">
+                Are you sure you want to delete user <strong id="deleteUsername"></strong>?
+                This action cannot be undone.
+            </p>
+            <input type="hidden" id="deleteUserId">
+            <div class="form-actions">
+                <button type="button" class="btn" onclick="closeDeleteModal()">Cancel</button>
+                <button type="button" class="btn btn-danger" onclick="confirmDelete()">Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/shared.js"></script>
+    <script>
+        let currentUserRole = '';
+        let currentUserId = '';
+
+        // getCookie and authFetch provided by shared.js
+
+        // Load users on page load
+        async function loadUsers() {
+            try {
+                document.getElementById('loadingIndicator').style.display = 'block';
+                document.getElementById('noDataIndicator').style.display = 'none';
+                document.getElementById('usersTable').style.display = 'none';
+
+                // Get current user info first
+                const currentUserResponse = await authFetch('/api/auth/me');
+                
+                if (!currentUserResponse) {
+                    console.error('No response from /api/auth/me');
+                    return;
+                }
+                
+                const currentUserData = await currentUserResponse.json();
+                
+                if (currentUserData.success && currentUserData.data) {
+                    currentUserRole = currentUserData.data.role;
+                    currentUserId = currentUserData.data.id;
+                    
+                    // Update username display
+                    document.getElementById('username').textContent = currentUserData.data.username;
+                    
+                    // Hide create button for non-admins
+                    if (currentUserRole !== 'admin') {
+                        document.getElementById('createUserBtn').style.display = 'none';
+                    }
+                }
+
+                // Load users list
+                const response = await authFetch('/api/operators');
+                if (!response) return;
+                const data = await response.json();
+
+                document.getElementById('loadingIndicator').style.display = 'none';
+
+                if (data.success && data.data && data.data.length > 0) {
+                    document.getElementById('usersTable').style.display = 'table';
+                    renderUsers(data.data);
+                } else {
+                    document.getElementById('noDataIndicator').style.display = 'block';
+                }
+            } catch (error) {
+                console.error('Error loading users:', error);
+                document.getElementById('loadingIndicator').innerHTML = 
+                    '<div class="error-message">Error loading users</div>';
+            }
+        }
+
+        function renderUsers(users) {
+            const tbody = document.getElementById('usersTableBody');
+            tbody.innerHTML = '';
+
+            users.forEach(user => {
+                const tr = document.createElement('tr');
+                
+                // Role badge
+                const roleClass = `role-${user.role}`;
+                
+                // Format dates
+                const lastLogin = user.last_login ? new Date(user.last_login).toLocaleString() : 'Never';
+                const created = user.created_at ? new Date(user.created_at).toLocaleString() : '-';
+                
+                // Actions based on role
+                let actions = '';
+                // Convert both to strings for comparison
+                const isCurrentUser = String(user.id) === String(currentUserId);
+                
+                const safeUsername = escapeHtml(user.username);
+                const safeRole = escapeHtml(user.role);
+                const safeEmail = escapeHtml(user.email || '');
+                const safeId = escapeHtml(String(user.id));
+
+                if (currentUserRole === 'admin' || isCurrentUser) {
+                    actions += `<button class="btn btn-small" data-action="edit" data-id="${safeId}" data-username="${safeUsername}" data-role="${safeRole}" data-email="${safeEmail}">Edit</button>`;
+                    actions += `<button class="btn btn-small" data-action="password" data-id="${safeId}">Password</button>`;
+                }
+
+                if (currentUserRole === 'admin' && !isCurrentUser) {
+                    actions += `<button class="btn btn-small btn-danger" data-action="delete" data-id="${safeId}" data-username="${safeUsername}">Delete</button>`;
+                }
+
+                tr.innerHTML = `
+                    <td>${safeUsername}</td>
+                    <td><span class="role-badge ${roleClass}">${safeRole.toUpperCase()}</span></td>
+                    <td>${safeEmail || '-'}</td>
+                    <td>${lastLogin}</td>
+                    <td>${created}</td>
+                    <td>${actions}</td>
+                `;
+                
+                tbody.appendChild(tr);
+            });
+        }
+
+        // Create user
+        function openCreateModal() {
+            document.getElementById('createModal').classList.add('active');
+            document.getElementById('createForm').reset();
+            document.getElementById('createError').style.display = 'none';
+        }
+
+        function closeCreateModal() {
+            document.getElementById('createModal').classList.remove('active');
+        }
+
+        async function createUser(event) {
+            event.preventDefault();
+            
+            const username = document.getElementById('createUsername').value;
+            const password = document.getElementById('createPassword').value;
+            const role = document.getElementById('createRole').value;
+            const email = document.getElementById('createEmail').value;
+
+            try {
+                const response = await authFetch('/api/operators', {
+                    method: 'POST',
+                    body: JSON.stringify({ username, password, role, email })
+                });
+
+                if (!response) return;
+                const data = await response.json();
+
+                if (data.success) {
+                    closeCreateModal();
+                    loadUsers();
+                } else {
+                    document.getElementById('createError').textContent = data.error || 'Failed to create user';
+                    document.getElementById('createError').style.display = 'block';
+                }
+            } catch (error) {
+                document.getElementById('createError').textContent = 'Error creating user';
+                document.getElementById('createError').style.display = 'block';
+            }
+        }
+
+        // Edit user
+        function openEditModal(id, username, role, email) {
+            document.getElementById('editModal').classList.add('active');
+            document.getElementById('editUserId').value = id;
+            document.getElementById('editUsername').value = username;
+            document.getElementById('editRole').value = role;
+            document.getElementById('editEmail').value = email;
+            document.getElementById('editError').style.display = 'none';
+
+            // Non-admins can't change their own role
+            if (currentUserRole !== 'admin') {
+                document.getElementById('editRole').disabled = true;
+            }
+        }
+
+        function closeEditModal() {
+            document.getElementById('editModal').classList.remove('active');
+            document.getElementById('editRole').disabled = false;
+        }
+
+        async function updateUser(event) {
+            event.preventDefault();
+            
+            const id = document.getElementById('editUserId').value;
+            const username = document.getElementById('editUsername').value;
+            const role = document.getElementById('editRole').value;
+            const email = document.getElementById('editEmail').value;
+
+            try {
+                const response = await authFetch(`/api/operators/${id}`, {
+                    method: 'PUT',
+                    body: JSON.stringify({ username, role, email })
+                });
+
+                if (!response) return;
+                const data = await response.json();
+
+                if (data.success) {
+                    closeEditModal();
+                    loadUsers();
+                } else {
+                    document.getElementById('editError').textContent = data.error || 'Failed to update user';
+                    document.getElementById('editError').style.display = 'block';
+                }
+            } catch (error) {
+                document.getElementById('editError').textContent = 'Error updating user';
+                document.getElementById('editError').style.display = 'block';
+            }
+        }
+
+        // Change password
+        function openPasswordModal(id) {
+            document.getElementById('passwordModal').classList.add('active');
+            document.getElementById('passwordUserId').value = id;
+            document.getElementById('passwordForm').reset();
+            document.getElementById('passwordError').style.display = 'none';
+
+            // Only require current password for non-admins changing their own password
+            if (currentUserRole !== 'admin' || id === currentUserId) {
+                document.getElementById('currentPasswordGroup').style.display = 'block';
+                document.getElementById('currentPassword').required = true;
+            } else {
+                document.getElementById('currentPasswordGroup').style.display = 'none';
+                document.getElementById('currentPassword').required = false;
+            }
+        }
+
+        function closePasswordModal() {
+            document.getElementById('passwordModal').classList.remove('active');
+        }
+
+        async function changePassword(event) {
+            event.preventDefault();
+            
+            const id = document.getElementById('passwordUserId').value;
+            const currentPassword = document.getElementById('currentPassword').value;
+            const newPassword = document.getElementById('newPassword').value;
+            const confirmPassword = document.getElementById('confirmPassword').value;
+
+            if (newPassword !== confirmPassword) {
+                document.getElementById('passwordError').textContent = 'Passwords do not match';
+                document.getElementById('passwordError').style.display = 'block';
+                return;
+            }
+
+            try {
+                const body = { new_password: newPassword };
+                if (currentPassword) {
+                    body.current_password = currentPassword;
+                }
+
+                const response = await authFetch(`/api/operators/${id}/password`, {
+                    method: 'POST',
+                    body: JSON.stringify(body)
+                });
+
+                if (!response) return;
+                const data = await response.json();
+
+                if (data.success) {
+                    closePasswordModal();
+                    alert('Password changed successfully');
+                } else {
+                    document.getElementById('passwordError').textContent = data.error || 'Failed to change password';
+                    document.getElementById('passwordError').style.display = 'block';
+                }
+            } catch (error) {
+                document.getElementById('passwordError').textContent = 'Error changing password';
+                document.getElementById('passwordError').style.display = 'block';
+            }
+        }
+
+        // Toggle status
+        async function toggleStatus(id, active) {
+            try {
+                const response = await authFetch(`/api/operators/${id}/status`, {
+                    method: 'POST',
+                    body: JSON.stringify({ active })
+                });
+
+                if (!response) return;
+                const data = await response.json();
+
+                if (data.success) {
+                    loadUsers();
+                } else {
+                    alert(data.error || 'Failed to update status');
+                }
+            } catch (error) {
+                alert('Error updating status');
+            }
+        }
+
+        // Delete user
+        function openDeleteModal(id, username) {
+            document.getElementById('deleteModal').classList.add('active');
+            document.getElementById('deleteUserId').value = id;
+            document.getElementById('deleteUsername').textContent = username;
+        }
+
+        function closeDeleteModal() {
+            document.getElementById('deleteModal').classList.remove('active');
+        }
+
+        async function confirmDelete() {
+            const id = document.getElementById('deleteUserId').value;
+
+            try {
+                const response = await authFetch(`/api/operators/${id}`, {
+                    method: 'DELETE'
+                });
+
+                if (!response) return;
+                const data = await response.json();
+
+                if (data.success) {
+                    closeDeleteModal();
+                    loadUsers();
+                } else {
+                    alert(data.error || 'Failed to delete user');
+                }
+            } catch (error) {
+                alert('Error deleting user');
+            }
+        }
+
+        // logout provided by shared.js
+
+        // Event delegation for user table actions
+        document.getElementById('usersTableBody').addEventListener('click', function(e) {
+            const btn = e.target.closest('[data-action]');
+            if (!btn) return;
+            const action = btn.dataset.action;
+            if (action === 'edit') {
+                openEditModal(btn.dataset.id, btn.dataset.username, btn.dataset.role, btn.dataset.email);
+            } else if (action === 'password') {
+                openPasswordModal(btn.dataset.id);
+            } else if (action === 'delete') {
+                openDeleteModal(btn.dataset.id, btn.dataset.username);
+            }
+        });
+
+        // Load users on page load
+        window.addEventListener('DOMContentLoaded', loadUsers);
+    </script>
+</body>
+</html>
