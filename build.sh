@@ -187,7 +187,7 @@ echo -e "${GREEN}✓ Archon server compiled: $(du -h unkn0wnc2 | cut -f1)${NC}"
 echo ""
 
 echo -e "${YELLOW}[2/7] Creating directory structure...${NC}"
-mkdir -p /opt/unkn0wnc2/{certs,web,configs,builders,builds/dns-server,builds/client,builds/stager,builds/exfil,src}
+mkdir -p /opt/unkn0wnc2/{certs,web,configs,builders,builds/dns-server,builds/client,builds/stager,src}
 echo -e "${GREEN}✓ Created /opt/unkn0wnc2/${NC}"
 echo ""
 
@@ -209,22 +209,8 @@ echo -e "${GREEN}✓ Copied web interface files${NC}"
 
 # Copy source files for building components
 cd ..
-cp -r Server Client Stager exfil-client /opt/unkn0wnc2/src/
+cp -r Server Client Stager /opt/unkn0wnc2/src/
 echo -e "${GREEN}✓ Copied source files for builder${NC}"
-
-if command -v cargo &>/dev/null; then
-  echo -e "${YELLOW}  ↳ Priming Rust crate cache (cargo fetch)${NC}"
-  if pushd /opt/unkn0wnc2/src/exfil-client >/dev/null; then
-    if cargo fetch; then
-      echo -e "${GREEN}  ✓ Rust dependencies prefetched${NC}"
-    else
-      echo -e "${YELLOW}  ! Failed to prefetch Rust dependencies (exfil-client builds may be slower)${NC}"
-    fi
-    popd >/dev/null
-  fi
-else
-  echo -e "${YELLOW}  ! cargo not found — exfil-client builds require Rust toolchain${NC}"
-fi
 cd Archon
 
 # Generate secure credentials
@@ -301,14 +287,8 @@ for component in Server Client Stager; do
     echo -e "${GREEN}✓ Source available: ${component}${NC}"
   fi
 done
-if [ -d "/opt/unkn0wnc2/src/exfil-client" ]; then
-  echo -e "${GREEN}✓ Source available: exfil-client (optional)${NC}"
-else
-  echo -e "${YELLOW}! Source missing: exfil-client (optional — requires Rust)${NC}"
-fi
-
 # Verify build directories exist
-for build_type in dns-server client stager exfil; do
+for build_type in dns-server client stager; do
   if [ ! -d "/opt/unkn0wnc2/builds/${build_type}" ]; then
     echo -e "${RED}✗ Missing build directory: ${build_type}${NC}"
     SOURCE_CHECK=false

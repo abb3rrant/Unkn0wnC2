@@ -105,8 +105,8 @@ echo -e "${GREEN}✓ Updated web interface files${NC}"
 
 # Update source files for builder (Server, Client, Stager, exfil-client)
 cd "${SCRIPT_DIR}"
-cp -r Server Client Stager exfil-client /opt/unkn0wnc2/src/
-echo -e "${GREEN}✓ Updated Go/Rust source files${NC}"
+cp -r Server Client Stager /opt/unkn0wnc2/src/
+echo -e "${GREEN}✓ Updated source files${NC}"
 
 # Set permissions
 chown -R root:root /opt/unkn0wnc2/web
@@ -160,7 +160,6 @@ echo "  Binary:       /usr/bin/unkn0wnc2"
 echo "  Web Files:    /opt/unkn0wnc2/web/"
 echo "  Source Files: /opt/unkn0wnc2/src/"
 echo "    Go:         Server, Client, Stager"
-echo "    Rust:       exfil-client"
 echo ""
 echo -e "${CYAN}Preserved files (not modified):${NC}"
 echo "  Config:       /opt/unkn0wnc2/master_config.json"
