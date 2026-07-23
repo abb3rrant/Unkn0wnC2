@@ -19,7 +19,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY . /src
 
 # Build Archon
-RUN cd /src/Archon && CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /usr/bin/unkn0wnc2 .
+RUN VERSION=$(cat /src/VERSION | tr -d '[:space:]') && \
+    BUILD_DATE=$(date -u '+%Y-%m-%d') && \
+    GIT_COMMIT="docker" && \
+    cd /src/Archon && CGO_ENABLED=1 go build -trimpath \
+    -ldflags="-s -w -X main.version=${VERSION} -X main.buildDate=${BUILD_DATE} -X main.gitCommit=${GIT_COMMIT}" \
+    -o /usr/bin/unkn0wnc2 .
 
 # Set up /opt/unkn0wnc2 directory structure (mirrors build.sh)
 RUN mkdir -p /opt/unkn0wnc2/certs \
