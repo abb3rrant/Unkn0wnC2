@@ -3471,7 +3471,7 @@ func (d *MasterDatabase) GetStagerChunksForDNSServer(sessionID, dnsServerID stri
 	for rows.Next() {
 		var chunkIndex, delivered int
 		var chunkData string
-		var deliveredAt int64
+		var deliveredAt sql.NullInt64
 
 		if err := rows.Scan(&chunkIndex, &chunkData, &delivered, &deliveredAt); err != nil {
 			continue
