@@ -1323,7 +1323,7 @@ func (d *MasterDatabase) UpdateDNSServerCheckin(dnsServerID string) (bool, error
 }
 
 // GetDNSServers retrieves all DNS servers
-func (d *MasterDatabase) GetDNSServers() ([]map[string]interface{}, error) {
+func (d *MasterDatabase) GetDNSServers() ([]DNSServer, error) {
 
 	rows, err := d.db.Query(`
 		SELECT id, domain, address, status, first_seen, last_checkin, beacon_count, task_count
@@ -1335,7 +1335,7 @@ func (d *MasterDatabase) GetDNSServers() ([]map[string]interface{}, error) {
 	}
 	defer rows.Close()
 
-	var servers []map[string]interface{}
+	var servers []DNSServer
 	for rows.Next() {
 		var id, domain, address, status string
 		var firstSeen, lastCheckin int64
@@ -1346,15 +1346,15 @@ func (d *MasterDatabase) GetDNSServers() ([]map[string]interface{}, error) {
 			return nil, err
 		}
 
-		servers = append(servers, map[string]interface{}{
-			"id":           id,
-			"domain":       domain,
-			"address":      address,
-			"status":       status,
-			"first_seen":   time.Unix(firstSeen, 0),
-			"last_checkin": time.Unix(lastCheckin, 0),
-			"beacon_count": beaconCount,
-			"task_count":   taskCount,
+		servers = append(servers, DNSServer{
+			ID:          id,
+			Domain:      domain,
+			Address:     address,
+			Status:      status,
+			FirstSeen:   time.Unix(firstSeen, 0).Format(time.RFC3339),
+			LastCheckin:  time.Unix(lastCheckin, 0).Format(time.RFC3339),
+			BeaconCount: beaconCount,
+			TaskCount:   taskCount,
 		})
 	}
 
@@ -1362,7 +1362,7 @@ func (d *MasterDatabase) GetDNSServers() ([]map[string]interface{}, error) {
 }
 
 // GetActiveDNSServers retrieves only active DNS servers
-func (d *MasterDatabase) GetActiveDNSServers() ([]map[string]interface{}, error) {
+func (d *MasterDatabase) GetActiveDNSServers() ([]DNSServer, error) {
 
 	rows, err := d.db.Query(`
 		SELECT id, domain, address, status, first_seen, last_checkin, beacon_count, task_count
@@ -1375,7 +1375,7 @@ func (d *MasterDatabase) GetActiveDNSServers() ([]map[string]interface{}, error)
 	}
 	defer rows.Close()
 
-	var servers []map[string]interface{}
+	var servers []DNSServer
 	for rows.Next() {
 		var id, domain, address, status string
 		var firstSeen, lastCheckin int64
@@ -1386,15 +1386,15 @@ func (d *MasterDatabase) GetActiveDNSServers() ([]map[string]interface{}, error)
 			return nil, err
 		}
 
-		servers = append(servers, map[string]interface{}{
-			"id":           id,
-			"domain":       domain,
-			"address":      address,
-			"status":       status,
-			"first_seen":   time.Unix(firstSeen, 0),
-			"last_checkin": time.Unix(lastCheckin, 0),
-			"beacon_count": beaconCount,
-			"task_count":   taskCount,
+		servers = append(servers, DNSServer{
+			ID:          id,
+			Domain:      domain,
+			Address:     address,
+			Status:      status,
+			FirstSeen:   time.Unix(firstSeen, 0).Format(time.RFC3339),
+			LastCheckin:  time.Unix(lastCheckin, 0).Format(time.RFC3339),
+			BeaconCount: beaconCount,
+			TaskCount:   taskCount,
 		})
 	}
 
@@ -1466,17 +1466,17 @@ func (d *MasterDatabase) RecordBeaconDNSContact(beaconID, dnsServerID, dnsDomain
 }
 
 // GetBeaconDNSContacts retrieves all DNS servers a beacon has contacted
-func (d *MasterDatabase) GetBeaconDNSContacts(beaconID string) ([]map[string]interface{}, error) {
+func (d *MasterDatabase) GetBeaconDNSContacts(beaconID string) ([]DNSContact, error) {
 
 	// Updated query to determine status based on last_contact time (active if contacted within last 30 minutes)
 	query := `
-		SELECT 
+		SELECT
 			bdc.dns_server_id,
 			bdc.dns_domain,
 			bdc.first_contact,
 			bdc.last_contact,
 			bdc.contact_count,
-			CASE 
+			CASE
 				WHEN bdc.last_contact >= ? THEN 'active'
 				ELSE 'inactive'
 			END as dns_status
@@ -1494,7 +1494,7 @@ func (d *MasterDatabase) GetBeaconDNSContacts(beaconID string) ([]map[string]int
 	}
 	defer rows.Close()
 
-	var contacts []map[string]interface{}
+	var contacts []DNSContact
 	for rows.Next() {
 		var dnsServerID, dnsDomain, dnsStatus sql.NullString
 		var firstContact, lastContact, contactCount int64
@@ -1504,13 +1504,13 @@ func (d *MasterDatabase) GetBeaconDNSContacts(beaconID string) ([]map[string]int
 			return nil, err
 		}
 
-		contacts = append(contacts, map[string]interface{}{
-			"dns_server_id": dnsServerID.String,
-			"dns_domain":    dnsDomain.String,
-			"first_contact": time.Unix(firstContact, 0).Format(time.RFC3339),
-			"last_contact":  time.Unix(lastContact, 0).Format(time.RFC3339),
-			"contact_count": contactCount,
-			"dns_status":    dnsStatus.String,
+		contacts = append(contacts, DNSContact{
+			DNSServerID:  dnsServerID.String,
+			DNSDomain:    dnsDomain.String,
+			FirstContact: time.Unix(firstContact, 0).Format(time.RFC3339),
+			LastContact:  time.Unix(lastContact, 0).Format(time.RFC3339),
+			ContactCount: contactCount,
+			DNSStatus:    dnsStatus.String,
 		})
 	}
 
@@ -1518,12 +1518,12 @@ func (d *MasterDatabase) GetBeaconDNSContacts(beaconID string) ([]map[string]int
 }
 
 // GetDNSServerBeacons retrieves all beacons that have contacted a specific DNS server
-func (d *MasterDatabase) GetDNSServerBeacons(dnsServerID string, minutesThreshold int) ([]map[string]interface{}, error) {
+func (d *MasterDatabase) GetDNSServerBeacons(dnsServerID string, minutesThreshold int) ([]DNSServerBeacon, error) {
 
 	threshold := time.Now().Add(-time.Duration(minutesThreshold) * time.Minute).Unix()
 
 	query := `
-		SELECT 
+		SELECT
 			bdc.beacon_id,
 			b.hostname,
 			b.username,
@@ -1542,7 +1542,7 @@ func (d *MasterDatabase) GetDNSServerBeacons(dnsServerID string, minutesThreshol
 	}
 	defer rows.Close()
 
-	var beacons []map[string]interface{}
+	var beacons []DNSServerBeacon
 	for rows.Next() {
 		var beaconID, hostname, username, os string
 		var lastContact, contactCount int64
@@ -1552,13 +1552,14 @@ func (d *MasterDatabase) GetDNSServerBeacons(dnsServerID string, minutesThreshol
 			return nil, err
 		}
 
-		beacons = append(beacons, map[string]interface{}{
-			"beacon_id":     beaconID,
-			"hostname":      hostname,
-			"username":      username,
-			"os":            os,
-			"last_contact":  time.Unix(lastContact, 0).Format(time.RFC3339),
-			"contact_count": contactCount,
+		_ = username    // scanned but not in struct
+		_ = os          // scanned but not in struct
+		_ = contactCount // scanned but not in struct
+
+		beacons = append(beacons, DNSServerBeacon{
+			BeaconID: beaconID,
+			Hostname: hostname,
+			LastSeen: time.Unix(lastContact, 0).Format(time.RFC3339),
 		})
 	}
 
@@ -1566,7 +1567,7 @@ func (d *MasterDatabase) GetDNSServerBeacons(dnsServerID string, minutesThreshol
 }
 
 // GetAllBeaconDNSConnections returns all beacon-to-DNS-server connections for the infrastructure map.
-func (d *MasterDatabase) GetAllBeaconDNSConnections() ([]map[string]interface{}, error) {
+func (d *MasterDatabase) GetAllBeaconDNSConnections() ([]BeaconDNSConnection, error) {
 
 	rows, err := d.db.Query(`
 		SELECT DISTINCT beacon_id, dns_server_id
@@ -1577,27 +1578,27 @@ func (d *MasterDatabase) GetAllBeaconDNSConnections() ([]map[string]interface{},
 	}
 	defer rows.Close()
 
-	var connections []map[string]interface{}
+	var connections []BeaconDNSConnection
 	for rows.Next() {
 		var beaconID, dnsServerID string
 		if err := rows.Scan(&beaconID, &dnsServerID); err != nil {
 			continue
 		}
-		connections = append(connections, map[string]interface{}{
-			"beacon_id":     beaconID,
-			"dns_server_id": dnsServerID,
+		connections = append(connections, BeaconDNSConnection{
+			BeaconID:    beaconID,
+			DNSServerID: dnsServerID,
 		})
 	}
 	return connections, nil
 }
 
 // GetActiveBeacons retrieves beacons active within the last N minutes
-func (d *MasterDatabase) GetActiveBeacons(minutesThreshold int) ([]map[string]interface{}, error) {
+func (d *MasterDatabase) GetActiveBeacons(minutesThreshold int) ([]Beacon, error) {
 	return d.GetActiveBeaconsPaginated(minutesThreshold, 0, 0)
 }
 
 // GetActiveBeaconsPaginated retrieves active beacons with pagination support
-func (d *MasterDatabase) GetActiveBeaconsPaginated(minutesThreshold, limit, offset int) ([]map[string]interface{}, error) {
+func (d *MasterDatabase) GetActiveBeaconsPaginated(minutesThreshold, limit, offset int) ([]Beacon, error) {
 
 	threshold := time.Now().Add(-time.Duration(minutesThreshold) * time.Minute).Unix()
 
@@ -1625,7 +1626,7 @@ func (d *MasterDatabase) GetActiveBeaconsPaginated(minutesThreshold, limit, offs
 	}
 	defer rows.Close()
 
-	var beacons []map[string]interface{}
+	var beacons []Beacon
 	for rows.Next() {
 		var id, hostname, username, os, arch, ipAddress, dnsServerID, status, beaconName, payloadFormat, encoding, buildID string
 		var firstSeen, lastSeen int64
@@ -1635,21 +1636,21 @@ func (d *MasterDatabase) GetActiveBeaconsPaginated(minutesThreshold, limit, offs
 			return nil, err
 		}
 
-		beacons = append(beacons, map[string]interface{}{
-			"id":             id,
-			"hostname":       hostname,
-			"username":       username,
-			"os":             os,
-			"arch":           arch,
-			"ip_address":     ipAddress,
-			"dns_server_id":  dnsServerID,
-			"first_seen":     time.Unix(firstSeen, 0).Format(time.RFC3339),
-			"last_seen":      time.Unix(lastSeen, 0).Format(time.RFC3339),
-			"status":         status,
-			"beacon_name":    beaconName,
-			"payload_format": payloadFormat,
-			"encoding":       encoding,
-			"build_id":       buildID,
+		beacons = append(beacons, Beacon{
+			ID:            id,
+			Hostname:      hostname,
+			Username:      username,
+			OS:            os,
+			Arch:          arch,
+			IPAddress:     ipAddress,
+			DNSServerID:   dnsServerID,
+			FirstSeen:     time.Unix(firstSeen, 0).Format(time.RFC3339),
+			LastSeen:      time.Unix(lastSeen, 0).Format(time.RFC3339),
+			Status:        status,
+			BeaconName:    beaconName,
+			PayloadFormat: payloadFormat,
+			Encoding:      encoding,
+			BuildID:       buildID,
 		})
 	}
 
@@ -1658,7 +1659,7 @@ func (d *MasterDatabase) GetActiveBeaconsPaginated(minutesThreshold, limit, offs
 
 // GetAllBeaconsPaginated retrieves all beacons with pagination support (no time filter)
 // This preserves history - beacons are shown regardless of when they last checked in
-func (d *MasterDatabase) GetAllBeaconsPaginated(limit, offset int) ([]map[string]interface{}, error) {
+func (d *MasterDatabase) GetAllBeaconsPaginated(limit, offset int) ([]Beacon, error) {
 
 	query := `
 		SELECT id, hostname, username, os, arch, ip_address, dns_server_id, first_seen, last_seen, status,
@@ -1684,7 +1685,7 @@ func (d *MasterDatabase) GetAllBeaconsPaginated(limit, offset int) ([]map[string
 	}
 	defer rows.Close()
 
-	var beacons []map[string]interface{}
+	var beacons []Beacon
 	for rows.Next() {
 		var id, hostname, username, os, arch, ipAddress, dnsServerID, status, beaconName, payloadFormat, encoding, buildID string
 		var firstSeen, lastSeen int64
@@ -1695,26 +1696,23 @@ func (d *MasterDatabase) GetAllBeaconsPaginated(limit, offset int) ([]map[string
 			return nil, err
 		}
 
-		b := map[string]interface{}{
-			"id":             id,
-			"hostname":       hostname,
-			"username":       username,
-			"os":             os,
-			"arch":           arch,
-			"ip_address":     ipAddress,
-			"dns_server_id":  dnsServerID,
-			"first_seen":     time.Unix(firstSeen, 0).Format(time.RFC3339),
-			"last_seen":      time.Unix(lastSeen, 0).Format(time.RFC3339),
-			"status":         status,
-			"beacon_name":    beaconName,
-			"payload_format": payloadFormat,
-			"encoding":       encoding,
-			"build_id":       buildID,
-		}
-		if regStage != nil {
-			b["registration_stage"] = *regStage
-		}
-		beacons = append(beacons, b)
+		beacons = append(beacons, Beacon{
+			ID:                id,
+			Hostname:          hostname,
+			Username:          username,
+			OS:                os,
+			Arch:              arch,
+			IPAddress:         ipAddress,
+			DNSServerID:       dnsServerID,
+			FirstSeen:         time.Unix(firstSeen, 0).Format(time.RFC3339),
+			LastSeen:          time.Unix(lastSeen, 0).Format(time.RFC3339),
+			Status:            status,
+			BeaconName:        beaconName,
+			PayloadFormat:     payloadFormat,
+			Encoding:          encoding,
+			BuildID:           buildID,
+			RegistrationStage: regStage,
+		})
 	}
 
 	return beacons, rows.Err()
@@ -1729,7 +1727,7 @@ func (d *MasterDatabase) CountAllBeacons() (int, error) {
 }
 
 // GetBeacon retrieves details for a specific beacon by ID
-func (d *MasterDatabase) GetBeacon(beaconID string) (map[string]interface{}, error) {
+func (d *MasterDatabase) GetBeacon(beaconID string) (Beacon, error) {
 
 	var id, hostname, username, os, arch, ipAddress, dnsServerID, status string
 	var beaconName, payloadFormat, encoding, buildID string
@@ -1748,33 +1746,29 @@ func (d *MasterDatabase) GetBeacon(beaconID string) (map[string]interface{}, err
 		&beaconName, &payloadFormat, &encoding, &buildID, &regStage)
 
 	if err == sql.ErrNoRows {
-		return nil, nil
+		return Beacon{}, nil
 	}
 	if err != nil {
-		return nil, err
+		return Beacon{}, err
 	}
 
-	beacon := map[string]interface{}{
-		"id":             id,
-		"hostname":       hostname,
-		"username":       username,
-		"os":             os,
-		"arch":           arch,
-		"ip_address":     ipAddress,
-		"dns_server_id":  dnsServerID,
-		"first_seen":     time.Unix(firstSeen, 0).Format(time.RFC3339),
-		"last_seen":      time.Unix(lastSeen, 0).Format(time.RFC3339),
-		"status":         status,
-		"beacon_name":    beaconName,
-		"payload_format": payloadFormat,
-		"encoding":       encoding,
-		"build_id":       buildID,
-	}
-	if regStage != nil {
-		beacon["registration_stage"] = *regStage
-	}
-
-	return beacon, nil
+	return Beacon{
+		ID:                id,
+		Hostname:          hostname,
+		Username:          username,
+		OS:                os,
+		Arch:              arch,
+		IPAddress:         ipAddress,
+		DNSServerID:       dnsServerID,
+		FirstSeen:         time.Unix(firstSeen, 0).Format(time.RFC3339),
+		LastSeen:          time.Unix(lastSeen, 0).Format(time.RFC3339),
+		Status:            status,
+		BeaconName:        beaconName,
+		PayloadFormat:     payloadFormat,
+		Encoding:          encoding,
+		BuildID:           buildID,
+		RegistrationStage: regStage,
+	}, nil
 }
 
 // Task Result operations
@@ -2396,39 +2390,37 @@ func (d *MasterDatabase) GetBeaconIDsByStatus(status string) ([]string, error) {
 }
 
 // GetBuildConfigByBuildID looks up build config from client_binaries by the short build ID
-func (d *MasterDatabase) GetBuildConfigByBuildID(buildID string) (map[string]interface{}, error) {
+func (d *MasterDatabase) GetBuildConfigByBuildID(buildID string) (BuildConfig, error) {
 
-	var id, buildConfig, binaryOS, arch, dnsDomains string
+	var id, buildConfigStr, binaryOS, arch, dnsDomains string
 	var createdAt int64
 
 	err := d.db.QueryRow(`
 		SELECT id, COALESCE(build_config, ''), os, arch, COALESCE(dns_domains, ''), created_at
 		FROM client_binaries
 		WHERE build_id = ?
-	`, buildID).Scan(&id, &buildConfig, &binaryOS, &arch, &dnsDomains, &createdAt)
+	`, buildID).Scan(&id, &buildConfigStr, &binaryOS, &arch, &dnsDomains, &createdAt)
 
 	if err == sql.ErrNoRows {
-		return nil, nil
+		return BuildConfig{}, nil
 	}
 	if err != nil {
-		return nil, err
+		return BuildConfig{}, err
 	}
 
-	result := map[string]interface{}{
-		"binary_id":   id,
-		"build_id":    buildID,
-		"os":          binaryOS,
-		"arch":        arch,
-		"dns_domains": dnsDomains,
-		"created_at":  time.Unix(createdAt, 0).Format(time.RFC3339),
+	result := BuildConfig{
+		BinaryID:   id,
+		BuildID:    buildID,
+		OS:         binaryOS,
+		Arch:       arch,
+		DNSDomains: dnsDomains,
+		CreatedAt:  time.Unix(createdAt, 0).Format(time.RFC3339),
 	}
 
-	if buildConfig != "" {
+	if buildConfigStr != "" {
 		var config map[string]interface{}
-		if err := json.Unmarshal([]byte(buildConfig), &config); err == nil {
-			for k, v := range config {
-				result[k] = v
-			}
+		if err := json.Unmarshal([]byte(buildConfigStr), &config); err == nil {
+			result.Extra = config
 		}
 	}
 
@@ -2481,7 +2473,7 @@ func (d *MasterDatabase) GetDistinctBuildFormats() ([]string, error) {
 // builds that have at least one A-record ACK IP set. DNS servers cache these so they
 // can return the correct IPs from the very first CHK query without waiting for an
 // async round-trip to Archon.
-func (d *MasterDatabase) GetBuildPhaseConfigs() (map[string]map[string]interface{}, error) {
+func (d *MasterDatabase) GetBuildPhaseConfigs() (map[string]BuildPhaseConfig, error) {
 
 	rows, err := d.db.Query(`
 		SELECT build_id, build_config FROM client_binaries
@@ -2492,7 +2484,7 @@ func (d *MasterDatabase) GetBuildPhaseConfigs() (map[string]map[string]interface
 	}
 	defer rows.Close()
 
-	result := make(map[string]map[string]interface{})
+	result := make(map[string]BuildPhaseConfig)
 	for rows.Next() {
 		var buildID, raw string
 		if err := rows.Scan(&buildID, &raw); err != nil {
@@ -2502,50 +2494,56 @@ func (d *MasterDatabase) GetBuildPhaseConfigs() (map[string]map[string]interface
 		if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
 			continue
 		}
-		pc := make(map[string]interface{})
+		var pc BuildPhaseConfig
 		hasIP := false
 		if reg, ok := cfg["registration_phase"].(map[string]interface{}); ok {
+			regPhase := make(map[string]interface{})
 			if qt, ok := reg["query_type"].(string); ok {
-				pc["reg_query_type"] = qt
+				regPhase["query_type"] = qt
 			}
 			if enc, ok := reg["encrypted"].(bool); ok {
-				pc["reg_encrypted"] = enc
+				regPhase["encrypted"] = enc
 			}
 			if ip, ok := reg["a_record_ack_ip"].(string); ok && ip != "" {
-				pc["reg_ack_ip"] = ip
+				regPhase["a_record_ack_ip"] = ip
 				hasIP = true
 			}
+			pc.RegistrationPhase = regPhase
 		}
 		if poll, ok := cfg["poll_phase"].(map[string]interface{}); ok {
+			pollPhase := make(map[string]interface{})
 			if qt, ok := poll["query_type"].(string); ok {
-				pc["poll_query_type"] = qt
+				pollPhase["query_type"] = qt
 			}
 			if enc, ok := poll["encrypted"].(bool); ok {
-				pc["poll_encrypted"] = enc
+				pollPhase["encrypted"] = enc
 			}
 			if ip, ok := poll["a_record_ack_ip"].(string); ok && ip != "" {
-				pc["poll_ack_ip"] = ip
+				pollPhase["a_record_ack_ip"] = ip
 				hasIP = true
 			}
 			if ip, ok := poll["a_record_task_ip"].(string); ok && ip != "" {
-				pc["poll_task_ip"] = ip
+				pollPhase["a_record_task_ip"] = ip
 				hasIP = true
 			}
 			if secs, ok := poll["txt_follow_up_secs"].(float64); ok {
-				pc["txt_follow_up_secs"] = int(secs)
+				pollPhase["txt_follow_up_secs"] = int(secs)
 			}
+			pc.PollPhase = pollPhase
 		}
 		if exfil, ok := cfg["data_exfil_phase"].(map[string]interface{}); ok {
+			exfilPhase := make(map[string]interface{})
 			if qt, ok := exfil["query_type"].(string); ok {
-				pc["exfil_query_type"] = qt
+				exfilPhase["query_type"] = qt
 			}
 			if enc, ok := exfil["encrypted"].(bool); ok {
-				pc["exfil_encrypted"] = enc
+				exfilPhase["encrypted"] = enc
 			}
 			if ip, ok := exfil["a_record_ack_ip"].(string); ok && ip != "" {
-				pc["exfil_ack_ip"] = ip
+				exfilPhase["a_record_ack_ip"] = ip
 				hasIP = true
 			}
+			pc.DataExfilPhase = exfilPhase
 		}
 		if hasIP {
 			result[buildID] = pc
@@ -2555,12 +2553,12 @@ func (d *MasterDatabase) GetBuildPhaseConfigs() (map[string]map[string]interface
 }
 
 // GetClientBinaries retrieves all stored client binaries
-func (d *MasterDatabase) GetClientBinaries() ([]map[string]interface{}, error) {
+func (d *MasterDatabase) GetClientBinaries() ([]ClientBinary, error) {
 
 	fmt.Printf("[DB] Querying client_binaries table...\n")
 
 	rows, err := d.db.Query(`
-		SELECT id, filename, os, arch, version, original_size, compressed_size, 
+		SELECT id, filename, os, arch, version, original_size, compressed_size,
 			base64_size, chunk_size, total_chunks, dns_domains, created_at, created_by
 		FROM client_binaries
 		ORDER BY created_at DESC
@@ -2571,7 +2569,7 @@ func (d *MasterDatabase) GetClientBinaries() ([]map[string]interface{}, error) {
 	}
 	defer rows.Close()
 
-	var binaries []map[string]interface{}
+	var binaries []ClientBinary
 	rowCount := 0
 	for rows.Next() {
 		rowCount++
@@ -2595,20 +2593,20 @@ func (d *MasterDatabase) GetClientBinaries() ([]map[string]interface{}, error) {
 			createdByStr = createdBy.String
 		}
 
-		binaries = append(binaries, map[string]interface{}{
-			"id":              id,
-			"filename":        filename,
-			"os":              os,
-			"arch":            arch,
-			"version":         version,
-			"original_size":   originalSize,
-			"compressed_size": compressedSize,
-			"base64_size":     base64Size,
-			"chunk_size":      chunkSize,
-			"total_chunks":    totalChunks,
-			"dns_domains":     dnsDomains,
-			"created_at":      createdAt,
-			"created_by":      createdByStr,
+		binaries = append(binaries, ClientBinary{
+			ID:             id,
+			Filename:       filename,
+			OS:             os,
+			Arch:           arch,
+			Version:        version,
+			OriginalSize:   originalSize,
+			CompressedSize: compressedSize,
+			Base64Size:     base64Size,
+			ChunkSize:      chunkSize,
+			TotalChunks:    totalChunks,
+			DNSDomains:     dnsDomains,
+			CreatedAt:      createdAt,
+			CreatedBy:      createdByStr,
 		})
 	}
 
@@ -2617,7 +2615,7 @@ func (d *MasterDatabase) GetClientBinaries() ([]map[string]interface{}, error) {
 }
 
 // GetClientBinary retrieves a specific client binary by ID
-func (d *MasterDatabase) GetClientBinary(id string) (map[string]interface{}, error) {
+func (d *MasterDatabase) GetClientBinary(id string) (ClientBinary, error) {
 
 	var filename, os, arch, version, base64Data, dnsDomains string
 	var createdBy sql.NullString
@@ -2633,29 +2631,30 @@ func (d *MasterDatabase) GetClientBinary(id string) (map[string]interface{}, err
 		&base64Size, &chunkSize, &totalChunks, &base64Data, &dnsDomains, &createdAt, &createdBy)
 
 	if err != nil {
-		return nil, err
+		return ClientBinary{}, err
 	}
+
+	_ = base64Data // scanned but not in struct
 
 	createdByStr := ""
 	if createdBy.Valid {
 		createdByStr = createdBy.String
 	}
 
-	return map[string]interface{}{
-		"id":              id,
-		"filename":        filename,
-		"os":              os,
-		"arch":            arch,
-		"version":         version,
-		"original_size":   originalSize,
-		"compressed_size": compressedSize,
-		"base64_size":     base64Size,
-		"chunk_size":      chunkSize,
-		"total_chunks":    totalChunks,
-		"base64_data":     base64Data,
-		"dns_domains":     dnsDomains,
-		"created_at":      createdAt,
-		"created_by":      createdByStr,
+	return ClientBinary{
+		ID:             id,
+		Filename:       filename,
+		OS:             os,
+		Arch:           arch,
+		Version:        version,
+		OriginalSize:   originalSize,
+		CompressedSize: compressedSize,
+		Base64Size:     base64Size,
+		ChunkSize:      chunkSize,
+		TotalChunks:    totalChunks,
+		DNSDomains:     dnsDomains,
+		CreatedAt:      createdAt,
+		CreatedBy:      createdByStr,
 	}, nil
 }
 
@@ -3212,14 +3211,14 @@ func (d *MasterDatabase) UpsertClientBinary(id, filename, os, arch string, origi
 }
 
 // GetStagerSession retrieves a stager session by ID
-func (d *MasterDatabase) GetStagerSession(sessionID string) (map[string]interface{}, error) {
+func (d *MasterDatabase) GetStagerSession(sessionID string) (StagerSession, error) {
 
 	var id, stagerIP, os, arch, clientBinaryID, initiatedByDNS string
 	var totalChunks, chunksDelivered, completed int
 	var createdAt, lastActivity, completedAt int64
 
 	err := d.db.QueryRow(`
-		SELECT id, stager_ip, os, arch, client_binary_id, total_chunks, chunks_delivered, 
+		SELECT id, stager_ip, os, arch, client_binary_id, total_chunks, chunks_delivered,
 			initiated_by_dns, created_at, last_activity, completed, completed_at
 		FROM stager_sessions
 		WHERE id = ?
@@ -3227,23 +3226,28 @@ func (d *MasterDatabase) GetStagerSession(sessionID string) (map[string]interfac
 		&initiatedByDNS, &createdAt, &lastActivity, &completed, &completedAt)
 
 	if err != nil {
-		return nil, err
+		return StagerSession{}, err
 	}
 
-	return map[string]interface{}{
-		"id":               id,
-		"stager_ip":        stagerIP,
-		"os":               os,
-		"arch":             arch,
-		"client_binary_id": clientBinaryID,
-		"total_chunks":     totalChunks,
-		"chunks_delivered": chunksDelivered,
-		"initiated_by_dns": initiatedByDNS,
-		"created_at":       createdAt,
-		"last_activity":    lastActivity,
-		"completed":        completed,
-		"completed_at":     completedAt,
-	}, nil
+	_ = clientBinaryID // scanned but not in struct
+
+	session := StagerSession{
+		ID:              id,
+		StagerIP:        stagerIP,
+		OS:              os,
+		Arch:            arch,
+		TotalChunks:     totalChunks,
+		ChunksDelivered: chunksDelivered,
+		CreatedAt:       createdAt,
+		LastActivity:    lastActivity,
+		Completed:       completed == 1,
+		InitiatedByDNS:  initiatedByDNS,
+	}
+	if completedAt != 0 {
+		session.CompletedAt = &completedAt
+	}
+
+	return session, nil
 }
 
 // GetCachedChunkCount returns the number of cached chunks for a client binary
@@ -3449,7 +3453,7 @@ func (d *MasterDatabase) MarkStagerChunkDelivered(sessionID string, chunkIndex i
 }
 
 // GetStagerChunksForDNSServer retrieves all chunks assigned to a specific DNS server for a session
-func (d *MasterDatabase) GetStagerChunksForDNSServer(sessionID, dnsServerID string) ([]map[string]interface{}, error) {
+func (d *MasterDatabase) GetStagerChunksForDNSServer(sessionID, dnsServerID string) ([]StagerChunkAssignment, error) {
 
 	rows, err := d.db.Query(`
 		SELECT chunk_index, chunk_data, delivered, delivered_at
@@ -3463,7 +3467,7 @@ func (d *MasterDatabase) GetStagerChunksForDNSServer(sessionID, dnsServerID stri
 	}
 	defer rows.Close()
 
-	var chunks []map[string]interface{}
+	var chunks []StagerChunkAssignment
 	for rows.Next() {
 		var chunkIndex, delivered int
 		var chunkData string
@@ -3473,11 +3477,12 @@ func (d *MasterDatabase) GetStagerChunksForDNSServer(sessionID, dnsServerID stri
 			continue
 		}
 
-		chunks = append(chunks, map[string]interface{}{
-			"chunk_index":  chunkIndex,
-			"chunk_data":   chunkData,
-			"delivered":    delivered,
-			"delivered_at": deliveredAt,
+		_ = delivered   // scanned but not in struct
+		_ = deliveredAt // scanned but not in struct
+
+		chunks = append(chunks, StagerChunkAssignment{
+			ChunkIndex: chunkIndex,
+			ChunkData:  chunkData,
 		})
 	}
 
@@ -3485,7 +3490,7 @@ func (d *MasterDatabase) GetStagerChunksForDNSServer(sessionID, dnsServerID stri
 }
 
 // GetStagerSessions retrieves all stager sessions
-func (d *MasterDatabase) GetStagerSessions(limit int) ([]map[string]interface{}, error) {
+func (d *MasterDatabase) GetStagerSessions(limit int) ([]StagerSession, error) {
 
 	query := `
 		SELECT s.id, s.stager_ip, s.os, s.arch, s.total_chunks, s.chunks_delivered,
@@ -3506,7 +3511,7 @@ func (d *MasterDatabase) GetStagerSessions(limit int) ([]map[string]interface{},
 	}
 	defer rows.Close()
 
-	var sessions []map[string]interface{}
+	var sessions []StagerSession
 	for rows.Next() {
 		var id, stagerIP, os, arch string
 		var totalChunks, chunksDelivered, completed int
@@ -3522,29 +3527,30 @@ func (d *MasterDatabase) GetStagerSessions(limit int) ([]map[string]interface{},
 			continue
 		}
 
-		session := map[string]interface{}{
-			"id":               id,
-			"stager_ip":        stagerIP,
-			"os":               os,
-			"arch":             arch,
-			"total_chunks":     totalChunks,
-			"chunks_delivered": chunksDelivered,
-			"created_at":       createdAt,
-			"last_activity":    lastActivity,
-			"completed":        completed == 1,
+		session := StagerSession{
+			ID:              id,
+			StagerIP:        stagerIP,
+			OS:              os,
+			Arch:            arch,
+			TotalChunks:     totalChunks,
+			ChunksDelivered: chunksDelivered,
+			CreatedAt:       createdAt,
+			LastActivity:    lastActivity,
+			Completed:       completed == 1,
 		}
 
 		if initiatedByDNS.Valid {
-			session["initiated_by_dns"] = initiatedByDNS.String
+			session.InitiatedByDNS = initiatedByDNS.String
 		}
 		if completedAt.Valid {
-			session["completed_at"] = completedAt.Int64
+			v := completedAt.Int64
+			session.CompletedAt = &v
 		}
 		if filename.Valid {
-			session["client_filename"] = filename.String
+			session.ClientFilename = filename.String
 		}
 		if version.Valid {
-			session["client_version"] = version.String
+			session.ClientVersion = version.String
 		}
 
 		sessions = append(sessions, session)
@@ -3616,7 +3622,7 @@ func (d *MasterDatabase) VerifyOperatorCredentials(username, password string) (s
 }
 
 // GetAllOperators returns all operator accounts
-func (d *MasterDatabase) GetAllOperators() ([]map[string]interface{}, error) {
+func (d *MasterDatabase) GetAllOperators() ([]Operator, error) {
 
 	rows, err := d.db.Query(`
 		SELECT id, username, role, email, created_at, last_login, login_count, is_active
@@ -3628,7 +3634,7 @@ func (d *MasterDatabase) GetAllOperators() ([]map[string]interface{}, error) {
 	}
 	defer rows.Close()
 
-	var operators []map[string]interface{}
+	var operators []Operator
 	for rows.Next() {
 		var id, username, role string
 		var email sql.NullString
@@ -3640,30 +3646,29 @@ func (d *MasterDatabase) GetAllOperators() ([]map[string]interface{}, error) {
 			continue
 		}
 
-		operator := map[string]interface{}{
-			"id":          id,
-			"username":    username,
-			"role":        role,
-			"email":       email.String,
-			"created_at":  time.Unix(createdAt, 0).Format(time.RFC3339),
-			"login_count": loginCount,
-			"is_active":   isActive == 1,
+		op := Operator{
+			ID:         id,
+			Username:   username,
+			Role:       role,
+			Email:      email.String,
+			CreatedAt:  time.Unix(createdAt, 0).Format(time.RFC3339),
+			LoginCount: loginCount,
+			IsActive:   isActive == 1,
 		}
 
 		if lastLogin.Valid {
-			operator["last_login"] = time.Unix(lastLogin.Int64, 0).Format(time.RFC3339)
-		} else {
-			operator["last_login"] = nil
+			formatted := time.Unix(lastLogin.Int64, 0).Format(time.RFC3339)
+			op.LastLogin = &formatted
 		}
 
-		operators = append(operators, operator)
+		operators = append(operators, op)
 	}
 
 	return operators, nil
 }
 
 // GetOperator retrieves a single operator by ID
-func (d *MasterDatabase) GetOperator(operatorID string) (map[string]interface{}, error) {
+func (d *MasterDatabase) GetOperator(operatorID string) (Operator, error) {
 
 	var id, username, role string
 	var email sql.NullString
@@ -3679,28 +3684,27 @@ func (d *MasterDatabase) GetOperator(operatorID string) (map[string]interface{},
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("operator not found")
+			return Operator{}, fmt.Errorf("operator not found")
 		}
-		return nil, err
+		return Operator{}, err
 	}
 
-	operator := map[string]interface{}{
-		"id":          id,
-		"username":    username,
-		"role":        role,
-		"email":       email.String,
-		"created_at":  time.Unix(createdAt, 0).Format(time.RFC3339),
-		"login_count": loginCount,
-		"is_active":   isActive == 1,
+	op := Operator{
+		ID:         id,
+		Username:   username,
+		Role:       role,
+		Email:      email.String,
+		CreatedAt:  time.Unix(createdAt, 0).Format(time.RFC3339),
+		LoginCount: loginCount,
+		IsActive:   isActive == 1,
 	}
 
 	if lastLogin.Valid {
-		operator["last_login"] = time.Unix(lastLogin.Int64, 0).Format(time.RFC3339)
-	} else {
-		operator["last_login"] = nil
+		formatted := time.Unix(lastLogin.Int64, 0).Format(time.RFC3339)
+		op.LastLogin = &formatted
 	}
 
-	return operator, nil
+	return op, nil
 }
 
 // UpdateOperator updates operator details (not password)
@@ -3905,7 +3909,7 @@ func (d *MasterDatabase) CreateTask(beaconID, command, createdBy string) (string
 // The atomic MarkTaskDelivered() handles deduplication - only one server can claim a task.
 // Previous bug: INNER JOIN on beacon_dns_contacts meant new DNS servers wouldn't see tasks
 // for beacons that hadn't contacted them yet, breaking Shadow Mesh rotation.
-func (d *MasterDatabase) GetTasksForDNSServer(dnsServerID string) ([]map[string]interface{}, error) {
+func (d *MasterDatabase) GetTasksForDNSServer(dnsServerID string) ([]DNSServerTask, error) {
 
 	// Return ALL pending tasks for ALL active beacons
 	// Shadow Mesh: Any DNS server may deliver any task - MarkTaskDelivered handles deduplication
@@ -3923,7 +3927,7 @@ func (d *MasterDatabase) GetTasksForDNSServer(dnsServerID string) ([]map[string]
 	}
 	defer rows.Close()
 
-	var tasks []map[string]interface{}
+	var tasks []DNSServerTask
 	for rows.Next() {
 		var id, beaconID, command, status string
 		var createdAt int64
@@ -3932,12 +3936,13 @@ func (d *MasterDatabase) GetTasksForDNSServer(dnsServerID string) ([]map[string]
 			continue
 		}
 
-		tasks = append(tasks, map[string]interface{}{
-			"id":         id,
-			"beacon_id":  beaconID,
-			"command":    command,
-			"status":     status,
-			"created_at": time.Unix(createdAt, 0).Format(time.RFC3339),
+		_ = createdAt // scanned but not in struct
+
+		tasks = append(tasks, DNSServerTask{
+			ID:       id,
+			BeaconID: beaconID,
+			Command:  command,
+			Status:   status,
 		})
 	}
 
@@ -4026,7 +4031,7 @@ func (d *MasterDatabase) migration18AddRegistrationStage() error {
 }
 
 // GetBeaconDomains returns domains for a beacon. Seeds from beacon_dns_contacts if no entries exist.
-func (d *MasterDatabase) GetBeaconDomains(beaconID string) ([]map[string]interface{}, error) {
+func (d *MasterDatabase) GetBeaconDomains(beaconID string) ([]BeaconDomain, error) {
 	// Use a single write lock for the check-and-seed to avoid a gap between
 	// RUnlock and Lock where another goroutine could race.
 	var count int
@@ -4048,16 +4053,16 @@ func (d *MasterDatabase) GetBeaconDomains(beaconID string) ([]map[string]interfa
 	}
 	defer rows.Close()
 
-	var domains []map[string]interface{}
+	var domains []BeaconDomain
 	for rows.Next() {
 		var domain string
 		var active int
 		if err := rows.Scan(&domain, &active); err != nil {
 			continue
 		}
-		domains = append(domains, map[string]interface{}{
-			"domain": domain,
-			"active": active == 1,
+		domains = append(domains, BeaconDomain{
+			Domain: domain,
+			Active: active == 1,
 		})
 	}
 	return domains, nil
@@ -4129,7 +4134,7 @@ func (d *MasterDatabase) GetActiveBeaconDomains(beaconID string) ([]string, erro
 
 // SHADOW MESH FIX: Return status changes for ALL tasks, not just those assigned to this server.
 // Uses per-DNS-server sync tracking so every server gets every status update independently.
-func (d *MasterDatabase) GetCompletedTasksForSync(dnsServerID string) ([]map[string]interface{}, error) {
+func (d *MasterDatabase) GetCompletedTasksForSync(dnsServerID string) ([]CompletedTaskSync, error) {
 
 	// Per-DNS-server sync: LEFT JOIN against dns_server_task_sync to find tasks
 	// this specific DNS server hasn't seen yet, or that have been updated since last sync.
@@ -4148,7 +4153,7 @@ func (d *MasterDatabase) GetCompletedTasksForSync(dnsServerID string) ([]map[str
 	}
 	defer rows.Close()
 
-	var tasks []map[string]interface{}
+	var tasks []CompletedTaskSync
 	for rows.Next() {
 		var id, beaconID, status string
 
@@ -4156,10 +4161,10 @@ func (d *MasterDatabase) GetCompletedTasksForSync(dnsServerID string) ([]map[str
 			continue
 		}
 
-		tasks = append(tasks, map[string]interface{}{
-			"id":        id,
-			"beacon_id": beaconID,
-			"status":    status,
+		tasks = append(tasks, CompletedTaskSync{
+			TaskID:   id,
+			BeaconID: beaconID,
+			Status:   status,
 		})
 	}
 
@@ -4189,12 +4194,12 @@ func (d *MasterDatabase) MarkTasksAsSynced(dnsServerID string, taskIDs []string)
 }
 
 // GetAllTasks retrieves all tasks with their status
-func (d *MasterDatabase) GetAllTasks(limit int) ([]map[string]interface{}, error) {
+func (d *MasterDatabase) GetAllTasks(limit int) ([]Task, error) {
 	return d.GetAllTasksPaginated(limit, 0)
 }
 
 // GetAllTasksPaginated retrieves tasks with pagination support
-func (d *MasterDatabase) GetAllTasksPaginated(limit, offset int) ([]map[string]interface{}, error) {
+func (d *MasterDatabase) GetAllTasksPaginated(limit, offset int) ([]Task, error) {
 
 	query := `
 		SELECT t.id, t.beacon_id, t.command, t.status, t.created_at, t.completed_at,
@@ -4217,7 +4222,7 @@ func (d *MasterDatabase) GetAllTasksPaginated(limit, offset int) ([]map[string]i
 	}
 	defer rows.Close()
 
-	var tasks []map[string]interface{}
+	var tasks []Task
 	for rows.Next() {
 		var id, beaconID, command, status string
 		var hostname, username, os sql.NullString
@@ -4229,33 +4234,33 @@ func (d *MasterDatabase) GetAllTasksPaginated(limit, offset int) ([]map[string]i
 			continue
 		}
 
-		task := map[string]interface{}{
-			"id":         id,
-			"beacon_id":  beaconID,
-			"command":    command,
-			"status":     status,
-			"created_at": time.Unix(createdAt, 0).Format(time.RFC3339),
+		task := Task{
+			ID:        id,
+			BeaconID:  beaconID,
+			Command:   command,
+			Status:    status,
+			CreatedAt: time.Unix(createdAt, 0).Format(time.RFC3339),
 		}
 
 		if completedAt.Valid {
-			task["completed_at"] = time.Unix(completedAt.Int64, 0).Format(time.RFC3339)
+			task.CompletedAt = time.Unix(completedAt.Int64, 0).Format(time.RFC3339)
 		}
 
 		if hostname.Valid {
-			task["hostname"] = hostname.String
+			task.Hostname = hostname.String
 		}
 		if username.Valid {
-			task["username"] = username.String
+			task.Username = username.String
 		}
 		if os.Valid {
-			task["os"] = os.String
+			task.OS = os.String
 		}
 
 		// Add progress for in-progress tasks (sent/exfiltrating)
 		if status == "sent" || status == "exfiltrating" {
 			progress, err := d.GetTaskProgressFromResults(id)
-			if err == nil && progress != nil {
-				task["progress"] = progress
+			if err == nil {
+				task.Progress = &progress
 			}
 		}
 
@@ -4289,7 +4294,7 @@ func (d *MasterDatabase) CountAllTasks() (int, error) {
 }
 
 // GetTaskWithResult retrieves a task and its result if completed
-func (d *MasterDatabase) GetTaskWithResult(taskID string) (map[string]interface{}, error) {
+func (d *MasterDatabase) GetTaskWithResult(taskID string) (Task, error) {
 
 	var id, beaconID, command, status string
 	var createdBy sql.NullString
@@ -4303,37 +4308,37 @@ func (d *MasterDatabase) GetTaskWithResult(taskID string) (map[string]interface{
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("task not found")
+			return Task{}, fmt.Errorf("task not found")
 		}
-		return nil, err
+		return Task{}, err
 	}
 
-	task := map[string]interface{}{
-		"id":        id,
-		"beacon_id": beaconID,
-		"command":   command,
-		"status":    status,
+	task := Task{
+		ID:       id,
+		BeaconID: beaconID,
+		Command:  command,
+		Status:   status,
 	}
 
 	if createdBy.Valid {
-		task["created_by"] = createdBy.String
+		task.CreatedBy = createdBy.String
 	}
 	if createdAt.Valid {
-		task["created_at"] = time.Unix(createdAt.Int64, 0).Format(time.RFC3339)
+		task.CreatedAt = time.Unix(createdAt.Int64, 0).Format(time.RFC3339)
 	}
 	if sentAt.Valid {
-		task["sent_at"] = time.Unix(sentAt.Int64, 0).Format(time.RFC3339)
+		task.SentAt = time.Unix(sentAt.Int64, 0).Format(time.RFC3339)
 	}
 	if completedAt.Valid {
-		task["completed_at"] = time.Unix(completedAt.Int64, 0).Format(time.RFC3339)
+		task.CompletedAt = time.Unix(completedAt.Int64, 0).Format(time.RFC3339)
 	}
 
 	// Get result if task is completed
 	if status == "completed" {
 		result, isComplete, err := d.GetTaskResult(taskID)
 		if err == nil && isComplete {
-			task["result"] = result
-			task["result_size"] = len(result)
+			task.Result = result
+			task.ResultSize = len(result)
 		} else if !isComplete {
 			// Task marked completed but no assembled result — try on-the-fly reassembly
 			var chunkCount int
@@ -4348,8 +4353,8 @@ func (d *MasterDatabase) GetTaskWithResult(taskID string) (map[string]interface{
 	} else if status == "sent" || status == "exfiltrating" {
 		// Task is in progress, calculate progress from actual received chunks
 		progress, err := d.GetTaskProgressFromResults(taskID)
-		if err == nil && progress != nil {
-			task["progress"] = progress
+		if err == nil {
+			task.Progress = &progress
 		}
 	}
 
@@ -4407,17 +4412,17 @@ func (d *MasterDatabase) UpdateTaskProgress(taskID, beaconID, dnsServerID string
 // GetTaskProgress retrieves aggregated progress for a task across all DNS servers
 // NOTE: This function is kept for DNS server progress reporting but is not used
 // for operator-facing progress display. Use GetTaskProgressFromResults instead.
-func (d *MasterDatabase) GetTaskProgress(taskID string) (map[string]interface{}, error) {
+func (d *MasterDatabase) GetTaskProgress(taskID string) (TaskProgress, error) {
 
 	// Get overall progress - sum all received chunks from different servers
 	var totalReceived, totalExpected int
 	var status string
 
 	err := d.db.QueryRow(`
-		SELECT 
+		SELECT
 			COALESCE(SUM(received_chunks), 0) as total_received,
 			MAX(total_chunks) as total_expected,
-			CASE 
+			CASE
 				WHEN MAX(status) = 'complete' THEN 'complete'
 				WHEN MAX(status) = 'assembling' THEN 'assembling'
 				WHEN SUM(received_chunks) > 0 THEN 'receiving'
@@ -4428,16 +4433,16 @@ func (d *MasterDatabase) GetTaskProgress(taskID string) (map[string]interface{},
 	`, taskID).Scan(&totalReceived, &totalExpected, &status)
 
 	if err == sql.ErrNoRows {
-		return map[string]interface{}{
-			"task_id":         taskID,
-			"received_chunks": 0,
-			"total_chunks":    0,
-			"progress":        0,
-			"status":          "pending",
+		return TaskProgress{
+			TaskID:         taskID,
+			ReceivedChunks: 0,
+			TotalChunks:    0,
+			Progress:       0,
+			Status:         "pending",
 		}, nil
 	}
 	if err != nil {
-		return nil, err
+		return TaskProgress{}, err
 	}
 
 	progress := 0
@@ -4448,19 +4453,19 @@ func (d *MasterDatabase) GetTaskProgress(taskID string) (map[string]interface{},
 		}
 	}
 
-	return map[string]interface{}{
-		"task_id":         taskID,
-		"received_chunks": totalReceived,
-		"total_chunks":    totalExpected,
-		"progress":        progress,
-		"status":          status,
+	return TaskProgress{
+		TaskID:         taskID,
+		ReceivedChunks: totalReceived,
+		TotalChunks:    totalExpected,
+		Progress:       progress,
+		Status:         status,
 	}, nil
 }
 
 // GetTaskProgressFromResults calculates actual progress from task_results table
 // This is the authoritative source for progress as it reflects what the Master has received
 // With distributed chunks, this aggregates data from all DNS servers
-func (d *MasterDatabase) GetTaskProgressFromResults(taskID string) (map[string]interface{}, error) {
+func (d *MasterDatabase) GetTaskProgressFromResults(taskID string) (TaskProgress, error) {
 	// First check if we have a complete result
 	var completeExists int
 	err := d.db.QueryRow(`
@@ -4469,17 +4474,17 @@ func (d *MasterDatabase) GetTaskProgressFromResults(taskID string) (map[string]i
 	`, taskID).Scan(&completeExists)
 
 	if err != nil {
-		return nil, err
+		return TaskProgress{}, err
 	}
 
 	if completeExists > 0 {
 		// Task is complete
-		return map[string]interface{}{
-			"task_id":         taskID,
-			"received_chunks": -1, // Not applicable for complete
-			"total_chunks":    -1,
-			"progress":        100,
-			"status":          "complete",
+		return TaskProgress{
+			TaskID:         taskID,
+			ReceivedChunks: -1, // Not applicable for complete
+			TotalChunks:    -1,
+			Progress:       100,
+			Status:         "complete",
 		}, nil
 	}
 
@@ -4493,7 +4498,7 @@ func (d *MasterDatabase) GetTaskProgressFromResults(taskID string) (map[string]i
 	`, taskID).Scan(&totalExpected)
 
 	if err != nil && err != sql.ErrNoRows {
-		return nil, err
+		return TaskProgress{}, err
 	}
 
 	// If no metadata in task_results yet, try DNS server progress reports
@@ -4511,12 +4516,12 @@ func (d *MasterDatabase) GetTaskProgressFromResults(taskID string) (map[string]i
 
 	if !totalExpected.Valid || totalExpected.Int64 <= 0 {
 		// No chunks received yet or single-chunk result
-		return map[string]interface{}{
-			"task_id":         taskID,
-			"received_chunks": 0,
-			"total_chunks":    0,
-			"progress":        0,
-			"status":          "pending",
+		return TaskProgress{
+			TaskID:         taskID,
+			ReceivedChunks: 0,
+			TotalChunks:    0,
+			Progress:       0,
+			Status:         "pending",
 		}, nil
 	}
 
@@ -4528,7 +4533,7 @@ func (d *MasterDatabase) GetTaskProgressFromResults(taskID string) (map[string]i
 	`, taskID).Scan(&receivedChunks)
 
 	if err != nil {
-		return nil, err
+		return TaskProgress{}, err
 	}
 
 	progress := 0
@@ -4546,12 +4551,12 @@ func (d *MasterDatabase) GetTaskProgressFromResults(taskID string) (map[string]i
 		status = "assembling"
 	}
 
-	return map[string]interface{}{
-		"task_id":         taskID,
-		"received_chunks": receivedChunks,
-		"total_chunks":    int(totalExpected.Int64),
-		"progress":        progress,
-		"status":          status,
+	return TaskProgress{
+		TaskID:         taskID,
+		ReceivedChunks: receivedChunks,
+		TotalChunks:    int(totalExpected.Int64),
+		Progress:       progress,
+		Status:         status,
 	}, nil
 }
 
@@ -4816,39 +4821,31 @@ func (d *MasterDatabase) LogAuditEvent(operatorID, action, targetType, targetID,
 }
 
 // GetDatabaseStats returns master database statistics
-func (d *MasterDatabase) GetDatabaseStats() (map[string]interface{}, error) {
+func (d *MasterDatabase) GetDatabaseStats() (DatabaseStats, error) {
 
-	stats := make(map[string]interface{})
+	var stats DatabaseStats
 
 	// Count DNS servers
-	var dnsServerCount, activeDNSServerCount int
-	if err := d.db.QueryRow("SELECT COUNT(*) FROM dns_servers").Scan(&dnsServerCount); err != nil {
-		dnsServerCount = 0
+	if err := d.db.QueryRow("SELECT COUNT(*) FROM dns_servers").Scan(&stats.DNSServers); err != nil {
+		stats.DNSServers = 0
 	}
-	if err := d.db.QueryRow("SELECT COUNT(*) FROM dns_servers WHERE status = 'active'").Scan(&activeDNSServerCount); err != nil {
-		activeDNSServerCount = 0
+	if err := d.db.QueryRow("SELECT COUNT(*) FROM dns_servers WHERE status = 'active'").Scan(&stats.ActiveDNSServers); err != nil {
+		stats.ActiveDNSServers = 0
 	}
-	stats["dns_servers"] = dnsServerCount
-	stats["active_dns_servers"] = activeDNSServerCount
 
 	// Count beacons
-	var beaconCount, activeBeaconCount int
-	if err := d.db.QueryRow("SELECT COUNT(*) FROM beacons").Scan(&beaconCount); err != nil {
-		beaconCount = 0
+	if err := d.db.QueryRow("SELECT COUNT(*) FROM beacons").Scan(&stats.Beacons); err != nil {
+		stats.Beacons = 0
 	}
 	cutoff := time.Now().Add(-24 * time.Hour).Unix()
-	if err := d.db.QueryRow("SELECT COUNT(*) FROM beacons WHERE last_seen > ? AND status = 'active'", cutoff).Scan(&activeBeaconCount); err != nil {
-		activeBeaconCount = 0
+	if err := d.db.QueryRow("SELECT COUNT(*) FROM beacons WHERE last_seen > ? AND status = 'active'", cutoff).Scan(&stats.ActiveBeacons); err != nil {
+		stats.ActiveBeacons = 0
 	}
-	stats["beacons"] = beaconCount
-	stats["active_beacons"] = activeBeaconCount
 
 	// Count tasks
-	var taskCount int
-	if err := d.db.QueryRow("SELECT COUNT(*) FROM tasks").Scan(&taskCount); err != nil {
-		taskCount = 0
+	if err := d.db.QueryRow("SELECT COUNT(*) FROM tasks").Scan(&stats.Tasks); err != nil {
+		stats.Tasks = 0
 	}
-	stats["tasks"] = taskCount
 
 	// Tasks by status
 	rows, err := d.db.Query("SELECT status, COUNT(*) FROM tasks GROUP BY status")
@@ -4862,44 +4859,34 @@ func (d *MasterDatabase) GetDatabaseStats() (map[string]interface{}, error) {
 				tasksByStatus[status] = count
 			}
 		}
-		stats["tasks_by_status"] = tasksByStatus
+		stats.TasksByStatus = tasksByStatus
 	}
 
 	// Count operators
-	var operatorCount int
-	if err := d.db.QueryRow("SELECT COUNT(*) FROM operators WHERE is_active = 1").Scan(&operatorCount); err != nil {
-		operatorCount = 0
+	if err := d.db.QueryRow("SELECT COUNT(*) FROM operators WHERE is_active = 1").Scan(&stats.Operators); err != nil {
+		stats.Operators = 0
 	}
-	stats["operators"] = operatorCount
 
 	// Recent audit events
-	var auditEventCount int
-	if err := d.db.QueryRow("SELECT COUNT(*) FROM audit_log WHERE timestamp > ?", cutoff).Scan(&auditEventCount); err != nil {
-		auditEventCount = 0
+	if err := d.db.QueryRow("SELECT COUNT(*) FROM audit_log WHERE timestamp > ?", cutoff).Scan(&stats.RecentAuditEvents); err != nil {
+		stats.RecentAuditEvents = 0
 	}
-	stats["recent_audit_events"] = auditEventCount
 
 	// Count stager sessions
-	var stagerSessionCount, completedStagerCount int
-	if err := d.db.QueryRow("SELECT COUNT(*) FROM stager_sessions").Scan(&stagerSessionCount); err != nil {
-		stagerSessionCount = 0
+	if err := d.db.QueryRow("SELECT COUNT(*) FROM stager_sessions").Scan(&stats.StagerSessions); err != nil {
+		stats.StagerSessions = 0
 	}
-	if err := d.db.QueryRow("SELECT COUNT(*) FROM stager_sessions WHERE completed = 1").Scan(&completedStagerCount); err != nil {
-		completedStagerCount = 0
+	if err := d.db.QueryRow("SELECT COUNT(*) FROM stager_sessions WHERE completed = 1").Scan(&stats.CompletedStagerSessions); err != nil {
+		stats.CompletedStagerSessions = 0
 	}
-	stats["stager_sessions"] = stagerSessionCount
-	stats["completed_stager_sessions"] = completedStagerCount
 
 	// Count exfil transfers
-	var exfilTransferCount, completedExfilCount int
-	if err := d.db.QueryRow("SELECT COUNT(*) FROM exfil_transfers").Scan(&exfilTransferCount); err != nil {
-		exfilTransferCount = 0
+	if err := d.db.QueryRow("SELECT COUNT(*) FROM exfil_transfers").Scan(&stats.ExfilTransfers); err != nil {
+		stats.ExfilTransfers = 0
 	}
-	if err := d.db.QueryRow("SELECT COUNT(*) FROM exfil_transfers WHERE status = 'complete'").Scan(&completedExfilCount); err != nil {
-		completedExfilCount = 0
+	if err := d.db.QueryRow("SELECT COUNT(*) FROM exfil_transfers WHERE status = 'complete'").Scan(&stats.CompletedExfilTransfers); err != nil {
+		stats.CompletedExfilTransfers = 0
 	}
-	stats["exfil_transfers"] = exfilTransferCount
-	stats["completed_exfil_transfers"] = completedExfilCount
 
 	return stats, nil
 }
@@ -5141,7 +5128,7 @@ func (d *MasterDatabase) QueueStagerCacheForDNSServers(clientBinaryID string, dn
 }
 
 // GetPendingStagerCaches retrieves all pending cache tasks for a DNS server
-func (d *MasterDatabase) GetPendingStagerCaches(dnsServerID string) ([]map[string]interface{}, error) {
+func (d *MasterDatabase) GetPendingStagerCaches(dnsServerID string) ([]PendingStagerCache, error) {
 
 	rows, err := d.db.Query(`
 		SELECT psc.id, psc.client_binary_id, cb.base64_data, cb.total_chunks
@@ -5156,7 +5143,7 @@ func (d *MasterDatabase) GetPendingStagerCaches(dnsServerID string) ([]map[strin
 	}
 	defer rows.Close()
 
-	var caches []map[string]interface{}
+	var caches []PendingStagerCache
 	for rows.Next() {
 		var id int
 		var clientBinaryID, base64Data string
@@ -5166,7 +5153,6 @@ func (d *MasterDatabase) GetPendingStagerCaches(dnsServerID string) ([]map[strin
 			return nil, err
 		}
 
-		// Split base64 data into chunks (DNS-safe size)
 		const chunkSize = 370
 		var chunks []string
 		for i := 0; i < len(base64Data); i += chunkSize {
@@ -5177,11 +5163,11 @@ func (d *MasterDatabase) GetPendingStagerCaches(dnsServerID string) ([]map[strin
 			chunks = append(chunks, base64Data[i:end])
 		}
 
-		caches = append(caches, map[string]interface{}{
-			"id":               id,
-			"client_binary_id": clientBinaryID,
-			"total_chunks":     totalChunks,
-			"chunks":           chunks,
+		caches = append(caches, PendingStagerCache{
+			ID:             id,
+			ClientBinaryID: clientBinaryID,
+			TotalChunks:    totalChunks,
+			Chunks:         chunks,
 		})
 	}
 
@@ -5299,7 +5285,7 @@ ORDER BY domain
 }
 
 // GetAllDNSServers returns all DNS servers (for domain broadcasting)
-func (d *MasterDatabase) GetAllDNSServers() ([]map[string]interface{}, error) {
+func (d *MasterDatabase) GetAllDNSServers() ([]DNSServer, error) {
 
 	rows, err := d.db.Query(`
 SELECT id, domain, COALESCE(address, '') AS address, status FROM dns_servers
@@ -5310,17 +5296,17 @@ WHERE status = 'active'
 	}
 	defer rows.Close()
 
-	var servers []map[string]interface{}
+	var servers []DNSServer
 	for rows.Next() {
 		var id, domain, address, status string
 		if err := rows.Scan(&id, &domain, &address, &status); err != nil {
 			return nil, err
 		}
-		servers = append(servers, map[string]interface{}{
-			"id":      id,
-			"domain":  domain,
-			"address": address,
-			"status":  status,
+		servers = append(servers, DNSServer{
+			ID:      id,
+			Domain:  domain,
+			Address: address,
+			Status:  status,
 		})
 	}
 

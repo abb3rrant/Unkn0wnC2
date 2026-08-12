@@ -276,6 +276,8 @@
         .task-item.selected {
             border-color: rgba(255, 51, 51, 0.8);
             background: rgba(255, 51, 51, 0.05);
+            border-bottom-left-radius: 0;
+            border-bottom-right-radius: 0;
         }
 
         .task-header {
@@ -520,6 +522,17 @@
         .task-action-btn.delete-btn:hover {
             background: rgba(255, 50, 50, 0.4);
         }
+
+        .inline-result-container {
+            margin-top: -10px;
+        }
+
+        .inline-result-container .result-viewer {
+            margin-top: 0;
+            border-radius: 0 0 6px 6px;
+            border: 1px solid rgba(255, 51, 51, 0.8);
+            border-top: 1px solid rgba(255, 51, 51, 0.2);
+        }
     </style>
 </head>
 <body>
@@ -621,19 +634,6 @@
             </div>
         </div>
 
-        <!-- Result Viewer Section -->
-        <div id="resultSection" style="display: none;">
-            <div class="section">
-                <h2 class="section-title">Task Result</h2>
-                <div class="result-viewer">
-                    <div class="result-header">
-                        <div class="result-title" id="resultTitle">Task Output</div>
-                        <button class="btn-copy" id="btnCopy" onclick="copyResult()">Copy</button>
-                    </div>
-                    <div class="result-content" id="resultContent"></div>
-                </div>
-            </div>
-        </div>
     </div>
 
     <script src="/static/shared.js"></script>
@@ -1067,6 +1067,7 @@
                                 <button class="task-action-btn delete-btn" data-task-id="${escapeHtml(task.id)}" data-action="delete-task" title="Delete">${icons.trash} Delete</button>
                             </div>
                         </div>
+                        ${selectedTaskId === task.id ? '<div class="inline-result-container" id="inlineResult"></div>' : ''}
                     `;
                 }).join('');
 
@@ -1076,28 +1077,45 @@
             }
         }
 
-        // Select a task and load its result
+        // Select a task and show its result inline (accordion toggle)
         async function selectTask(taskId) {
+            if (selectedTaskId === taskId) {
+                selectedTaskId = null;
+                loadTasks();
+                return;
+            }
+
             selectedTaskId = taskId;
-            loadTasks(); // Refresh to show selection
+            loadTasks();
+            await loadTaskResult(taskId);
+        }
+
+        // Load and display task result in the inline container
+        async function loadTaskResult(taskId) {
+            if (!taskId) return;
+
+            const container = document.getElementById('inlineResult');
+            if (!container) return;
 
             try {
                 const response = await authFetch(`/api/tasks/${taskId}`);
                 if (!response) return;
 
                 const task = await response.json();
-
-                const resultSection = document.getElementById('resultSection');
-                const resultTitle = document.getElementById('resultTitle');
-                const resultContent = document.getElementById('resultContent');
-
-                resultTitle.textContent = `Task ${task.id} - ${task.command}`;
+                let contentHtml = '';
 
                 if (task.status === 'completed' && task.result) {
-                    resultContent.textContent = task.result;
-                    resultSection.style.display = 'block';
+                    container.innerHTML = `
+                        <div class="result-viewer" style="margin-top:0">
+                            <div class="result-header">
+                                <div class="result-title">Task ${escapeHtml(task.id)} Output</div>
+                                <button class="btn-copy" onclick="copyInlineResult()">${icons.copy} Copy</button>
+                            </div>
+                            <div class="result-content" id="inlineResultContent"></div>
+                        </div>`;
+                    document.getElementById('inlineResultContent').textContent = task.result;
+                    return;
                 } else if (task.status === 'exfiltrating' || (task.status === 'sent' && task.progress)) {
-                    // Show progress bar for tasks in progress
                     const progress = task.progress;
                     let statusMessage = '';
                     let statusIcon = '';
@@ -1114,7 +1132,7 @@
                     }
 
                     if (progress) {
-                        resultContent.innerHTML = `
+                        contentHtml = `
                             <div class="no-result">
                                 <div style="margin-bottom: 10px;">${statusIcon}</div>
                                 <div style="font-size: 14px; margin-bottom: 20px;">${statusMessage}</div>
@@ -1127,22 +1145,19 @@
                                 ${progress.status ? `<div style="color: #555; font-size: 11px; margin-top: 5px;">Status: ${progress.status}</div>` : ''}
                             </div>`;
                     } else {
-                        resultContent.innerHTML = `
+                        contentHtml = `
                             <div class="no-result">
                                 <div style="margin-bottom: 10px;">${statusIcon}</div>
                                 <div style="font-size: 14px;">${statusMessage}</div>
                             </div>`;
                     }
-                    resultSection.style.display = 'block';
                 } else if (task.status === 'pending') {
-                    resultContent.innerHTML = '<div class="no-result">Task queued, waiting for beacon check-in...</div>';
-                    resultSection.style.display = 'block';
+                    contentHtml = '<div class="no-result">Task queued, waiting for beacon check-in...</div>';
                 } else if (task.status === 'sent') {
-                    resultContent.innerHTML = '<div class="no-result">Task sent, waiting for beacon to start execution...</div>';
-                    resultSection.style.display = 'block';
+                    contentHtml = '<div class="no-result">Task sent, waiting for beacon to start execution...</div>';
                 } else if (task.status === 'failed') {
                     const failureReason = task.result || 'Unknown failure reason';
-                    resultContent.innerHTML = `
+                    contentHtml = `
                         <div class="no-result">
                             <div style="margin-bottom: 10px;">${icon('xCircle', 32)}</div>
                             <div style="font-size: 16px; margin-bottom: 10px; color: #ff6666;">Task Failed</div>
@@ -1161,9 +1176,8 @@
                                 You can create a new task if the beacon is still active.
                             </div>
                         </div>`;
-                    resultSection.style.display = 'block';
                 } else if (task.status === 'expired') {
-                    resultContent.innerHTML = `
+                    contentHtml = `
                         <div class="no-result">
                             <div style="margin-bottom: 10px;">${icon('dotsThree', 32)}</div>
                             <div style="font-size: 16px; margin-bottom: 10px;">Task Expired</div>
@@ -1176,13 +1190,12 @@
                                 You can create a new task if the beacon comes back online.
                             </div>
                         </div>`;
-                    resultSection.style.display = 'block';
                 } else if (task.status === 'partial') {
                     const prog = task.progress || {received_chunks: 0, total_chunks: 0};
-                    const percentReceived = prog.total_chunks > 0 
-                        ? Math.round((prog.received_chunks / prog.total_chunks) * 100) 
+                    const percentReceived = prog.total_chunks > 0
+                        ? Math.round((prog.received_chunks / prog.total_chunks) * 100)
                         : 0;
-                    resultContent.innerHTML = `
+                    contentHtml = `
                         <div class="no-result">
                             <div style="margin-bottom: 10px;">${icon('warning', 32)}</div>
                             <div style="font-size: 16px; margin-bottom: 10px;">Partial Result - Transfer Incomplete</div>
@@ -1196,9 +1209,8 @@
                                 You can retry the task if the beacon comes back online.
                             </div>
                         </div>`;
-                    resultSection.style.display = 'block';
                 } else if (task.status === 'timeout') {
-                    resultContent.innerHTML = `
+                    contentHtml = `
                         <div class="no-result">
                             <div style="margin-bottom: 10px;">${icon('dotsThree', 32)}</div>
                             <div style="font-size: 16px; margin-bottom: 10px;">Task Timeout</div>
@@ -1210,14 +1222,13 @@
                                 Consider breaking down long-running tasks or increasing timeout limits.
                             </div>
                         </div>`;
-                    resultSection.style.display = 'block';
                 } else {
-                    resultContent.innerHTML = '<div class="no-result">No result available</div>';
-                    resultSection.style.display = 'block';
+                    contentHtml = '<div class="no-result">No result available</div>';
                 }
+
+                container.innerHTML = `<div class="result-viewer" style="margin-top:0">${contentHtml}</div>`;
             } catch (error) {
                 console.error('Error loading task result:', error);
-                showAlert('Failed to load task result', 'error');
             }
         }
 
@@ -1310,10 +1321,11 @@
             counter.style.color = len > limit * 0.8 ? (len >= limit ? '#f44336' : '#ff9800') : '#888';
         }
 
-        // Copy result to clipboard
-        function copyResult() {
-            const resultContent = document.getElementById('resultContent').textContent;
-            navigator.clipboard.writeText(resultContent).then(() => {
+        // Copy inline result to clipboard
+        function copyInlineResult() {
+            const el = document.getElementById('inlineResultContent');
+            if (!el) return;
+            navigator.clipboard.writeText(el.textContent).then(() => {
                 showAlert('Result copied to clipboard', 'success');
             }).catch(err => {
                 showAlert('Failed to copy result', 'error');
@@ -1331,7 +1343,7 @@
             autoRefreshInterval = setInterval(() => {
                 loadTasks();
                 if (selectedTaskId) {
-                    selectTask(selectedTaskId);
+                    loadTaskResult(selectedTaskId);
                 }
             }, 5000);
         }
@@ -1339,9 +1351,6 @@
         // Initialize page
         async function initializePage() {
             document.querySelectorAll('#dnsEmptyIcon, #tasksEmptyIcon').forEach(el => { el.innerHTML = icons.listDashes; });
-            const btnCopy = document.getElementById('btnCopy');
-            if (btnCopy) btnCopy.innerHTML = icons.copy + ' Copy';
-
             const cmdInput = document.getElementById('commandInput');
             if (cmdInput) cmdInput.maxLength = MAX_TASK_COMMAND_LENGTH;
             const cmdHint = document.getElementById('cmdLimitHint');
@@ -1450,7 +1459,6 @@
                 if (response && response.ok) {
                     if (selectedTaskId === taskId) {
                         selectedTaskId = null;
-                        document.getElementById('resultSection').style.display = 'none';
                     }
                     loadTasks();
                 } else {

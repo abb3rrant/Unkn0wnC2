@@ -14,7 +14,8 @@
 
 set -e
 
-VERSION="0.8.0"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+VERSION=$(cat "${SCRIPT_DIR}/VERSION" | tr -d '[:space:]')
 BUILD_DATE=$(date -u '+%Y-%m-%d')
 GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 

