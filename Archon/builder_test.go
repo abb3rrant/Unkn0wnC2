@@ -314,6 +314,120 @@ func TestValidatePayloadFormat_MultipleDomains_OneFails(t *testing.T) {
 	}
 }
 
+func TestCollectActiveDomains_FiltersInactive(t *testing.T) {
+	servers := []DNSServer{
+		{ID: "1", Domain: "active1.com", Status: "active"},
+		{ID: "2", Domain: "inactive.com", Status: "inactive"},
+		{ID: "3", Domain: "active2.com", Status: "active"},
+	}
+
+	domains := collectActiveDomains(servers)
+
+	if len(domains) != 2 {
+		t.Fatalf("expected 2 active domains, got %d: %v", len(domains), domains)
+	}
+	if domains[0] != "active1.com" || domains[1] != "active2.com" {
+		t.Errorf("unexpected domains: %v", domains)
+	}
+}
+
+func TestCollectActiveDomains_TrimsAndDedups(t *testing.T) {
+	servers := []DNSServer{
+		{ID: "1", Domain: "  dup.com ", Status: "active"},
+		{ID: "2", Domain: "dup.com", Status: "active"},
+		{ID: "3", Domain: "   ", Status: "active"},
+		{ID: "4", Domain: "single.com", Status: "active"},
+	}
+
+	domains := collectActiveDomains(servers)
+
+	if len(domains) != 2 {
+		t.Fatalf("expected 2 unique domains after trim/dedup, got %d: %v", len(domains), domains)
+	}
+	if domains[0] != "dup.com" || domains[1] != "single.com" {
+		t.Errorf("unexpected domains: %v", domains)
+	}
+}
+
+func TestCollectActiveDomains_Empty(t *testing.T) {
+	if domains := collectActiveDomains(nil); len(domains) != 0 {
+		t.Errorf("expected empty for nil servers, got %v", domains)
+	}
+	if domains := collectActiveDomains([]DNSServer{}); len(domains) != 0 {
+		t.Errorf("expected empty for no servers, got %v", domains)
+	}
+	if domains := collectActiveDomains([]DNSServer{{ID: "1", Domain: "x.com", Status: "down"}}); len(domains) != 0 {
+		t.Errorf("expected empty when no server is active, got %v", domains)
+	}
+}
+
+func TestCollectServerAddresses_IncludesInactive(t *testing.T) {
+	servers := []DNSServer{
+		{ID: "1", Address: "10.0.0.1", Status: "active"},
+		{ID: "2", Address: "10.0.0.2", Status: "inactive"},
+		{ID: "3", Address: "10.0.0.1", Status: "active"}, // duplicate address
+	}
+
+	addresses := collectServerAddresses(servers)
+
+	if len(addresses) != 2 {
+		t.Fatalf("expected 2 unique addresses (incl. inactive), got %d: %v", len(addresses), addresses)
+	}
+	if addresses[0] != "10.0.0.1" || addresses[1] != "10.0.0.2" {
+		t.Errorf("unexpected addresses: %v", addresses)
+	}
+}
+
+func TestCollectServerAddresses_TrimsAndSkipsEmpty(t *testing.T) {
+	servers := []DNSServer{
+		{ID: "1", Address: "  192.168.1.1  "},
+		{ID: "2", Address: ""},
+		{ID: "3", Address: "  "},
+	}
+
+	addresses := collectServerAddresses(servers)
+
+	if len(addresses) != 1 || addresses[0] != "192.168.1.1" {
+		t.Errorf("expected only trimmed non-empty address, got %v", addresses)
+	}
+}
+
+func TestSelectServerAddress_PrefersActive(t *testing.T) {
+	servers := []DNSServer{
+		{ID: "1", Address: "10.0.0.1", Status: "inactive"},
+		{ID: "2", Address: "10.0.0.2", Status: "active"},
+		{ID: "3", Address: "10.0.0.3", Status: "active"},
+	}
+
+	addr := selectServerAddress(servers)
+
+	if addr != "10.0.0.2" {
+		t.Errorf("expected first active server address 10.0.0.2, got %q", addr)
+	}
+}
+
+func TestSelectServerAddress_FallsBackToInactive(t *testing.T) {
+	servers := []DNSServer{
+		{ID: "1", Address: "10.0.0.1", Status: "inactive"},
+		{ID: "2", Address: "", Status: "active"},
+	}
+
+	addr := selectServerAddress(servers)
+
+	if addr != "10.0.0.1" {
+		t.Errorf("expected fallback to inactive address 10.0.0.1, got %q", addr)
+	}
+}
+
+func TestSelectServerAddress_Empty(t *testing.T) {
+	if addr := selectServerAddress(nil); addr != "" {
+		t.Errorf("expected empty for nil servers, got %q", addr)
+	}
+	if addr := selectServerAddress([]DNSServer{{ID: "1", Address: "  ", Status: "active"}}); addr != "" {
+		t.Errorf("expected empty when all addresses blank, got %q", addr)
+	}
+}
+
 func TestValidatePayloadFormat_AllowedDecorators(t *testing.T) {
 	// Hyphens, underscores, and alphanumeric decorators are all valid.
 	// Use 15 groups of "XXXXXXXX-ab_CD1" (8 X + 7 decorators = 15 chars each):
