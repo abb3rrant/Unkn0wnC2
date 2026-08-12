@@ -14,7 +14,8 @@
 
 set -e
 
-VERSION="0.8.0"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VERSION=$(cat "${SCRIPT_DIR}/VERSION" | tr -d '[:space:]')
 BUILD_DATE=$(date -u '+%Y-%m-%d')
 GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
@@ -58,9 +59,6 @@ if [ ! -f "/usr/bin/unkn0wnc2" ]; then
   echo "Please run build.sh first to perform initial installation"
   exit 1
 fi
-
-# Get script directory (where repo is)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo -e "${YELLOW}[1/5] Stopping unkn0wnc2 service...${NC}"
 if systemctl is-active --quiet unkn0wnc2 2>/dev/null; then

@@ -575,19 +575,19 @@ func (api *APIServer) handleGetInfrastructure(w http.ResponseWriter, r *http.Req
 	// Get DNS servers
 	dnsServers, err := api.db.GetAllDNSServers()
 	if err != nil {
-		dnsServers = []map[string]interface{}{}
+		dnsServers = []DNSServer{}
 	}
 
 	// Transform DNS servers for map
 	var dnsNodes []map[string]interface{}
 	for _, server := range dnsServers {
 		node := map[string]interface{}{
-			"id":           server["id"],
+			"id":           server.ID,
 			"type":         "dns-server",
-			"name":         server["domain"],
-			"address":      server["address"],
-			"status":       server["status"],
-			"last_checkin": server["last_checkin"],
+			"name":         server.Domain,
+			"address":      server.Address,
+			"status":       server.Status,
+			"last_checkin": server.LastCheckin,
 		}
 		dnsNodes = append(dnsNodes, node)
 	}
@@ -596,52 +596,39 @@ func (api *APIServer) handleGetInfrastructure(w http.ResponseWriter, r *http.Req
 	// Use large threshold (525600 min = 1 year) to include all beacons, not just recent
 	beacons, err := api.db.GetActiveBeaconsPaginated(525600, 500, 0)
 	if err != nil {
-		beacons = []map[string]interface{}{}
+		beacons = []Beacon{}
 	}
 
 	// Transform beacons for map
 	var beaconNodes []map[string]interface{}
 	for _, beacon := range beacons {
-		// Handle last_seen which could be int64, float64, or other types from SQLite
-		var lastSeen int64
-		switch v := beacon["last_seen"].(type) {
-		case int64:
-			lastSeen = v
-		case float64:
-			lastSeen = int64(v)
-		case int:
-			lastSeen = int64(v)
-		default:
-			lastSeen = 0
-		}
-
-		// Determine online status based on last_seen timestamp only
-		// A beacon is online if it checked in within the last 10 minutes
-		// This is more reliable than the DB status field which isn't updated to 'offline'
+		// Determine online status based on last_seen timestamp
+		// LastSeen is now RFC3339 string, parse it back to check recency
 		status := "offline"
-		secondsSinceLastSeen := time.Now().Unix() - lastSeen
-		if lastSeen > 0 && secondsSinceLastSeen < 600 { // 10 minutes
-			status = "online"
+		if t, err := time.Parse(time.RFC3339, beacon.LastSeen); err == nil {
+			if time.Since(t).Seconds() < 600 {
+				status = "online"
+			}
 		}
 
 		node := map[string]interface{}{
-			"id":             beacon["id"],
+			"id":             beacon.ID,
 			"type":           "beacon",
-			"name":           beacon["hostname"],
-			"hostname":       beacon["hostname"],
-			"address":        beacon["ip_address"],
-			"ip_address":     beacon["ip_address"],
+			"name":           beacon.Hostname,
+			"hostname":       beacon.Hostname,
+			"address":        beacon.IPAddress,
+			"ip_address":     beacon.IPAddress,
 			"status":         status,
-			"os":             beacon["os"],
-			"arch":           beacon["arch"],
-			"user":           beacon["username"],
-			"username":       beacon["username"],
-			"last_seen":      beacon["last_seen"],
-			"first_seen":     beacon["first_seen"],
-			"beacon_name":    beacon["beacon_name"],
-			"build_id":       beacon["build_id"],
-			"payload_format": beacon["payload_format"],
-			"encoding":       beacon["encoding"],
+			"os":             beacon.OS,
+			"arch":           beacon.Arch,
+			"user":           beacon.Username,
+			"username":       beacon.Username,
+			"last_seen":      beacon.LastSeen,
+			"first_seen":     beacon.FirstSeen,
+			"beacon_name":    beacon.BeaconName,
+			"build_id":       beacon.BuildID,
+			"payload_format": beacon.PayloadFormat,
+			"encoding":       beacon.Encoding,
 		}
 		beaconNodes = append(beaconNodes, node)
 	}
@@ -672,24 +659,20 @@ func (api *APIServer) handleGetInfrastructure(w http.ResponseWriter, r *http.Req
 			}
 		}
 	} else {
-		// Build set of beacon IDs in this response for filtering
-		beaconIDSet := make(map[interface{}]bool)
-		for _, b := range beaconNodes {
-			beaconIDSet[b["id"]] = true
+		beaconIDSet := make(map[string]bool)
+		for _, b := range beacons {
+			beaconIDSet[b.ID] = true
 		}
-		dnsIDSet := make(map[interface{}]bool)
-		for _, d := range dnsNodes {
-			dnsIDSet[d["id"]] = true
+		dnsIDSet := make(map[string]bool)
+		for _, d := range dnsServers {
+			dnsIDSet[d.ID] = true
 		}
 
 		for _, link := range beaconDNSLinks {
-			bID := link["beacon_id"]
-			dID := link["dns_server_id"]
-			// Only include connections for beacons and DNS servers in this response
-			if beaconIDSet[bID] && dnsIDSet[dID] {
+			if beaconIDSet[link.BeaconID] && dnsIDSet[link.DNSServerID] {
 				connections = append(connections, map[string]interface{}{
-					"from": dID,
-					"to":   bID,
+					"from": link.DNSServerID,
+					"to":   link.BeaconID,
 					"type": "beacon",
 				})
 			}

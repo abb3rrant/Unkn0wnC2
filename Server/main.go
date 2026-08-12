@@ -107,7 +107,7 @@ func (r *ForwardingRateLimiter) GetStats() (pauses int64, blocked int64, current
 
 // Build-time version information (set via -ldflags during build)
 var (
-	version   = "0.8.0"
+	version   = "dev"
 	buildDate = "unknown"
 	gitCommit = "unknown"
 )
