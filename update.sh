@@ -101,7 +101,7 @@ echo -e "${YELLOW}[4/5] Updating files...${NC}"
 cp -r "${SCRIPT_DIR}/Archon/web/"* /opt/unkn0wnc2/web/
 echo -e "${GREEN}✓ Updated web interface files${NC}"
 
-# Update source files for builder (Server, Client, Stager, exfil-client)
+# Update source files for builder (Server, Client, Stager)
 cd "${SCRIPT_DIR}"
 cp -r Server Client Stager /opt/unkn0wnc2/src/
 echo -e "${GREEN}✓ Updated source files${NC}"

@@ -709,7 +709,7 @@ func (d *MasterDatabase) tryAssembleExfilTransferTx(tx *sql.Tx, sessionID string
 	// SHADOW MESH: If total is still 0 but we have a completion signal, infer total from max chunk index
 	// This handles distributed exfil where metadata went to one DNS server and completion to another
 	if total == 0 {
-		// Check if we have a pending completion signal (indicates exfil-client finished sending)
+		// Check if we have a pending completion signal (indicates the sender finished)
 		var hasCompletion int
 		tx.QueryRow(`SELECT 1 FROM pending_exfil_completions WHERE session_id = ?`, sessionID).Scan(&hasCompletion)
 		if hasCompletion == 1 {
