@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"fmt"
 	"strings"
@@ -1842,5 +1843,98 @@ func TestComms_DecodeAfterBeaconRegistered_WithFormat(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// =============================================================================
+// CLI / version flag tests
+// =============================================================================
+
+func TestRunVersionFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+
+	exitCode := run([]string{"--version"}, &stdout, &stderr, func(cfg Config) int {
+		t.Fatal("startServer must not be called when --version is present")
+		return 1
+	})
+
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0", exitCode)
+	}
+
+	want := fmt.Sprintf("DNS C2 Server v%s\n", version)
+	if got := stdout.String(); got != want {
+		t.Errorf("stdout = %q, want %q", got, want)
+	}
+
+	if got := stderr.String(); got != "" {
+		t.Errorf("stderr = %q, want empty", got)
+	}
+}
+
+func TestRunWithoutVersionStartsServer(t *testing.T) {
+	originalLoadConfig := loadConfig
+	defer func() { loadConfig = originalLoadConfig }()
+
+	loadConfig = func() (Config, error) {
+		return Config{
+			BindAddr: "127.0.0.1",
+			BindPort: 53,
+			Debug:    false,
+		}, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	var gotCfg Config
+	startCalled := false
+
+	exitCode := run(
+		[]string{"-d", "-bind-addr", "0.0.0.0", "-bind-port", "5353"},
+		&stdout,
+		&stderr,
+		func(cfg Config) int {
+			startCalled = true
+			gotCfg = cfg
+			return 0
+		},
+	)
+
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0", exitCode)
+	}
+	if !startCalled {
+		t.Fatal("startServer was not invoked when --version is absent")
+	}
+	if !gotCfg.Debug {
+		t.Errorf("cfg.Debug = %v, want true (flag override applied)", gotCfg.Debug)
+	}
+	if gotCfg.BindAddr != "0.0.0.0" {
+		t.Errorf("cfg.BindAddr = %q, want %q (flag override applied)", gotCfg.BindAddr, "0.0.0.0")
+	}
+	if gotCfg.BindPort != 5353 {
+		t.Errorf("cfg.BindPort = %d, want 5353 (flag override applied)", gotCfg.BindPort)
+	}
+}
+
+func TestRunVersionFlagDoesNotLoadConfig(t *testing.T) {
+	originalLoadConfig := loadConfig
+	defer func() { loadConfig = originalLoadConfig }()
+
+	loadConfig = func() (Config, error) {
+		t.Fatal("loadConfig must not be called when --version is present")
+		return Config{}, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	exitCode := run([]string{"--version"}, &stdout, &stderr, func(cfg Config) int {
+		return 1
+	})
+
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0", exitCode)
+	}
+	want := fmt.Sprintf("DNS C2 Server v%s\n", version)
+	if got := stdout.String(); got != want {
+		t.Errorf("stdout = %q, want %q", got, want)
 	}
 }

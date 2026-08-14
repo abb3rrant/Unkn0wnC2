@@ -938,16 +938,42 @@ func logExfilFrameDecision(frame *ExfilFrame, ack bool, err error) {
 }
 
 func main() {
-	// Parse command line flags
-	debugFlag := flag.Bool("d", false, "Enable debug mode")
-	bindAddrFlag := flag.String("bind-addr", "", "Override bind address (e.g., 0.0.0.0)")
-	bindPortFlag := flag.Int("bind-port", 0, "Override bind port (default: 53)")
-	flag.Parse()
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, startServer))
+}
+
+// loadConfig is a package-level function variable so tests can inject a
+// configuration loader when exercising the version-flag and startup paths.
+var loadConfig = LoadConfig
+
+// run parses command-line arguments and dispatches to the appropriate path.
+// It returns the process exit code.
+//
+//   - When --version is present, the version string is printed to stdout and 0
+//     is returned without loading configuration or starting the server.
+//   - Otherwise, the embedded configuration is loaded, flag overrides are
+//     applied, and startServer is invoked with the resulting Config.
+func run(args []string, stdout, stderr io.Writer, startServer func(cfg Config) int) int {
+	fs := flag.NewFlagSet("dns-server", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	debugFlag := fs.Bool("d", false, "Enable debug mode")
+	bindAddrFlag := fs.String("bind-addr", "", "Override bind address (e.g., 0.0.0.0)")
+	bindPortFlag := fs.Int("bind-port", 0, "Override bind port (default: 53)")
+	versionFlag := fs.Bool("version", false, "Print version and exit")
+
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	if *versionFlag {
+		fmt.Fprintf(stdout, "DNS C2 Server v%s\n", version)
+		return 0
+	}
 
 	// Load embedded configuration
-	cfg, err := LoadConfig()
+	cfg, err := loadConfig()
 	if err != nil {
-		panic(fmt.Sprintf("Failed to load configuration: %v\nThis binary must be built using the builder with embedded configuration.", err))
+		fmt.Fprintf(stderr, "Failed to load configuration: %v\nThis binary must be built using the builder with embedded configuration.\n", err)
+		return 1
 	}
 
 	// Command line flags override embedded config
@@ -960,6 +986,14 @@ func main() {
 	if *bindPortFlag != 0 {
 		cfg.BindPort = *bindPortFlag
 	}
+
+	return startServer(cfg)
+}
+
+// startServer initializes the DNS C2 server using the provided configuration
+// and runs until a shutdown signal is received. It returns the process exit
+// code (0 on graceful shutdown).
+func startServer(cfg Config) int {
 	debugMode = cfg.Debug
 
 	// Initialize logger - logs to file in current directory, stdout if debug mode
@@ -1418,4 +1452,5 @@ func main() {
 	time.Sleep(500 * time.Millisecond)
 
 	LogInfo("DNS C2 Server stopped gracefully")
+	return 0
 }
