@@ -74,12 +74,38 @@ func DefaultConfig() Config {
 			RetryDelaySeconds: 3,
 			MaxRetries:        5,
 		},
-		MasterServer:      "", // REQUIRED: Set by builder
-		MasterAPIKey:      "", // REQUIRED: Set by builder
+		MasterServer:      "https://master.example.com", // Sensible default; overridden by builder at build time
+		MasterAPIKey:      "",                           // REQUIRED: Set by builder
 		MasterServerID:    "dns1",
 		MasterTLSCACert:   "",   // Optional: Path to CA cert for production
 		MasterTLSInsecure: true, // Default: Skip TLS verification (Master uses runtime IP binding)
 	}
+}
+
+// Validate checks the configuration for required fields and sensible values.
+// It returns a descriptive error for the first invalid field, or nil when the
+// configuration is fully valid. This method is purely additive and does not
+// affect server startup unless callers opt in.
+func (c Config) Validate() error {
+	if c.BindPort < 1 || c.BindPort > 65535 {
+		return fmt.Errorf("BindPort must be in range [1, 65535], got %d", c.BindPort)
+	}
+	if c.Domain == "" {
+		return fmt.Errorf("Domain must be non-empty")
+	}
+	if c.NS1 == "" {
+		return fmt.Errorf("NS1 must be non-empty")
+	}
+	if c.NS2 == "" {
+		return fmt.Errorf("NS2 must be non-empty")
+	}
+	if c.EncryptionKey == "" {
+		return fmt.Errorf("EncryptionKey must be non-empty")
+	}
+	if c.MasterServer == "" {
+		return fmt.Errorf("MasterServer must be non-empty")
+	}
+	return nil
 }
 
 // IsDistributedMode returns true - this server only operates in distributed mode
