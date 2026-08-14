@@ -36,8 +36,6 @@ type APIServer struct {
 	authLimiter    *RateLimiter // Rate limiter for auth endpoints
 	apiLimiter     *RateLimiter // Rate limiter for API endpoints
 	dnsLimiter     *RateLimiter // Rate limiter for DNS server endpoints
-	exfilJobsMu              sync.RWMutex
-	exfilBuildJobs           map[string]*ExfilBuildJob
 	dnsServerDomainCache     map[string]string // key: server ID, value: domain
 	dnsServerDomainCacheMu   sync.RWMutex
 	dnsServerDomainCacheTime time.Time
@@ -52,7 +50,6 @@ func NewAPIServer(db *MasterDatabase, config Config) *APIServer {
 		authLimiter:    NewRateLimiter(5, time.Minute),    // 5 login attempts per minute
 		apiLimiter:     NewRateLimiter(100, time.Minute),  // 100 API requests per minute
 		dnsLimiter:     NewRateLimiter(1000, time.Minute), // 1000 DNS server API calls per minute
-		exfilBuildJobs:       make(map[string]*ExfilBuildJob),
 		dnsServerDomainCache: make(map[string]string),
 	}
 }
@@ -1462,50 +1459,6 @@ func (api *APIServer) handleGetBeaconBuildConfig(w http.ResponseWriter, r *http.
 	}
 
 	api.sendJSON(w, buildConfig)
-}
-
-// handleListExfilBuildJobs retrieves a list of exfil build jobs
-func (api *APIServer) handleListExfilBuildJobs(w http.ResponseWriter, r *http.Request) {
-	if api.db == nil {
-		api.sendError(w, http.StatusInternalServerError, "database not initialized")
-		return
-	}
-
-	limit := 25
-	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
-		if value, err := strconv.Atoi(limitStr); err == nil && value > 0 {
-			limit = value
-			if limit > 200 {
-				limit = 200
-			}
-		}
-	}
-
-	offset := 0
-	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
-		if value, err := strconv.Atoi(offsetStr); err == nil && value >= 0 {
-			offset = value
-		}
-	}
-
-	status := strings.TrimSpace(r.URL.Query().Get("status"))
-	status = strings.ToLower(status)
-
-	jobs, total, err := api.db.ListExfilBuildJobs(limit, offset, status)
-	if err != nil {
-		api.sendError(w, http.StatusInternalServerError, "failed to load exfil build jobs")
-		return
-	}
-
-	api.sendSuccess(w, "Exfil build jobs retrieved", map[string]interface{}{
-		"jobs": jobs,
-		"pagination": map[string]interface{}{
-			"limit":  limit,
-			"offset": offset,
-			"total":  total,
-			"count":  len(jobs),
-		},
-	})
 }
 
 // handleGetBeaconDNSContacts returns DNS contact history for a beacon
@@ -3466,10 +3419,6 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	// Builder endpoints
 	operatorRouter.HandleFunc("/builder/dns-server", api.handleBuildDNSServer).Methods("POST")
 	operatorRouter.HandleFunc("/builder/client", api.handleBuildClient).Methods("POST")
-	operatorRouter.HandleFunc("/builder/exfil-client", api.handleBuildExfilClient).Methods("POST")
-	operatorRouter.HandleFunc("/builder/exfil-client/jobs", api.handleListExfilBuildJobs).Methods("GET")
-	operatorRouter.HandleFunc("/builder/exfil-client/jobs/{id}", api.handleGetExfilBuildJob).Methods("GET")
-	operatorRouter.HandleFunc("/builder/exfil-client/builds", api.handleListExfilClientBuilds).Methods("GET")
 	operatorRouter.HandleFunc("/builder/client-binaries", api.handleListClientBinaries).Methods("GET")
 	operatorRouter.HandleFunc("/builder/stager", api.handleBuildStager).Methods("POST")
 	operatorRouter.HandleFunc("/builder/builds", api.handleListBuilds).Methods("GET")
