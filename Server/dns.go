@@ -420,7 +420,7 @@ func ackIPAddress(base string, ack bool) []byte {
 		return ip
 	}
 	result := append([]byte(nil), ip...)
-	// Increment with carry (matching exfil-client behavior)
+	// Increment with carry (matching historical dedicated-exfil encoding)
 	for idx := 3; idx >= 0; idx-- {
 		if result[idx] == 255 {
 			result[idx] = 0

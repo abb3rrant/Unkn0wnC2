@@ -33,15 +33,14 @@ RUN mkdir -p /opt/unkn0wnc2/certs \
     /opt/unkn0wnc2/builds/dns-server \
     /opt/unkn0wnc2/builds/client \
     /opt/unkn0wnc2/builds/stager \
-    /opt/unkn0wnc2/builds/exfil \
     /opt/unkn0wnc2/src \
     /opt/unkn0wnc2/logs
 
 # Copy web UI
 RUN cp -r /src/Archon/web/* /opt/unkn0wnc2/web/
 
-# Copy source for builder
-RUN cp -r /src/Server /src/Client /src/Stager /src/exfil-client /opt/unkn0wnc2/src/
+# Copy source for builder (Server, Client, Stager).
+RUN cp -r /src/Server /src/Client /src/Stager /opt/unkn0wnc2/src/
 
 # Generate TLS certs
 RUN openssl req -x509 -newkey rsa:2048 -nodes \

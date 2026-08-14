@@ -73,7 +73,7 @@ mindmap
 
 ## 🔄 Operational Flow
 
-1.  **Resource Development**: Operator uses the **WebUI Builder (T1587.001)** to compile a C-stager, Go-beacon, or Rust-exfil client. **Shadow Mesh (T1583.002)** domains are configured.
+1.  **Resource Development**: Operator uses the **WebUI Builder (T1587.001)** to compile a C-stager or Go-beacon. **Shadow Mesh (T1583.002)** domains are configured.
 2.  **Initial Access**: *(Not covered by Unkn0wnC2 - assumed via other means)*.
 3.  **Execution**: Stager runs on target. It performs **DNS Discovery (T1016)** and uses **DNS Tunneling (T1071.004)** to request the full beacon.
     *   *Note: Stager traffic is Base36 encoded but **not** encrypted.*
