@@ -84,15 +84,16 @@ wait_result() {
     local task_id="$1"
     local timeout_iters="${2:-12}"
     for i in $(seq 1 "$timeout_iters"); do
-        RESULT_DATA=$(api_get "/api/tasks/${task_id}" | jq -r '.result // empty' 2>/dev/null) || true
-        if [ -n "$RESULT_DATA" ]; then
+        local STATUS RESULT_DATA
+        STATUS=$(api_get "/api/tasks/${task_id}" | jq -r '.status // ""' 2>/dev/null) || true
+        if [ "$STATUS" = "completed" ] || [ "$STATUS" = "failed" ]; then
+            RESULT_DATA=$(api_get "/api/tasks/${task_id}" | jq -r '.result // ""' 2>/dev/null) || true
             echo "$RESULT_DATA"
             return 0
         fi
         sleep 5
     done
-    echo ""
-    return 0
+    return 1
 }
 
 # Wait for a beacon with a specific name to appear, return its ID
@@ -152,8 +153,10 @@ run_task_test() {
         return 0
     fi
 
-    RESULT=$(wait_result "$TASK_ID" "$timeout") || true
-    if [ -z "$RESULT" ]; then
+    # wait_result returns 0 once the task reaches a terminal state; it may
+    # legitimately return an empty result (e.g. zero-output commands like
+    # "true" or bare "echo"), so detect timeout via the exit code, not output.
+    if ! RESULT=$(wait_result "$TASK_ID" "$timeout"); then
         fail "${label}" "no result after timeout"
         return 0
     fi
@@ -165,7 +168,7 @@ run_task_test() {
             fail "${label}" "unexpected result: $(echo "$RESULT" | head -1 | cut -c1-60 | tr -d '\n')"
         fi
     else
-        pass "${label}: $(echo "$RESULT" | head -1 | cut -c1-60 | tr -d '\n')"
+        pass "${label}"
     fi
     return 0
 }
