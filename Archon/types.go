@@ -211,19 +211,6 @@ func (bc BuildConfig) MarshalJSON() ([]byte, error) {
 	return json.Marshal(m)
 }
 
-// ExfilClientBuild represents a compiled exfil client binary.
-type ExfilClientBuild struct {
-	ID            string `json:"id"`
-	Filename      string `json:"filename"`
-	OS            string `json:"os"`
-	Arch          string `json:"arch"`
-	CreatedAt     int64  `json:"created_at"`
-	CreatedBy     string `json:"created_by"`
-	FileSize      int64  `json:"file_size"`
-	DNSDomains    string `json:"dns_domains"`
-	DownloadPath  string `json:"download_path,omitempty"`
-}
-
 // BuildPhaseConfig holds per-phase malleable C2 settings resolved from a build.
 type BuildPhaseConfig struct {
 	RegistrationPhase map[string]interface{} `json:"registration_phase,omitempty"`
