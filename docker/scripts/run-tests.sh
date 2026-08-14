@@ -48,8 +48,10 @@ wait_result() {
     local task_id="$1"
     local timeout_iters="${2:-12}"
     for i in $(seq 1 "$timeout_iters"); do
-        RESULT_DATA=$(api_get "/api/tasks/${task_id}" | jq -r '.result // empty')
-        if [ -n "$RESULT_DATA" ]; then
+        local STATUS RESULT_DATA
+        STATUS=$(api_get "/api/tasks/${task_id}" | jq -r '.status // ""' 2>/dev/null) || true
+        if [ "$STATUS" = "completed" ] || [ "$STATUS" = "failed" ]; then
+            RESULT_DATA=$(api_get "/api/tasks/${task_id}" | jq -r '.result // ""' 2>/dev/null) || true
             echo "$RESULT_DATA"
             return 0
         fi
