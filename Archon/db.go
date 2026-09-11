@@ -3838,14 +3838,24 @@ func (d *MasterDatabase) GetTaskWithResult(taskID string) (Task, error) {
 			task.Result = result
 			task.ResultSize = len(result)
 		} else if !isComplete {
-			// Task marked completed but no assembled result — try on-the-fly reassembly
+			// Task is marked completed but no assembled result row exists yet — the
+			// chunk-arrival path assembles asynchronously, so a read can land in that
+			// window. If every chunk is already stored, assemble synchronously here
+			// and return the result on this first read instead of handing the caller
+			// a 'completed' task with no result field at all.
 			var chunkCount int
 			var totalChunks int
 			d.db.QueryRow(`SELECT COUNT(DISTINCT chunk_index), COALESCE(MAX(total_chunks),0) FROM task_results WHERE task_id = ? AND chunk_index > 0`, taskID).Scan(&chunkCount, &totalChunks)
 			if totalChunks > 0 && chunkCount >= totalChunks {
 				var beaconID string
 				d.db.QueryRow(`SELECT beacon_id FROM task_results WHERE task_id = ? LIMIT 1`, taskID).Scan(&beaconID)
-				go d.reassembleChunkedResult(taskID, beaconID, totalChunks)
+				d.reassembleChunkedResult(taskID, beaconID, totalChunks)
+
+				// Re-read: reassembly may have just produced the assembled row.
+				if result, nowComplete, rerr := d.GetTaskResult(taskID); rerr == nil && nowComplete {
+					task.Result = result
+					task.ResultSize = len(result)
+				}
 			}
 		}
 	} else if status == "sent" || status == "exfiltrating" {
