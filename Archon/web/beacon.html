@@ -644,6 +644,10 @@
         let currentBeaconId = '';
         let currentBeaconHostname = '';
         let selectedTaskId = null;
+        // Last rendered inline task result: { taskId, html, text }. Kept outside the
+        // DOM because loadTasks() re-renders the list (and therefore #inlineResult)
+        // on every poll, which would otherwise wipe a result that was just painted.
+        let inlineResultState = null;
         let autoRefreshInterval = null;
         let isCreatingTask = false; // Prevent multiple simultaneous task creations
 
@@ -1072,21 +1076,50 @@
                 }).join('');
 
                 document.getElementById('tasksList').innerHTML = tasksHtml;
+
+                // That render just replaced #inlineResult: restore the result we
+                // already fetched for the selected task instead of losing it.
+                if (selectedTaskId) {
+                    renderInlineResult();
+                }
             } catch (error) {
                 console.error('Error loading tasks:', error);
             }
+        }
+
+        // Paint the cached inline result into the container created by the list render.
+        // Returns false when there is nothing to paint (no container, no selection,
+        // or the cached result belongs to a task that is no longer selected).
+        function renderInlineResult() {
+            const state = inlineResultState;
+            if (!state || !selectedTaskId || state.taskId !== selectedTaskId) return false;
+
+            const container = document.getElementById('inlineResult');
+            if (!container) return false;
+
+            container.innerHTML = state.html;
+            if (state.text !== null && state.text !== undefined) {
+                const contentEl = document.getElementById('inlineResultContent');
+                if (contentEl) contentEl.textContent = state.text;
+            }
+            return true;
         }
 
         // Select a task and show its result inline (accordion toggle)
         async function selectTask(taskId) {
             if (selectedTaskId === taskId) {
                 selectedTaskId = null;
-                loadTasks();
+                inlineResultState = null;
+                await loadTasks();
                 return;
             }
 
             selectedTaskId = taskId;
-            loadTasks();
+            inlineResultState = null;
+            // Re-render first: the #inlineResult container for the selected task is
+            // only created by the render loadTasks() performs, so awaiting it is
+            // required before the result is fetched and painted.
+            await loadTasks();
             await loadTaskResult(taskId);
         }
 
@@ -1094,26 +1127,32 @@
         async function loadTaskResult(taskId) {
             if (!taskId) return;
 
-            const container = document.getElementById('inlineResult');
-            if (!container) return;
-
             try {
                 const response = await authFetch(`/api/tasks/${taskId}`);
                 if (!response) return;
 
                 const task = await response.json();
+
+                // Selection changed (or was cleared) while the request was in
+                // flight - do not paint a stale result over the current view.
+                if (selectedTaskId !== taskId) return;
+
                 let contentHtml = '';
 
                 if (task.status === 'completed' && task.result) {
-                    container.innerHTML = `
+                    inlineResultState = {
+                        taskId: taskId,
+                        html: `
                         <div class="result-viewer" style="margin-top:0">
                             <div class="result-header">
                                 <div class="result-title">Task ${escapeHtml(task.id)} Output</div>
                                 <button class="btn-copy" onclick="copyInlineResult()">${icons.copy} Copy</button>
                             </div>
                             <div class="result-content" id="inlineResultContent"></div>
-                        </div>`;
-                    document.getElementById('inlineResultContent').textContent = task.result;
+                        </div>`,
+                        text: task.result
+                    };
+                    renderInlineResult();
                     return;
                 } else if (task.status === 'exfiltrating' || (task.status === 'sent' && task.progress)) {
                     const progress = task.progress;
@@ -1226,7 +1265,12 @@
                     contentHtml = '<div class="no-result">No result available</div>';
                 }
 
-                container.innerHTML = `<div class="result-viewer" style="margin-top:0">${contentHtml}</div>`;
+                inlineResultState = {
+                    taskId: taskId,
+                    html: `<div class="result-viewer" style="margin-top:0">${contentHtml}</div>`,
+                    text: null
+                };
+                renderInlineResult();
             } catch (error) {
                 console.error('Error loading task result:', error);
             }
@@ -1340,10 +1384,13 @@
                 clearInterval(autoRefreshInterval);
                 autoRefreshInterval = null;
             }
-            autoRefreshInterval = setInterval(() => {
-                loadTasks();
+            autoRefreshInterval = setInterval(async () => {
+                // Ordered on purpose: render first (which restores the cached
+                // result), then refresh it. Firing both unawaited let the list
+                // render land after the result and wipe it.
+                await loadTasks();
                 if (selectedTaskId) {
-                    loadTaskResult(selectedTaskId);
+                    await loadTaskResult(selectedTaskId);
                 }
             }, 5000);
         }

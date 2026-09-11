@@ -648,3 +648,63 @@ func TestGetStagerSessions(t *testing.T) {
 		t.Error("Expected session to not be completed")
 	}
 }
+
+// TestGetTaskWithResultAssemblesCompletedChunks covers the late-assembly edge
+// case: the task row is already 'completed' (completion signal arrived) and all
+// chunks are stored, but no assembled (chunk_index = 0) row exists yet because
+// the chunk-arrival reassembly is asynchronous. Reading the task must return the
+// joined result instead of a completed task with an empty result field.
+func TestGetTaskWithResultAssemblesCompletedChunks(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	beaconID := "beacon-late-assembly"
+	if err := createTestBeacon(db, beaconID); err != nil {
+		t.Fatalf("Failed to create beacon: %v", err)
+	}
+
+	taskID := "T9101"
+	if err := createTestTask(db, taskID, beaconID, "whoami"); err != nil {
+		t.Fatalf("Failed to create task: %v", err)
+	}
+
+	now := time.Now().Unix()
+	if _, err := db.db.Exec(`UPDATE tasks SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?`,
+		now, now, taskID); err != nil {
+		t.Fatalf("Failed to mark task completed: %v", err)
+	}
+
+	// Only raw chunks are on disk - the assembled row was never written.
+	chunks := []string{"nt authority\\", "system\n"}
+	totalChunks := len(chunks)
+	for i, data := range chunks {
+		if _, err := db.db.Exec(`
+			INSERT INTO task_results (task_id, beacon_id, dns_server_id, result_data, received_at, chunk_index, total_chunks, is_complete)
+			VALUES (?, ?, 'dns-server-A', ?, ?, ?, ?, 1)
+		`, taskID, beaconID, data, now, i+1, totalChunks); err != nil {
+			t.Fatalf("Failed to insert chunk %d: %v", i+1, err)
+		}
+	}
+
+	task, err := db.GetTaskWithResult(taskID)
+	if err != nil {
+		t.Fatalf("GetTaskWithResult failed: %v", err)
+	}
+
+	want := "nt authority\\system\n"
+	if task.Result != want {
+		t.Errorf("Result: expected %q, got %q", want, task.Result)
+	}
+	if task.ResultSize != len(want) {
+		t.Errorf("ResultSize: expected %d, got %d", len(want), task.ResultSize)
+	}
+
+	// The assembled row must be persisted, so a second read is a plain hit.
+	again, err := db.GetTaskWithResult(taskID)
+	if err != nil {
+		t.Fatalf("Second GetTaskWithResult failed: %v", err)
+	}
+	if again.Result != want {
+		t.Errorf("Second read Result: expected %q, got %q", want, again.Result)
+	}
+}
