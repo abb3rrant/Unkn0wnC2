@@ -369,7 +369,7 @@
             border-radius: 6px;
             padding: 15px;
             margin-top: 15px;
-            max-height: 400px;
+            max-height: 65vh;
             overflow-y: auto;
             overflow-x: hidden;
         }
@@ -404,15 +404,39 @@
         }
 
         .result-content {
-            color: #fff;
+            color: #eaeaea;
+            /* Keep the shell's own layout. `break-all` used to chop every
+               identifier at the panel edge, so wrapped output was unreadable;
+               wrapping now happens at word boundaries and a token is only
+               split when it is wider than the panel. */
             white-space: pre-wrap;
-            word-break: break-all;
-            overflow-wrap: anywhere;
+            word-break: normal;
+            overflow-wrap: break-word;
+            tab-size: 8;
+            -moz-tab-size: 8;
             font-family: 'Courier New', monospace;
             font-size: 13px;
             line-height: 1.5;
             max-width: 100%;
-            overflow: hidden;
+            overflow-x: auto;
+        }
+
+        /* Terminal-fidelity mode: never wrap, scroll horizontally instead. */
+        .result-content.nowrap {
+            white-space: pre;
+            overflow-wrap: normal;
+        }
+
+        .result-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .result-meta {
+            color: #666;
+            font-size: 11px;
+            white-space: nowrap;
         }
 
         .empty-state {
@@ -648,6 +672,9 @@
         // DOM because loadTasks() re-renders the list (and therefore #inlineResult)
         // on every poll, which would otherwise wipe a result that was just painted.
         let inlineResultState = null;
+        // Result panel defaults to wrapping long lines; the toggle switches to
+        // terminal-fidelity output (no wrap, horizontal scroll).
+        let wrapResultOutput = true;
         let autoRefreshInterval = null;
         let isCreatingTask = false; // Prevent multiple simultaneous task creations
 
@@ -1100,9 +1127,32 @@
             container.innerHTML = state.html;
             if (state.text !== null && state.text !== undefined) {
                 const contentEl = document.getElementById('inlineResultContent');
-                if (contentEl) contentEl.textContent = state.text;
+                if (contentEl) {
+                    contentEl.textContent = state.text;
+                    contentEl.classList.toggle('nowrap', !wrapResultOutput);
+                    updateResultMeta(state.text);
+                }
+
+                const wrapBtn = document.getElementById('inlineResultWrap');
+                if (wrapBtn) {
+                    wrapBtn.textContent = wrapResultOutput ? 'Wrap: on' : 'Wrap: off';
+                }
             }
             return true;
+        }
+
+        // Line/character count for the current result.
+        function updateResultMeta(text) {
+            const meta = document.getElementById('inlineResultMeta');
+            if (!meta) return;
+            const lines = text.split('\n').length;
+            meta.textContent = `${lines} ${lines === 1 ? 'line' : 'lines'} / ${text.length} chars`;
+        }
+
+        // Toggle between wrapped output (default) and terminal-fidelity output.
+        function toggleResultWrap() {
+            wrapResultOutput = !wrapResultOutput;
+            renderInlineResult();
         }
 
         // Select a task and show its result inline (accordion toggle)
@@ -1139,21 +1189,36 @@
 
                 let contentHtml = '';
 
-                if (task.status === 'completed' && task.result) {
-                    inlineResultState = {
-                        taskId: taskId,
-                        html: `
-                        <div class="result-viewer" style="margin-top:0">
-                            <div class="result-header">
-                                <div class="result-title">Task ${escapeHtml(task.id)} Output</div>
-                                <button class="btn-copy" onclick="copyInlineResult()">${icons.copy} Copy</button>
-                            </div>
-                            <div class="result-content" id="inlineResultContent"></div>
-                        </div>`,
-                        text: task.result
-                    };
-                    renderInlineResult();
-                    return;
+                if (task.status === 'completed') {
+                    // Sanitise before painting: raw shell output carries ANSI
+                    // colour/cursor sequences and bare carriage returns that
+                    // render as unreadable junk in an HTML panel.
+                    const output = sanitizeTerminalOutput(task.result);
+
+                    if (output) {
+                        inlineResultState = {
+                            taskId: taskId,
+                            html: `
+                            <div class="result-viewer" style="margin-top:0">
+                                <div class="result-header">
+                                    <div class="result-title">Task ${escapeHtml(task.id)} Output</div>
+                                    <div class="result-actions">
+                                        <span class="result-meta" id="inlineResultMeta"></span>
+                                        <button class="btn-copy" id="inlineResultWrap" onclick="toggleResultWrap()" title="Toggle line wrapping"></button>
+                                        <button class="btn-copy" onclick="copyInlineResult()">${icons.copy} Copy</button>
+                                    </div>
+                                </div>
+                                <div class="result-content" id="inlineResultContent"></div>
+                            </div>`,
+                            text: output
+                        };
+                        renderInlineResult();
+                        return;
+                    }
+
+                    // Successful commands are allowed to have no output at all
+                    // (e.g. `true`); say so instead of showing an empty viewer.
+                    contentHtml = '<div class="no-result">Task completed with no output</div>';
                 } else if (task.status === 'exfiltrating' || (task.status === 'sent' && task.progress)) {
                     const progress = task.progress;
                     let statusMessage = '';
