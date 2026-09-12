@@ -660,7 +660,7 @@
 
     </div>
 
-    <script src="/static/shared.js"></script>
+    <script src="/static/shared.js?v=2"></script>
     <script>
         const API_BASE = window.location.origin;
         const MAX_TASK_COMMAND_LENGTH = 10000; // must match MaxTaskCommandLength in Archon/db.go
@@ -1141,6 +1141,24 @@
             return true;
         }
 
+        // Text to paint for a task result.
+        //
+        // The sanitiser lives in shared.js, which is a cacheable asset while this
+        // page is served no-store - so a browser can pair this page with an older
+        // shared.js that has no sanitizeTerminalOutput(), and an unguarded call
+        // would throw inside loadTaskResult(), leaving the panel blank. Degrade to
+        // the raw output instead of showing nothing.
+        function taskOutputForDisplay(raw) {
+            if (typeof sanitizeTerminalOutput === 'function') {
+                try {
+                    return sanitizeTerminalOutput(raw);
+                } catch (err) {
+                    console.error('Failed to sanitise task output:', err);
+                }
+            }
+            return raw == null ? '' : String(raw);
+        }
+
         // Line/character count for the current result.
         function updateResultMeta(text) {
             const meta = document.getElementById('inlineResultMeta');
@@ -1193,7 +1211,7 @@
                     // Sanitise before painting: raw shell output carries ANSI
                     // colour/cursor sequences and bare carriage returns that
                     // render as unreadable junk in an HTML panel.
-                    const output = sanitizeTerminalOutput(task.result);
+                    const output = taskOutputForDisplay(task.result);
 
                     if (output) {
                         inlineResultState = {
