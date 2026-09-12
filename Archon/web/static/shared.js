@@ -285,6 +285,37 @@ function escapeHtml(text) {
         .replace(/'/g, '&#39;');
 }
 
+/**
+ * Normalise captured command output for display.
+ *
+ * Beacons return the raw bytes a shell produced on the target. Interactive
+ * tooling emits ANSI/VT escape sequences (colour, cursor moves, erase) and uses
+ * a bare carriage return to redraw progress lines; both render as garbage in an
+ * HTML panel. This turns that stream into the plain text an operator expects to
+ * read. It is display-only - the stored result is never modified.
+ */
+function sanitizeTerminalOutput(raw) {
+    if (raw == null) return '';
+    let text = String(raw);
+
+    // OSC sequences (ESC ] ... BEL or ESC \) - window titles, hyperlinks
+    text = text.replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, '');
+    // CSI sequences (ESC [ ... final byte) - colour, cursor, erase
+    text = text.replace(/\u001b\[[0-?]*[ -\/]*[@-~]/g, '');
+    // Any other two/three byte escape left over
+    text = text.replace(/\u001b[@-Z\\-_]/g, '');
+
+    // Carriage returns: CRLF is a single line ending, and a bare CR is a
+    // progress-line redraw that would otherwise run into the previous text.
+    text = text.replace(/\r\n?/g, '\n');
+
+    // Remaining control bytes (NUL, BEL, backspace, vertical tab, DEL, ...).
+    text = text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
+
+    // Trailing blank space the shell/beacon leaves behind
+    return text.replace(/[ \t]+$/, '').replace(/\n+$/, '');
+}
+
 function debounce(fn, delay) {
     let timer;
     return function(...args) {
