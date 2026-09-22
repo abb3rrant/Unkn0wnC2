@@ -33,6 +33,13 @@ services:
       - SERVER_BINARY=dns-server-1
     volumes:
       - builds:/opt/unkn0wnc2/builds:ro
+      # Malleable HTTP listener profiles. The image ships cdn-assets.json disabled,
+      # so this mount is inert until an enabled profile is placed here.
+      - ./profiles:/opt/unkn0wnc2/profiles
+    ports:
+      # HTTP/HTTPS listener. The host port avoids archon's own 8443; the container
+      # port must match an enabled profile's bind_port.
+      - "8445:8443"
     cap_add:
       - NET_BIND_SERVICE
     depends_on:
@@ -52,6 +59,10 @@ services:
       - SERVER_BINARY=dns-server-2
     volumes:
       - builds:/opt/unkn0wnc2/builds:ro
+      - ./profiles:/opt/unkn0wnc2/profiles
+    ports:
+      # Offset on the host so both DNS servers, and archon, can each publish one.
+      - "8446:8443"
     cap_add:
       - NET_BIND_SERVICE
     depends_on:

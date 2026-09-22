@@ -5,12 +5,12 @@
 <h1 align="center">Unkn0wnC2</h1>
 
 <p align="center">
-  <strong>DNS-based Command & Control Framework</strong><br>
-  <em>Malleable timing &bull; Shadow Mesh architecture &bull; Encrypted communications</em>
+  <strong>DNS &amp; HTTP Command &amp; Control Framework</strong><br>
+  <em>Malleable timing &bull; Shadow Mesh architecture &bull; Malleable HTTP profiles &bull; Encrypted communications</em>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.8.0-blue" alt="Version"/>
+  <img src="https://img.shields.io/badge/version-0.9.0-blue" alt="Version"/>
   <img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="License"/>
   <img src="https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go" alt="Go"/>
   <img src="https://img.shields.io/badge/Rust-1.70+-orange?logo=rust" alt="Rust"/>
@@ -43,6 +43,32 @@ Unkn0wnC2 addresses two critical gaps that plague traditional DNS C2 frameworks:
 - Simple domain management: check/uncheck configured domains in real-time
 - Resilient infrastructure that adapts to takedowns and blocking
 
+## 🌐 **HTTP/HTTPS Transport**
+
+> **The Problem:** A beacon that can only speak DNS is a beacon that dies when DNS is
+> filtered, and DNS is a poor bulk carrier: returning a large result needs many
+> packets, and many packets in a short window is exactly what exfiltration detection
+> looks for.
+
+**Unkn0wnC2's Solution:**
+- A beacon runs in **DNS**, **HTTP**, or **dual** mode, chosen at build time and
+  changeable on a live beacon at runtime
+- **Dual mode splits the two roles:** DNS carries only an A-record task-readiness
+  signal, and the task and its results travel over HTTP. DNS stays quiet; HTTP carries
+  the volume
+- **Malleable HTTP profiles**: URIs, HTTP method, header set *and order*, user-agent
+  pool, body codec, status codes and response jitter are all profile-driven, so the
+  listener looks like whatever it is dressed as
+- **Certificate pinning**: the beacon pins the listener's SPKI, so a self-signed
+  listener cannot be impersonated
+- **Automatic fallback**: a dual-mode beacon returns to the full DNS path after
+  repeated HTTP failures and probes HTTP again in the background
+
+See [docs/http-transport.md](docs/http-transport.md) for the profile reference, the
+endpoint table and the deployment steps.
+
+---
+
 ## **Bonus Feature: Malleable Payloads**
 - Supports payload formats to avoid entropy based detections. (ex. cdn-ani34dn343.asset-ndfhb328sdns93n.domain.com)
 - Utilize A records or TXT records for Communications
@@ -56,7 +82,7 @@ Unkn0wnC2 addresses two critical gaps that plague traditional DNS C2 frameworks:
 
 ## 🎯 **The Goal of Unkn0wnC2**
 
-**Unkn0wnC2** is a DNS-based Command & Control framework designed to help organizations **strengthen their defensive posture** by demonstrating how advanced adversaries abuse DNS for C2 and data exfiltration.
+**Unkn0wnC2** is a DNS and HTTP Command & Control framework designed to help organizations **strengthen their defensive posture** by demonstrating how advanced adversaries abuse DNS for C2 and data exfiltration.
 
 ### 🔴 **For Red Teams**
 - Enables strict **TTP emulation** of DNS-based C2 techniques

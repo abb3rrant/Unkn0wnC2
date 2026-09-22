@@ -20,8 +20,9 @@
 | **Collection** | **T1560.002** | Archive Collected Data: Archive via Library | **Compression**: Beacon GZIPs command output before exfiltration. |
 | | **T1005** | Data from Local System | **File Reading**: Exfil Client reads local files for transmission. |
 | **Command and Control** | **T1071.004** | Application Layer Protocol: DNS | **DNS Tunneling**: Encapsulates C2 commands/results in DNS TXT queries (Beacon) or Label/EDNS0 (Exfil Client). |
+| | **T1071.001** | Application Layer Protocol: Web Protocols | **HTTP/HTTPS Transport**: A beacon can reach the DNS server over HTTP(S) using a malleable profile (URIs, header set and order, UA pool, body codec, certificate SPKI pin). In dual mode the A record carries only the task-readiness signal and the task and results travel over HTTP. |
 | | **T1573.001** | Encrypted Channel | **AES-GCM**: End-to-end encryption for Beacon C2 traffic. (Note: Stager is unencrypted Base36). |
-| | **T1001** | Data Obfuscation | **Malleable Timing**: Jitter, sleep intervals, and burst/pause configurations to evade traffic analysis. |
+| | **T1001** | Data Obfuscation | **Malleable Timing**: Jitter, sleep intervals, and burst/pause configurations to evade traffic analysis. HTTP responses can add per-request jitter, and body padding keeps request size off a fixed grid. |
 | **Exfiltration** | **T1041** | Exfiltration Over C2 Channel | **DNS Exfil**: Data is exfiltrated via encrypted subdomains (Exfil Client) or TXT records (Beacon). |
 | | **T1030** | Data Transfer Size Limits | **Chunking**: Large files are split into small, DNS-safe chunks. Beacon uses a 3-phase `RESULT_META` -> `DATA` -> `RESULT_COMPLETE` protocol. |
 
@@ -59,6 +60,7 @@ mindmap
         ::icon(fa fa-file)
     C2
       T1071.004 DNS Tunnel
+      T1071.001 HTTP(S)
         ::icon(fa fa-network-wired)
       T1573.001 AES-GCM
         ::icon(fa fa-lock)

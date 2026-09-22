@@ -34,6 +34,7 @@ RUN mkdir -p /opt/unkn0wnc2/certs \
     /opt/unkn0wnc2/builds/client \
     /opt/unkn0wnc2/builds/stager \
     /opt/unkn0wnc2/src \
+    /opt/unkn0wnc2/profiles \
     /opt/unkn0wnc2/logs
 
 # Copy web UI
@@ -48,6 +49,30 @@ RUN openssl req -x509 -newkey rsa:2048 -nodes \
     -out /opt/unkn0wnc2/certs/master.crt \
     -days 365 -subj "/CN=archon" 2>/dev/null && \
     chmod 600 /opt/unkn0wnc2/certs/master.key
+
+# Generate the malleable HTTP listener certificate and its SPKI pin.
+#
+# The pin is computed the same way the beacon verifies it: SHA-256 over the
+# certificate's DER SubjectPublicKeyInfo, base64 encoded. The listener checks its
+# own certificate against this pin at startup, so a wrong recipe would fail the
+# build's first listener rather than silently serving something beacons reject.
+RUN openssl req -x509 -newkey rsa:2048 -nodes \
+    -keyout /opt/unkn0wnc2/certs/http-cdn-assets.key \
+    -out /opt/unkn0wnc2/certs/http-cdn-assets.crt \
+    -days 365 -subj "/CN=cdn.example.com" 2>/dev/null && \
+    chmod 600 /opt/unkn0wnc2/certs/http-cdn-assets.key && \
+    SPKI=$(openssl x509 -in /opt/unkn0wnc2/certs/http-cdn-assets.crt -pubkey -noout \
+        | openssl pkey -pubin -outform der 2>/dev/null \
+        | openssl dgst -sha256 -binary | openssl base64 -A) && \
+    jq --arg pin "$SPKI" \
+        '.tls.spki_sha256 = $pin | .enabled = false' \
+        /src/Server/profiles/cdn-assets.json.example \
+        > /opt/unkn0wnc2/profiles/cdn-assets.json && \
+    echo "HTTP listener pin: $SPKI"
+
+# Ship the profile reference beside the generated profile, so the format is
+# discoverable from inside the container.
+RUN cp /src/docs/http-transport.md /opt/unkn0wnc2/profiles/README.md
 
 # Copy scripts
 COPY docker/scripts/ /scripts/
