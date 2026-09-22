@@ -1,0 +1,27 @@
+{
+  "_comment": "Cross-module conformance vectors. Asserted by Server/http_conformance_test.go and Client/http_conformance_test.go. AES-GCM output is non-deterministic, so only decode directions are pinned for the AES codecs; the signature is deterministic and pinned in full. Regenerate deliberately, never to make a failing test pass.",
+  "aes_gcm_base36": {
+    "encoded": "1st0mdswspsgu8ffww6wb8g352k1m0pm158yxypuevd7i1pnxjs2uew5in2wnno6o6vl5eu9kzfefiw3s1qhes",
+    "plaintext": "RESULT_META|beacon1|T1|12|1"
+  },
+  "aes_gcm_base64": {
+    "encoded": "GCeW2uYesBq3ztRtC1zICsdKto8Gstc1nmVq8UCPa490h0rhjmpIUMrBxz4rF0ky/sVy6MPUPxQ=",
+    "plaintext": "DATA|beacon1|T1|1|1|ZGF0YQ=="
+  },
+  "base36": {
+    "encoded": "a39xjv279u04sr28lrl",
+    "plaintext": "POLL|beacon1"
+  },
+  "base64": {
+    "encoded": "UE9MTHxiZWFjb24x",
+    "plaintext": "POLL|beacon1"
+  },
+  "passphrase": "golden-vector-key",
+  "signature": {
+    "body": "{\"d\":\"abc\"}",
+    "expect_hex": "4fea76547d5aca3979ad2f91ad7ab7609ca9dfae78473aee59657d7fc7de454c",
+    "method": "POST",
+    "path": "/api/v1/ping",
+    "timestamp": "1758500000"
+  }
+}
