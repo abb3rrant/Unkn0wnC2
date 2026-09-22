@@ -260,6 +260,39 @@ transport the update just replaced. A payload naming an unknown mode, or one tha
 produces no usable listener for a mode that needs HTTP, is rejected and the current
 configuration stays live.
 
+## Switching transports at runtime
+
+An operator can move a live beacon between `dns`, `http` and `dual` without rebuilding it.
+The update travels as an `update_transport:` task over whichever transport the beacon is
+currently using, so it works in either direction:
+
+```
+update_transport:{"mode":"http","fallback_after_failures":3,"retry_backoff_secs":60,"listeners":[...]}
+update_transport:{"mode":"dns"}
+```
+
+The beacon applies it and sends no result — a reply would travel on whichever transport it
+just replaced. An unusable payload is refused and the current transport stays live, so a
+typo cannot take a beacon off the only path it can still be reached on.
+
+Archon queues these from the listener page, the profiles page, or
+`POST /api/http/transport` with `{"beacon_id": "..."}` or `{"all": true}`.
+
+### What happens if you get it wrong
+
+Moving a beacon to `http` while its listener is unreachable makes it **blind, not bricked**:
+
+- An HTTP-mode beacon has no DNS fallback by design, so it cannot receive the task that
+  would change it back.
+- It keeps retrying on its normal sleep interval and registers again the moment a listener
+  answers.
+- So the recovery path is to bring the listener back (or re-assign its profile), not to send
+  a task. Nothing needs rebuilding.
+
+If a beacon has no unreachable-transport window you can tolerate, use `dual`: it falls back
+to DNS after `fallback_after_failures` and probes HTTP again after `retry_backoff_secs`, so
+it stays reachable even when HTTP is not.
+
 ## Verifying a deployment
 
 1. Start the DNS server with `http_profile_dir` set. Log lines report each listener

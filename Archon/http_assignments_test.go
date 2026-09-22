@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -262,5 +264,79 @@ func TestHTTPListenerStatus_WireShapeWithServer(t *testing.T) {
 	}
 	if !strings.Contains(second.Error, "SPKI") {
 		t.Errorf("the reported error was lost: %+v", second)
+	}
+}
+
+// TestTransportUpdatePayloadMatchesSharedVector pins the runtime-update payload shape
+// against the shared vector.
+//
+// The beacon's ApplyUpdate parses this document, and the beacon is a separate Go module,
+// so the field names are the only contract between them. If this test fails, a runtime
+// transport switch will stop working in the field while every unit test here still
+// passes — which is exactly the failure the vector exists to prevent.
+func TestTransportUpdatePayloadMatchesSharedVector(t *testing.T) {
+	raw, err := os.ReadFile("../testdata/http_transport_vectors.json")
+	if err != nil {
+		t.Fatalf("failed to read the shared vectors: %v", err)
+	}
+
+	var vectors struct {
+		HTTP json.RawMessage `json:"transport_update_http"`
+		DNS  json.RawMessage `json:"transport_update_dns"`
+	}
+	if err := json.Unmarshal(raw, &vectors); err != nil {
+		t.Fatalf("failed to parse the shared vectors: %v", err)
+	}
+	if len(vectors.HTTP) == 0 || len(vectors.DNS) == 0 {
+		t.Fatal("the shared vectors contain no transport update payloads")
+	}
+
+	spec := HTTPListenerSpec{
+		Name:   "cdn-assets",
+		Scheme: "https",
+		Host:   "cdn.example.com:8443",
+		URIs: map[string][]string{
+			"register": {"/api/v1/ping"},
+			"task":     {"/api/v1/sync"},
+			"result":   {"/api/v1/report"},
+			"ack":      {"/api/v1/ack"},
+		},
+		Methods: map[string]string{
+			"register": "POST",
+			"task":     "GET",
+			"result":   "POST",
+			"ack":      "GET",
+		},
+	}
+
+	produced, err := buildTransportUpdatePayload("http", []HTTPListenerSpec{spec}, 3, 60)
+	if err != nil {
+		t.Fatalf("buildTransportUpdatePayload() error = %v", err)
+	}
+
+	var producedDoc, vectorDoc interface{}
+	if err := json.Unmarshal([]byte(produced), &producedDoc); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(vectors.HTTP, &vectorDoc); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(producedDoc, vectorDoc) {
+		t.Fatalf("the payload no longer matches the shared vector:\n  built  %s\n  vector %s", produced, vectors.HTTP)
+	}
+
+	// The DNS-only payload must also match, including its empty listener list.
+	producedDNS, err := buildTransportUpdatePayload("dns", nil, 0, 0)
+	if err != nil {
+		t.Fatalf("buildTransportUpdatePayload(dns) error = %v", err)
+	}
+	if err := json.Unmarshal([]byte(producedDNS), &producedDoc); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(vectors.DNS, &vectorDoc); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(producedDoc, vectorDoc) {
+		t.Fatalf("the DNS payload no longer matches the shared vector:\n  built  %s\n  vector %s", producedDNS, vectors.DNS)
 	}
 }

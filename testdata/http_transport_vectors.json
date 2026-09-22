@@ -1,5 +1,6 @@
 {
   "_comment": "Cross-module conformance vectors. Asserted by Server/http_conformance_test.go and Client/http_conformance_test.go. AES-GCM output is non-deterministic, so only decode directions are pinned for the AES codecs; the signature is deterministic and pinned in full. Regenerate deliberately, never to make a failing test pass.",
+  "_transport_update_comment": "Payloads exactly as Archon builds them for an update_transport task. Archon asserts its builder still produces this shape; the Client asserts its ApplyUpdate accepts it, which is what makes a runtime transport switch work across the two modules.",
   "aes_gcm_base36": {
     "encoded": "1st0mdswspsgu8ffww6wb8g352k1m0pm158yxypuevd7i1pnxjs2uew5in2wnno6o6vl5eu9kzfefiw3s1qhes",
     "plaintext": "RESULT_META|beacon1|T1|12|1"
@@ -23,5 +24,43 @@
     "method": "POST",
     "path": "/api/v1/ping",
     "timestamp": "1758500000"
+  },
+  "transport_update_dns": {
+    "fallback_after_failures": 0,
+    "listeners": null,
+    "mode": "dns",
+    "retry_backoff_secs": 0
+  },
+  "transport_update_http": {
+    "fallback_after_failures": 3,
+    "listeners": [
+      {
+        "name": "cdn-assets",
+        "scheme": "https",
+        "host": "cdn.example.com:8443",
+        "uris": {
+          "ack": [
+            "/api/v1/ack"
+          ],
+          "register": [
+            "/api/v1/ping"
+          ],
+          "result": [
+            "/api/v1/report"
+          ],
+          "task": [
+            "/api/v1/sync"
+          ]
+        },
+        "methods": {
+          "ack": "GET",
+          "register": "POST",
+          "result": "POST",
+          "task": "GET"
+        }
+      }
+    ],
+    "mode": "http",
+    "retry_backoff_secs": 60
   }
 }
