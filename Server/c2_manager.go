@@ -2878,6 +2878,15 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string, info *C2Q
 		totalSize, _ := strconv.Atoi(msgParts[3])
 		totalChunks, _ := strconv.Atoi(msgParts[4])
 
+		// totalChunks sizes an allocation below, so it must be bounded before
+		// use. The value is attacker-controlled on the unencrypted (base36)
+		// path, where no key is needed to reach this code.
+		if totalChunks < 0 || totalChunks > MaxResultChunks {
+			logf("[C2] Rejecting RESULT_META for task %s: implausible chunk count %d (max %d)",
+				taskID, totalChunks, MaxResultChunks)
+			return "", false, true
+		}
+
 		c2.mutex.Lock()
 		if _, inProgress := c2.tasksInProgress[taskID]; !inProgress {
 			c2.tasksInProgress[taskID] = time.Now()
@@ -2939,6 +2948,14 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string, info *C2Q
 		taskID := dataParts[2]
 		chunkIndex, _ := strconv.Atoi(dataParts[3])
 		totalChunks, _ := strconv.Atoi(dataParts[4])
+
+		// Bound before this value sizes an allocation below, for the same reason
+		// as RESULT_META.
+		if totalChunks < 0 || totalChunks > MaxResultChunks {
+			logf("[C2] Rejecting DATA chunk for task %s: implausible chunk count %d (max %d)",
+				taskID, totalChunks, MaxResultChunks)
+			return "", false, true
+		}
 
 		// Mark task as in-progress
 		c2.mutex.Lock()

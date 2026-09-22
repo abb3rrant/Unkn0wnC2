@@ -19,5 +19,6 @@
   },
   "master_server": "",
   "master_api_key": "",
-  "master_server_id": "dns1"
+  "master_server_id": "dns1",
+  "http_profile_dir": "/opt/unkn0wnc2/profiles"
 }

@@ -39,6 +39,11 @@ type Config struct {
 	MasterServerID    string       `json:"master_server_id"`    // Unique ID for this DNS server
 	MasterTLSCACert   string       `json:"master_tls_ca_cert"`  // Optional: CA certificate path for Master TLS verification
 	MasterTLSInsecure bool         `json:"master_tls_insecure"` // If true, skip TLS verification (default: true, Master binds to runtime IP)
+	// HTTPProfileDir is the directory of malleable HTTP/HTTPS listener profiles.
+	// One listener is started per enabled profile. An empty value, or a directory
+	// that does not exist, disables the HTTP transport and leaves pure-DNS
+	// behaviour unchanged.
+	HTTPProfileDir string `json:"http_profile_dir"`
 }
 
 // StagerJitter holds timing configuration for stager chunk delivery
@@ -79,6 +84,9 @@ func DefaultConfig() Config {
 		MasterServerID:    "dns1",
 		MasterTLSCACert:   "",   // Optional: Path to CA cert for production
 		MasterTLSInsecure: true, // Default: Skip TLS verification (Master uses runtime IP binding)
+		// HTTP transport is opt-in: the builder points this at the deployed
+		// profile directory, and a missing directory leaves the server DNS-only.
+		HTTPProfileDir: "/opt/unkn0wnc2/profiles",
 	}
 }
 

@@ -1020,6 +1020,17 @@ func startServer(cfg Config) int {
 
 	// Initialize C2Manager with database for persistence
 	c2Manager = NewC2Manager(debugMode, cfg.EncryptionKey, cfg.StagerJitter, DatabaseFileName, cfg.Domain)
+
+	// Start malleable HTTP/HTTPS listeners. This is optional: with no profile
+	// directory configured the server runs DNS-only, exactly as before.
+	httpListeners, httpErr := startHTTPListeners(cfg)
+	if httpErr != nil {
+		LogError("HTTP transport startup failed: %v", httpErr)
+		return 1
+	}
+	activeHTTPListeners = httpListeners
+	defer StopHTTPListeners()
+
 	serverStart := time.Now()
 
 	// Run pre-flight checks to diagnose common binding issues
