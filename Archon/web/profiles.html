@@ -118,9 +118,9 @@
 
         <div class="section-title">HTTP Listener Profiles</div>
         <div class="hint" style="margin-bottom: 16px;">
-            Profiles describe how an HTTP/HTTPS listener looks on the wire. They are stored here
-            and embedded into a beacon that uses HTTP transport. The listener itself loads profiles
-            from its own profile directory, so deploying one means copying it to each DNS server.
+            Profiles describe the complete HTTP/HTTPS wire shape: ordered request headers,
+            operation-specific headers, response headers, URIs, methods, codecs and TLS. Archon stores
+            them, embeds them in beacons, and delivers assigned profiles live to listeners.
         </div>
 
         <div class="profiles-layout">
@@ -140,7 +140,7 @@
                 <div class="form-group">
                     <label class="form-label">Document (JSON)</label>
                     <textarea id="profileDocument" class="editor-textarea" spellcheck="false"></textarea>
-                    <div class="hint">Needs uris for register, task, result and ack. An https listener needs tls.cert_file, tls.key_file and tls.spki_sha256. Set beacon_host to the address beacons dial, which is usually not the bind address.</div>
+                    <div class="hint">Needs uris for register, task, result and ack. request_headers is authoritative when present: include Host, the auth header with {{auth}}, and Content-Length with {{content_length}} on body operations. Use operations to limit a header. An https listener also needs its certificate, key and pin.</div>
                 </div>
 
                 <div class="editor-actions">
@@ -223,10 +223,22 @@
             },
             methods: { register: 'POST', task: 'GET', result: 'POST', ack: 'GET' },
             user_agents: ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'],
-            headers: [
+            request_headers: [
+                { name: 'Host', value: '{{host}}' },
                 { name: 'Accept', value: 'application/json, text/plain, */*' },
-                { name: 'Accept-Language', value: 'en-US,en;q=0.9' }
+                { name: 'Accept-Language', value: 'en-US,en;q=0.9' },
+                { name: 'User-Agent', value: '{{user_agent}}' },
+                { name: 'Content-Type', value: 'application/json', operations: ['register', 'result'] },
+                { name: 'Content-Length', value: '{{content_length}}', operations: ['register', 'result'] },
+                { name: 'X-Sig', value: '{{auth}}' },
+                { name: 'Connection', value: 'close' }
             ],
+            response_headers: [
+                { name: 'Content-Type', value: '{{content_type}}' },
+                { name: 'Cache-Control', value: 'private, max-age=0' },
+                { name: 'X-Request-Type', value: '{{operation}}' }
+            ],
+            omit_response_headers: ['Date'],
             request_body: { encoding: 'aes-gcm-base36', field: 'd', padding_field: 'p', pad_min: 0, pad_max: 32 },
             response_body: { encoding: 'aes-gcm-base36', field: 'd', error_field: 'e' },
             auth: { mode: 'hmac-sha256', header: 'X-Sig', sig_encoding: 'hex', max_skew_secs: 300 },
@@ -469,6 +481,7 @@
                             methods: document_.methods || {},
                             user_agents: document_.user_agents || [],
                             headers: document_.headers || [],
+                            request_headers: document_.request_headers || [],
                             request_body: document_.request_body || {},
                             response_body: document_.response_body || {},
                             auth: document_.auth || {},

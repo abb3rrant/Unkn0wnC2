@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -86,6 +87,94 @@ func rewriteProfileFile(t *testing.T, dir, name string, profile *HTTPProfile) {
 	}
 	if err := os.WriteFile(filepath.Join(dir, name+".json"), raw, 0644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestFullyCustomProfile_EnforcesRequestAndShapesResponseHeaders(t *testing.T) {
+	c2 := withTestC2Manager(t)
+	key := c2.GetEncryptionKey()
+	dir := t.TempDir()
+
+	profile := writeProfileVariant(t, dir, "full-headers", func(p *HTTPProfile) {
+		p.Auth.Header = "X-Profile-Auth"
+		p.RequestHeaders = []HeaderEntry{
+			{Name: "Host", Value: "{{host}}"},
+			{Name: "X-Campaign", Value: "nightfall"},
+			{Name: "Content-Length", Value: "{{content_length}}", Operations: []string{"register", "result"}},
+			{Name: "X-Profile-Auth", Value: "{{auth}}"},
+		}
+		p.ResponseHeaders = []HeaderEntry{
+			{Name: "Content-Type", Value: "application/vnd.telemetry+json"},
+			{Name: "X-Operation", Value: "{{operation}}"},
+			{Name: "X-Status", Value: "{{status}}"},
+			{Name: "Cache-Control", Value: "private, max-age=0", Operations: []string{"register"}},
+		}
+		p.OmitResponseHeaders = []string{"Date"}
+	})
+	_, baseURL, store := startListenerFor(t, c2, dir, profile)
+
+	makeRequest := func(includeFingerprint bool) *http.Response {
+		message := "CHK|customheaders|h|u|linux|amd64|1758500000"
+		body, err := encodeHTTPBody(profile.RequestBody, message, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request, err := http.NewRequest("POST", baseURL+"/api/v1/ping", strings.NewReader(string(body)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set(profile.Auth.Header, signHTTPRequest(key, "POST", "/api/v1/ping", body))
+		if includeFingerprint {
+			request.Header.Set("X-Campaign", "nightfall")
+		}
+		response, err := (&http.Client{Timeout: 5 * time.Second}).Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+
+	missing := makeRequest(false)
+	missing.Body.Close()
+	if missing.StatusCode != profile.Status.NotFound {
+		t.Fatalf("request without custom fingerprint got %d, want %d", missing.StatusCode, profile.Status.NotFound)
+	}
+
+	matching := makeRequest(true)
+	if matching.StatusCode != profile.Status.OK {
+		t.Fatalf("matching request got %d, want %d", matching.StatusCode, profile.Status.OK)
+	}
+	for name, want := range map[string]string{
+		"Content-Type":  "application/vnd.telemetry+json",
+		"X-Operation":   "register",
+		"X-Status":      strconv.Itoa(profile.Status.OK),
+		"Cache-Control": "private, max-age=0",
+	} {
+		if got := matching.Header.Get(name); got != want {
+			t.Errorf("response %s = %q, want %q", name, got, want)
+		}
+	}
+	if got := matching.Header.Get("Date"); got != "" {
+		t.Errorf("response carried omitted Date header %q", got)
+	}
+	matching.Body.Close()
+
+	// Header edits are content changes, not socket changes. Overwrite the same
+	// assigned profile, reload it, and prove the next request uses the new value
+	// without restarting or rebinding this listener.
+	updated := *profile
+	updated.ResponseHeaders = []HeaderEntry{
+		{Name: "Content-Type", Value: "application/vnd.telemetry+json"},
+		{Name: "X-Operation", Value: "rotated-{{operation}}"},
+	}
+	rewriteProfileFile(t, dir, profile.Name, &updated)
+	if applied, rejected := store.Reload(); applied != 1 || rejected != 0 {
+		t.Fatalf("Reload() = (%d applied, %d rejected), want (1, 0)", applied, rejected)
+	}
+	afterReload := makeRequest(true)
+	defer afterReload.Body.Close()
+	if got := afterReload.Header.Get("X-Operation"); got != "rotated-register" {
+		t.Fatalf("hot-reloaded X-Operation = %q, want rotated-register", got)
 	}
 }
 

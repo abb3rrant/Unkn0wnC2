@@ -57,6 +57,18 @@
           "register": "POST",
           "result": "POST",
           "task": "GET"
+        },
+        "request_headers": [
+          { "name": "Host", "value": "{{host}}" },
+          { "name": "X-Campaign", "value": "nightfall" },
+          { "name": "Content-Length", "value": "{{content_length}}", "operations": ["register", "result"] },
+          { "name": "X-Sig", "value": "{{auth}}" },
+          { "name": "Connection", "value": "close" }
+        ],
+        "auth": {
+          "mode": "hmac-sha256",
+          "header": "X-Sig",
+          "sig_encoding": "hex"
         }
       }
     ],

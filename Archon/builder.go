@@ -48,24 +48,33 @@ type DNSServerBuildRequest struct {
 }
 
 // PhaseConfigRequest holds per-phase malleable settings from the builder UI
+// HTTPHeaderSpec is one ordered profile header. Operations is empty for all
+// operations, or limits the entry to register, task, result and/or ack.
+type HTTPHeaderSpec struct {
+	Name       string   `json:"name"`
+	Value      string   `json:"value"`
+	Operations []string `json:"operations,omitempty"`
+}
+
 // HTTPListenerSpec mirrors the client's HTTPListener JSON schema, so one profile
 // document serves both the DNS server that loads it and the beacon that embeds
 // it. Archon holds the fields it needs to validate and forward verbatim.
 type HTTPListenerSpec struct {
-	Name         string                 `json:"name"`
-	Scheme       string                 `json:"scheme"`
-	Host         string                 `json:"host"`
-	HostHeader   string                 `json:"host_header,omitempty"`
-	SPKISHA256   string                 `json:"spki_sha256,omitempty"`
-	URIs         map[string][]string    `json:"uris"`
-	Methods      map[string]string      `json:"methods,omitempty"`
-	UserAgents   []string               `json:"user_agents,omitempty"`
-	Headers      []map[string]string    `json:"headers,omitempty"`
-	RequestBody  map[string]interface{} `json:"request_body,omitempty"`
-	ResponseBody map[string]interface{} `json:"response_body,omitempty"`
-	Auth         map[string]interface{} `json:"auth,omitempty"`
-	TimeoutSecs  int                    `json:"timeout_secs,omitempty"`
-	MaxBodyBytes int64                  `json:"max_body_bytes,omitempty"`
+	Name           string                 `json:"name"`
+	Scheme         string                 `json:"scheme"`
+	Host           string                 `json:"host"`
+	HostHeader     string                 `json:"host_header,omitempty"`
+	SPKISHA256     string                 `json:"spki_sha256,omitempty"`
+	URIs           map[string][]string    `json:"uris"`
+	Methods        map[string]string      `json:"methods,omitempty"`
+	UserAgents     []string               `json:"user_agents,omitempty"`
+	Headers        []HTTPHeaderSpec       `json:"headers,omitempty"`
+	RequestHeaders []HTTPHeaderSpec       `json:"request_headers,omitempty"`
+	RequestBody    map[string]interface{} `json:"request_body,omitempty"`
+	ResponseBody   map[string]interface{} `json:"response_body,omitempty"`
+	Auth           map[string]interface{} `json:"auth,omitempty"`
+	TimeoutSecs    int                    `json:"timeout_secs,omitempty"`
+	MaxBodyBytes   int64                  `json:"max_body_bytes,omitempty"`
 }
 
 type PhaseConfigRequest struct {

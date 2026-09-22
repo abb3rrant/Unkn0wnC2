@@ -152,6 +152,54 @@ func TestNormalizeHTTPProfileDocument_Table(t *testing.T) {
 			document: `{"auth":{"mode":"basic"},"uris":{"register":["/a"],"task":["/b"],"result":["/c"],"ack":["/d"]}}`,
 			wantErr:  "auth.mode must be",
 		},
+		{
+			name:     "host header injection",
+			record:   "edge",
+			document: `{"host_header":"front.example\r\nX-Evil: yes","uris":{"register":["/a"],"task":["/b"],"result":["/c"],"ack":["/d"]}}`,
+			wantErr:  "host_header contains a line break",
+		},
+		{
+			name:     "auth header injection",
+			record:   "edge",
+			document: `{"auth":{"header":"X-Sig\r\nX-Evil"},"uris":{"register":["/a"],"task":["/b"],"result":["/c"],"ack":["/d"]}}`,
+			wantErr:  "auth.header",
+		},
+		{
+			name:     "beacon host injection",
+			record:   "edge",
+			document: `{"beacon_host":"edge.example:443\r\nX-Evil: yes","uris":{"register":["/a"],"task":["/b"],"result":["/c"],"ack":["/d"]}}`,
+			wantErr:  "beacon_host contains a line break",
+		},
+		{
+			name:     "request header injection",
+			record:   "edge",
+			document: `{"request_headers":[{"name":"X-A","value":"ok\r\nInjected: yes"}],"uris":{"register":["/a"],"task":["/b"],"result":["/c"],"ack":["/d"]}}`,
+			wantErr:  "request_headers[0].value contains a line break",
+		},
+		{
+			name:     "unknown request header template",
+			record:   "edge",
+			document: `{"request_headers":[{"name":"Host","value":"{{hostname}}"}],"uris":{"register":["/a"],"task":["/b"],"result":["/c"],"ack":["/d"]}}`,
+			wantErr:  "unknown template",
+		},
+		{
+			name:     "unknown header operation",
+			record:   "edge",
+			document: `{"response_headers":[{"name":"X-A","value":"a","operations":["download"]}],"uris":{"register":["/a"],"task":["/b"],"result":["/c"],"ack":["/d"]}}`,
+			wantErr:  "unknown operation",
+		},
+		{
+			name:     "authoritative headers missing host",
+			record:   "edge",
+			document: `{"request_headers":[{"name":"Content-Length","value":"{{content_length}}","operations":["register","result"]},{"name":"X-Sig","value":"{{auth}}"}],"uris":{"register":["/a"],"task":["/b"],"result":["/c"],"ack":["/d"]}}`,
+			wantErr:  "must provide Host",
+		},
+		{
+			name:     "authoritative headers missing auth",
+			record:   "edge",
+			document: `{"request_headers":[{"name":"Host","value":"{{host}}"},{"name":"Content-Length","value":"{{content_length}}","operations":["register","result"]}],"uris":{"register":["/a"],"task":["/b"],"result":["/c"],"ack":["/d"]}}`,
+			wantErr:  "with {{auth}}",
+		},
 	}
 
 	for _, tc := range tests {

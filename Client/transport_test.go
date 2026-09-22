@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -315,6 +317,137 @@ func TestHTTPTransport_WireShape(t *testing.T) {
 	for _, unwanted := range []string{"Accept-Encoding", "Referer", "Origin"} {
 		if request.headerValue(unwanted) != "" {
 			t.Errorf("request carried %s, which the profile did not ask for", unwanted)
+		}
+	}
+}
+
+// TestHTTPTransport_RejectsControlCharactersInBuiltInHeaderFields prevents the
+// older Host/auth fields from bypassing validation before raw HTTP is written.
+func TestHTTPTransport_RejectsControlCharactersInBuiltInHeaderFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*HTTPListener)
+		wantErr string
+	}{
+		{"host header", func(l *HTTPListener) { l.HostHeader = "front.example\r\nX-Evil: yes" }, "host_header"},
+		{"auth header", func(l *HTTPListener) { l.Auth.Header = "X-Sig\r\nX-Evil" }, "auth header"},
+		{"connection host", func(l *HTTPListener) { l.Host = "127.0.0.1:9\r\nX-Evil: yes" }, "host"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			listener := testListener("127.0.0.1:9", tc.mutate)
+			if _, err := newHTTPTransport(listener, testKey()); err == nil || !strings.Contains(strings.ToLower(err.Error()), tc.wantErr) {
+				t.Fatalf("newHTTPTransport() error = %v, want one containing %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestHTTPTransport_RejectsLegacyHeaderInjection(t *testing.T) {
+	listener := testListener("127.0.0.1:9", func(l *HTTPListener) {
+		l.Headers = []HTTPHeader{{Name: "X-A", Value: "ok\r\nInjected: yes"}}
+	})
+	if _, err := newHTTPTransport(listener, testKey()); err == nil || !strings.Contains(err.Error(), "line break") {
+		t.Fatalf("newHTTPTransport() error = %v, want a line-break rejection", err)
+	}
+}
+
+func TestHTTPTransport_RejectsInvalidAuthoritativeHeaders(t *testing.T) {
+	valid := []HTTPHeader{
+		{Name: "Host", Value: "{{host}}"},
+		{Name: "Content-Length", Value: "{{content_length}}", Operations: []string{"register", "result"}},
+		{Name: "X-Sig", Value: "{{auth}}"},
+	}
+	tests := []struct {
+		name    string
+		mutate  func(*HTTPListener)
+		wantErr string
+	}{
+		{"missing host", func(l *HTTPListener) { l.RequestHeaders = valid[1:] }, "Host"},
+		{"missing auth", func(l *HTTPListener) { l.RequestHeaders = valid[:2] }, "{{auth}}"},
+		{"missing content length", func(l *HTTPListener) { l.RequestHeaders = []HTTPHeader{valid[0], valid[2]} }, "Content-Length"},
+		{"unknown operation", func(l *HTTPListener) {
+			l.RequestHeaders = append(append([]HTTPHeader{}, valid...), HTTPHeader{Name: "X-A", Value: "a", Operations: []string{"download"}})
+		}, "unknown operation"},
+		{"unknown template", func(l *HTTPListener) {
+			l.RequestHeaders = append(append([]HTTPHeader{}, valid...), HTTPHeader{Name: "X-A", Value: "{{hostname}}"})
+		}, "unknown template"},
+		{"line break", func(l *HTTPListener) {
+			l.RequestHeaders = append(append([]HTTPHeader{}, valid...), HTTPHeader{Name: "X-A", Value: "a\r\nb"})
+		}, "line break"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			listener := testListener("127.0.0.1:9", tc.mutate)
+			_, err := newHTTPTransport(listener, testKey())
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("newHTTPTransport() error = %v, want one containing %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestHTTPTransport_FullyCustomRequestHeaders(t *testing.T) {
+	key := testKey()
+	addr, captured := rawHTTPServer(t, jsonResponse(t, HTTPBodyCodec{Encoding: codecAESGCMBase36, Field: "d"}, "ACK", key))
+
+	listener := testListener(addr, func(l *HTTPListener) {
+		l.HostHeader = "front.example.net"
+		l.RequestHeaders = []HTTPHeader{
+			{Name: "X-Operation", Value: "{{operation}}"},
+			{Name: "Host", Value: "{{host}}"},
+			{Name: "X-Method-Path", Value: "{{method}} {{path}}"},
+			{Name: "User-Agent", Value: "{{user_agent}}"},
+			{Name: "X-Task-Only", Value: "task", Operations: []string{"task"}},
+			{Name: "Content-Type", Value: "application/vnd.telemetry+json", Operations: []string{"register", "result"}},
+			{Name: "Content-Length", Value: "{{content_length}}", Operations: []string{"register", "result"}},
+			{Name: "X-Profile-Auth", Value: "{{auth}}"},
+			{Name: "Connection", Value: "close"},
+		}
+		l.Auth.Header = "X-Profile-Auth"
+	})
+	transport, err := newHTTPTransport(listener, key)
+	if err != nil {
+		t.Fatalf("newHTTPTransport() error = %v", err)
+	}
+
+	if _, err := transport.send("register", "CHK|beacon1|host|user|linux|amd64"); err != nil {
+		t.Fatalf("send() error = %v", err)
+	}
+	request := <-captured
+
+	wantNames := []string{
+		"X-Operation", "Host", "X-Method-Path", "User-Agent", "Content-Type",
+		"Content-Length", "X-Profile-Auth", "Connection",
+	}
+	if got := request.headerNames(); !reflect.DeepEqual(got, wantNames) {
+		t.Fatalf("header order = %v, want exactly %v", got, wantNames)
+	}
+	if got := request.headerValue("X-Operation"); got != "register" {
+		t.Errorf("X-Operation = %q, want register", got)
+	}
+	if got := request.headerValue("Host"); got != "front.example.net" {
+		t.Errorf("Host = %q, want front.example.net", got)
+	}
+	if got := request.headerValue("X-Method-Path"); got != "POST /api/v1/ping" {
+		t.Errorf("X-Method-Path = %q, want POST /api/v1/ping", got)
+	}
+	if got := request.headerValue("Content-Length"); got != strconv.Itoa(len(request.body)) {
+		t.Errorf("Content-Length = %q, want %d", got, len(request.body))
+	}
+	if got := request.headerValue("X-Profile-Auth"); got == "" || !strings.Contains(got, ".") {
+		t.Errorf("X-Profile-Auth = %q, want timestamp.signature", got)
+	}
+	if got := request.headerValue("X-Task-Only"); got != "" {
+		t.Errorf("register request carried task-only header %q", got)
+	}
+
+	// An authoritative list means no hidden defaults: the bytes contain only what
+	// the profile named, in that order.
+	for _, unwanted := range []string{"Accept", "Accept-Language", "X-Sig"} {
+		if got := request.headerValue(unwanted); got != "" {
+			t.Errorf("request carried unconfigured %s: %q", unwanted, got)
 		}
 	}
 }

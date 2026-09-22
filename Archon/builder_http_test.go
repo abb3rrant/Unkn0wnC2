@@ -21,8 +21,9 @@ func TestBuildClient_EmbedsHTTPTransportConfig(t *testing.T) {
 
 	// Distinctive values so a match in the binary cannot be a coincidence.
 	const (
-		hostMarker = "listener-marker.example.net:8443"
-		pinMarker  = "PINMARKERabcdefghijklmnopqrstuvwxyz012345"
+		hostMarker   = "listener-marker.example.net:8443"
+		pinMarker    = "PINMARKERabcdefghijklmnopqrstuvwxyz012345"
+		headerMarker = "nightfall-build-marker"
 	)
 
 	req := ClientBuildRequest{
@@ -51,6 +52,13 @@ func TestBuildClient_EmbedsHTTPTransportConfig(t *testing.T) {
 					"result":   "POST",
 					"ack":      "GET",
 				},
+				RequestHeaders: []HTTPHeaderSpec{
+					{Name: "Host", Value: "{{host}}"},
+					{Name: "X-Campaign", Value: headerMarker},
+					{Name: "Content-Length", Value: "{{content_length}}", Operations: []string{"register", "result"}},
+					{Name: "X-Sig", Value: "{{auth}}"},
+				},
+				Auth: map[string]interface{}{"mode": "hmac-sha256", "header": "X-Sig"},
 			},
 		},
 		HTTPFallbackAfterFailures: 4,
@@ -80,10 +88,11 @@ func TestBuildClient_EmbedsHTTPTransportConfig(t *testing.T) {
 	}
 
 	for name, want := range map[string]string{
-		"transport mode": "dual",
-		"listener host":  hostMarker,
-		"pinned SPKI":    pinMarker,
-		"task URI":       "/api/v1/sync",
+		"transport mode":        "dual",
+		"listener host":         hostMarker,
+		"pinned SPKI":           pinMarker,
+		"task URI":              "/api/v1/sync",
+		"custom request header": headerMarker,
 	} {
 		if !bytes.Contains(raw, []byte(want)) {
 			t.Errorf("built binary does not contain the %s (%q)", name, want)

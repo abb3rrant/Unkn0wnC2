@@ -66,6 +66,34 @@ func newHTTPTransport(listener HTTPListener, aesKey []byte) (*httpTransport, err
 	if listener.Host == "" {
 		return nil, fmt.Errorf("listener %q has no host", listener.Name)
 	}
+	if strings.ContainsAny(listener.Host, "\r\n") {
+		return nil, fmt.Errorf("listener %q host contains a line break", listener.Name)
+	}
+	if strings.ContainsAny(listener.HostHeader, "\r\n") {
+		return nil, fmt.Errorf("listener %q host_header contains a line break", listener.Name)
+	}
+	authMode := listener.Auth.Mode
+	if authMode == "" {
+		authMode = httpAuthModeHMAC
+		listener.Auth.Mode = authMode
+	}
+	if authMode != httpAuthModeNone {
+		if listener.Auth.Header == "" {
+			listener.Auth.Header = "X-Sig"
+		}
+		if listener.Auth.SigEncoding == "" {
+			listener.Auth.SigEncoding = "hex"
+		}
+		if err := validateClientHeaderName(listener.Auth.Header); err != nil {
+			return nil, fmt.Errorf("listener %q auth header: %w", listener.Name, err)
+		}
+	}
+	if err := validateLegacyHeaders(listener.Headers); err != nil {
+		return nil, fmt.Errorf("listener %q headers: %w", listener.Name, err)
+	}
+	if err := validateAuthoritativeHeaders(listener); err != nil {
+		return nil, fmt.Errorf("listener %q request_headers: %w", listener.Name, err)
+	}
 	// An https listener with no SPKI pin is accepted but unverified: the profile
 	// asked for unpinned TLS. The server warns about this at its own startup, so
 	// the operator sees it there; the beacon stays silent, as it does about
@@ -93,6 +121,121 @@ func newHTTPTransport(listener HTTPListener, aesKey []byte) (*httpTransport, err
 	}
 
 	return transport, nil
+}
+
+func validateClientHeaderName(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("is empty")
+	}
+	const separators = "()<>@,;:\\\"/[]?={} \t"
+	for _, char := range name {
+		if char < 33 || char > 126 || strings.ContainsRune(separators, char) {
+			return fmt.Errorf("name %q contains an illegal character", name)
+		}
+	}
+	return nil
+}
+
+func validateLegacyHeaders(headers []HTTPHeader) error {
+	for i, header := range headers {
+		if err := validateClientHeaderName(header.Name); err != nil {
+			return fmt.Errorf("entry %d %w", i, err)
+		}
+		if strings.ContainsAny(header.Value, "\r\n") {
+			return fmt.Errorf("entry %d value contains a line break", i)
+		}
+		if strings.Contains(header.Value, "{{") {
+			return fmt.Errorf("entry %d uses a template in legacy headers; use request_headers", i)
+		}
+		for _, operation := range header.Operations {
+			switch strings.ToLower(operation) {
+			case "register", "task", "result", "ack":
+			default:
+				return fmt.Errorf("entry %d has unknown operation %q", i, operation)
+			}
+		}
+	}
+	return nil
+}
+
+func validateAuthoritativeHeaders(listener HTTPListener) error {
+	if len(listener.RequestHeaders) == 0 {
+		return nil
+	}
+	allowedTemplates := map[string]bool{
+		"host": true, "user_agent": true, "content_type": true, "content_length": true,
+		"auth": true, "method": true, "path": true, "request_target": true, "operation": true,
+	}
+	for i, header := range listener.RequestHeaders {
+		if err := validateClientHeaderName(header.Name); err != nil {
+			return fmt.Errorf("entry %d %w", i, err)
+		}
+		if strings.ContainsAny(header.Value, "\r\n") {
+			return fmt.Errorf("entry %d value contains a line break", i)
+		}
+		for _, operation := range header.Operations {
+			switch strings.ToLower(operation) {
+			case "register", "task", "result", "ack":
+			default:
+				return fmt.Errorf("entry %d has unknown operation %q", i, operation)
+			}
+		}
+		rest := header.Value
+		for {
+			start := strings.Index(rest, "{{")
+			if start < 0 {
+				break
+			}
+			end := strings.Index(rest[start+2:], "}}")
+			if end < 0 {
+				return fmt.Errorf("entry %d has an unterminated template", i)
+			}
+			name := rest[start+2 : start+2+end]
+			if !allowedTemplates[name] {
+				return fmt.Errorf("entry %d uses unknown template %q", i, "{{"+name+"}}")
+			}
+			rest = rest[start+2+end+2:]
+		}
+	}
+
+	has := func(operation, name, token string) bool {
+		for _, header := range listener.RequestHeaders {
+			if headerApplies(header, operation) && strings.EqualFold(header.Name, name) &&
+				(token == "" || strings.Contains(header.Value, token)) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, operation := range []string{"register", "task", "result", "ack"} {
+		if !has(operation, "Host", "") {
+			return fmt.Errorf("must provide Host for %s", operation)
+		}
+		authMode := listener.Auth.Mode
+		if authMode == "" {
+			authMode = httpAuthModeHMAC
+		}
+		if authMode != httpAuthModeNone && !has(operation, listener.Auth.Header, "{{auth}}") {
+			return fmt.Errorf("must provide %s with {{auth}} for %s", listener.Auth.Header, operation)
+		}
+		method := strings.ToUpper(listener.Methods[operation])
+		if method == "" {
+			if operation == "task" || operation == "ack" {
+				method = "GET"
+			} else {
+				method = "POST"
+			}
+		}
+		if method != "GET" && method != "HEAD" && !has(operation, "Content-Length", "{{content_length}}") {
+			return fmt.Errorf("must provide Content-Length with {{content_length}} for %s", operation)
+		}
+	}
+	for _, header := range listener.RequestHeaders {
+		if strings.Contains(header.Value, "{{user_agent}}") && len(listener.UserAgents) == 0 {
+			return fmt.Errorf("uses {{user_agent}} but user_agents is empty")
+		}
+	}
+	return nil
 }
 
 // pickPath chooses one of the configured paths for an operation. Multiple paths
@@ -149,7 +292,7 @@ func (t *httpTransport) send(operation, message string) (string, error) {
 		path = path + separator + t.listener.RequestBody.Field + "=" + encoded
 	}
 
-	raw, status, err := t.roundTrip(method, path, body)
+	raw, status, err := t.roundTrip(operation, method, path, body)
 	if err != nil {
 		return "", err
 	}
@@ -189,7 +332,7 @@ func (t *httpTransport) encodeAsQueryValue(message string) (string, error) {
 }
 
 // roundTrip dials, writes the request, and reads the response.
-func (t *httpTransport) roundTrip(method, path string, body []byte) ([]byte, int, error) {
+func (t *httpTransport) roundTrip(operation, method, path string, body []byte) ([]byte, int, error) {
 	useTLS := t.listener.Scheme != "http"
 
 	var conn net.Conn
@@ -212,7 +355,7 @@ func (t *httpTransport) roundTrip(method, path string, body []byte) ([]byte, int
 
 	_ = conn.SetDeadline(time.Now().Add(t.timeout))
 
-	if _, err := conn.Write(t.buildRequest(method, path, body)); err != nil {
+	if _, err := conn.Write(t.buildRequest(operation, method, path, body)); err != nil {
 		return nil, 0, fmt.Errorf("failed to send request: %w", err)
 	}
 
@@ -254,26 +397,45 @@ func (t *httpTransport) tlsConfig() (*tls.Config, error) {
 	}, nil
 }
 
-// buildRequest serialises the request with the profile's headers, in the
-// profile's order.
-func (t *httpTransport) buildRequest(method, path string, body []byte) []byte {
+// buildRequest serialises either the authoritative request_headers template or
+// the legacy automatic shape. In authoritative mode the profile controls every
+// header byte and its position; no defaults are silently appended.
+func (t *httpTransport) buildRequest(operation, method, path string, body []byte) []byte {
 	var builder strings.Builder
+	builder.WriteString(method + " " + path + " HTTP/1.1\r\n")
+
+	if len(t.listener.RequestHeaders) > 0 {
+		auth := t.authHeaderValue(method, path, body)
+		for _, header := range t.listener.RequestHeaders {
+			if !headerApplies(header, operation) {
+				continue
+			}
+			value := t.expandHeaderValue(header.Value, operation, method, path, body, auth)
+			// In auth:none mode any line whose value depends on {{auth}} is
+			// absent, even when the token had a prefix such as "Bearer ".
+			if strings.Contains(header.Value, "{{auth}}") && auth == "" {
+				continue
+			}
+			builder.WriteString(header.Name + ": " + value + "\r\n")
+		}
+		builder.WriteString("\r\n")
+		request := []byte(builder.String())
+		return append(request, body...)
+	}
 
 	hostHeader := t.listener.HostHeader
 	if hostHeader == "" {
 		hostHeader = t.listener.Host
 	}
-
-	builder.WriteString(method + " " + path + " HTTP/1.1\r\n")
 	builder.WriteString("Host: " + hostHeader + "\r\n")
 
 	for _, header := range t.listener.Headers {
-		if header.Name == "" {
+		if header.Name == "" || !headerApplies(header, operation) {
 			continue
 		}
 		if strings.EqualFold(header.Name, "Host") || strings.EqualFold(header.Name, "Content-Length") {
-			// These are emitted from the actual request shape so the profile
-			// cannot produce a request that contradicts itself.
+			// Legacy profiles retain the original safety behaviour. Use
+			// request_headers when those fields must be explicitly positioned.
 			continue
 		}
 		builder.WriteString(header.Name + ": " + header.Value + "\r\n")
@@ -282,23 +444,52 @@ func (t *httpTransport) buildRequest(method, path string, body []byte) []byte {
 	if t.userAgent != "" {
 		builder.WriteString("User-Agent: " + t.userAgent + "\r\n")
 	}
-
 	if len(body) > 0 {
 		builder.WriteString("Content-Type: application/json\r\n")
 		builder.WriteString("Content-Length: " + strconv.Itoa(len(body)) + "\r\n")
 	}
-
-	// A signature covers method, path, timestamp and body.
 	if signature := t.authHeaderValue(method, path, body); signature != "" {
 		builder.WriteString(t.listener.Auth.Header + ": " + signature + "\r\n")
 	}
-
-	// No keep-alive: one request per connection keeps framing unambiguous and
-	// avoids a long-lived connection being an obvious beacon signature.
 	builder.WriteString("Connection: close\r\n\r\n")
 
 	request := []byte(builder.String())
 	return append(request, body...)
+}
+
+func headerApplies(header HTTPHeader, operation string) bool {
+	if len(header.Operations) == 0 {
+		return true
+	}
+	for _, candidate := range header.Operations {
+		if strings.EqualFold(candidate, operation) {
+			return true
+		}
+	}
+	return false
+}
+
+func (t *httpTransport) expandHeaderValue(value, operation, method, path string, body []byte, auth string) string {
+	host := t.listener.HostHeader
+	if host == "" {
+		host = t.listener.Host
+	}
+	contentType := ""
+	if len(body) > 0 {
+		contentType = "application/json"
+	}
+	replacer := strings.NewReplacer(
+		"{{host}}", host,
+		"{{user_agent}}", t.userAgent,
+		"{{content_type}}", contentType,
+		"{{content_length}}", strconv.Itoa(len(body)),
+		"{{auth}}", auth,
+		"{{method}}", strings.ToUpper(method),
+		"{{path}}", pathOnly(path),
+		"{{request_target}}", path,
+		"{{operation}}", operation,
+	)
+	return replacer.Replace(value)
 }
 
 // authHeaderValue computes the configured signature for a request.

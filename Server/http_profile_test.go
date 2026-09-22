@@ -104,6 +104,16 @@ func TestHTTPProfileValidate_Table(t *testing.T) {
 			wantErr: "empty name",
 		},
 		{
+			name:    "host header with newline",
+			mutate:  func(p *HTTPProfile) { p.HostHeader = "front.example\r\nX-Evil: yes" },
+			wantErr: "HostHeader contains a line break",
+		},
+		{
+			name:    "auth header with newline",
+			mutate:  func(p *HTTPProfile) { p.Auth.Header = "X-Sig\r\nX-Evil" },
+			wantErr: "Auth.Header",
+		},
+		{
 			name:    "https without cert",
 			mutate:  func(p *HTTPProfile) { p.Scheme = "https"; p.TLS.CertFile, p.TLS.KeyFile = "", "" },
 			wantErr: "TLS.CertFile and TLS.KeyFile are required",

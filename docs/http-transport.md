@@ -37,7 +37,7 @@ re-delivery.
 
 Listeners are defined by JSON profiles. A profile describes how the listener looks
 on the wire, so URIs, header order, status codes and the certificate pin can all be
-rotated without rebuil research beacons.
+rotated while beacons are live.
 
 `Server/config.go` (`http_profile_dir`) sets the profile directory, defaulting to
 `/opt/unkn0wnc2/profiles`. A missing or empty directory disables HTTP transport
@@ -61,7 +61,10 @@ A complete example lives in `Server/profiles/cdn-assets.json.example`.
 | `uris` | `register` / `task` / `result` / `ack` → one or more paths. |
 | `methods` | HTTP method per operation. Defaults `POST`, `GET`, `POST`, `GET`. |
 | `user_agents` | Pool the beacon picks from, one per transport instance. |
-| `headers` | Request headers, **emitted in this order**. |
+| `headers` | Legacy ordered custom request headers; automatic Host/body/auth/Connection headers are still appended. |
+| `request_headers` | **Authoritative ordered request-header template.** When present, only these headers are emitted. Supports per-operation entries and dynamic values. |
+| `response_headers` | Custom response headers. Supports per-operation entries and response templates. Go canonicalizes their names and does not promise response-header order. |
+| `omit_response_headers` | Automatic response headers to suppress, such as `Date`, `Content-Type`, or `Content-Length`. |
 | `request_body` / `response_body` | Body codec (see below). |
 | `auth` | `hmac-sha256` (default), `shared-header`, or `none`. |
 | `status` | Status codes for `ok`, `empty`, `not_found`, `error`. |
@@ -97,6 +100,45 @@ random per request.
 operations carry it in the query parameter named by `request_body.field`, so a
 profile with `"field": "d"` produces `GET /api/v1/sync?d=<payload>`.
 
+### Fully custom headers
+
+`request_headers` replaces the legacy automatic request shape. Its array order is the
+literal wire order written by the beacon; no unlisted `User-Agent`, `Content-Type`, auth,
+or `Connection` line is added. Every entry has `name`, `value`, and an optional
+`operations` array containing any of `register`, `task`, `result`, and `ack`.
+
+Request values can use:
+
+| Template | Expansion |
+| --- | --- |
+| `{{host}}` | `host_header`, or the connection target when no override is set |
+| `{{user_agent}}` | User agent chosen once for this transport instance |
+| `{{content_type}}` | `application/json` when the request has a body, otherwise empty |
+| `{{content_length}}` | Exact encoded body length (`0` for GET/HEAD) |
+| `{{auth}}` | HMAC/shared-header value; the line is omitted in `auth:none` when it expands empty |
+| `{{method}}` | Upper-case operation method |
+| `{{path}}` | Path without query string |
+| `{{request_target}}` | Full request target, including the encoded query |
+| `{{operation}}` | `register`, `task`, `result`, or `ack` |
+
+An authoritative template is rejected unless every operation has a `Host` header, every
+body operation has `Content-Length: {{content_length}}`, and every authenticated operation
+has the configured auth header containing `{{auth}}`. That prevents a saved profile from
+building a beacon that can never check in. Static custom values are also enforced by the
+listener: if the profile says `X-Campaign: nightfall`, a request without that exact value
+gets the same `not_found` response as any other non-beacon request.
+
+`response_headers` accepts the same optional `operations` selector and the templates
+`{{content_type}}`, `{{content_length}}`, `{{operation}}`, and `{{status}}`.
+`omit_response_headers` suppresses Go-generated headers; `['Date']` is the usual choice.
+Response header values and presence are profile-controlled, but their wire order is not:
+Go's HTTP server canonicalizes and serializes response headers. Request order **is** exact
+because the beacon writes HTTP directly rather than using `net/http`.
+
+The legacy `headers` array still works unchanged for old profiles. It is placed after Host
+and before the automatic User-Agent/body/auth/Connection headers. New profiles should use
+`request_headers` when the whole fingerprint matters.
+
 ### Authentication
 
 `hmac-sha256` signs `METHOD\nPATH\nTIMESTAMP\nBODY` with an HMAC key derived from
@@ -127,8 +169,9 @@ The listener refuses to start when the certificate it is about to serve does not
 match its own pin. Serving a certificate no beacon would accept would otherwise look
 healthy while every beacon failed, so this is a startup error rather than a warning.
 
-Rotating a certificate means rotating the pin in the profile **and** in any beacon
-build that pinned the old one.
+Rotating to a certificate with a **new keypair** means rotating the pin in the profile
+and in any beacon build that pinned the old one. Renewing a certificate while reusing the
+same keypair leaves the SPKI pin unchanged.
 
 ## Listeners and profile assignment
 

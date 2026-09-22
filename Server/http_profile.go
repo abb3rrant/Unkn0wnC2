@@ -85,11 +85,12 @@ type MethodTable struct {
 	Ack      string `json:"ack"`
 }
 
-// HeaderEntry is one request header. Order in the profile is the order the
-// beacon emits headers in, which is a wire-visible property.
+// HeaderEntry is one header in a wire template. Operations limits it to
+// register, task, result and/or ack; an empty list applies it everywhere.
 type HeaderEntry struct {
-	Name  string `json:"name"`
-	Value string `json:"value"`
+	Name       string   `json:"name"`
+	Value      string   `json:"value"`
+	Operations []string `json:"operations,omitempty"`
 }
 
 // BodyCodec describes how a request or response body is encoded.
@@ -134,23 +135,26 @@ type ProfileJitter struct {
 
 // HTTPProfile is one malleable HTTP/HTTPS listener.
 type HTTPProfile struct {
-	Name         string        `json:"name"`
-	Enabled      bool          `json:"enabled"`
-	BindAddr     string        `json:"bind_addr"`
-	BindPort     int           `json:"bind_port"`
-	Scheme       string        `json:"scheme"` // http | https
-	HostHeader   string        `json:"host_header"`
-	TLS          ProfileTLS    `json:"tls"`
-	URIs         URITable      `json:"uris"`
-	Methods      MethodTable   `json:"methods"`
-	UserAgents   []string      `json:"user_agents"`
-	Headers      []HeaderEntry `json:"headers"`
-	RequestBody  BodyCodec     `json:"request_body"`
-	ResponseBody BodyCodec     `json:"response_body"`
-	Auth         ProfileAuth   `json:"auth"`
-	Status       ProfileStatus `json:"status"`
-	Jitter       ProfileJitter `json:"jitter"`
-	MaxBodyBytes int64         `json:"max_body_bytes"`
+	Name                string        `json:"name"`
+	Enabled             bool          `json:"enabled"`
+	BindAddr            string        `json:"bind_addr"`
+	BindPort            int           `json:"bind_port"`
+	Scheme              string        `json:"scheme"` // http | https
+	HostHeader          string        `json:"host_header"`
+	TLS                 ProfileTLS    `json:"tls"`
+	URIs                URITable      `json:"uris"`
+	Methods             MethodTable   `json:"methods"`
+	UserAgents          []string      `json:"user_agents"`
+	Headers             []HeaderEntry `json:"headers"` // legacy request headers
+	RequestHeaders      []HeaderEntry `json:"request_headers"`
+	ResponseHeaders     []HeaderEntry `json:"response_headers"`
+	OmitResponseHeaders []string      `json:"omit_response_headers"`
+	RequestBody         BodyCodec     `json:"request_body"`
+	ResponseBody        BodyCodec     `json:"response_body"`
+	Auth                ProfileAuth   `json:"auth"`
+	Status              ProfileStatus `json:"status"`
+	Jitter              ProfileJitter `json:"jitter"`
+	MaxBodyBytes        int64         `json:"max_body_bytes"`
 
 	// SourcePath is where this profile was loaded from. Not serialized.
 	SourcePath string `json:"-"`
@@ -317,6 +321,9 @@ func (p *HTTPProfile) Validate() error {
 	if p.Jitter.MaxMs > 0 && p.Jitter.MaxMs < p.Jitter.MinMs {
 		return fmt.Errorf("Jitter.MaxMs (%d) must be >= Jitter.MinMs (%d)", p.Jitter.MaxMs, p.Jitter.MinMs)
 	}
+	if strings.ContainsAny(p.HostHeader, "\r\n") {
+		return fmt.Errorf("HostHeader contains a line break")
+	}
 
 	if len(p.URIs.Register) == 0 {
 		return fmt.Errorf("URIs.Register must have at least one path")
@@ -379,6 +386,9 @@ func (p *HTTPProfile) Validate() error {
 		if p.Auth.Header == "" {
 			return fmt.Errorf("Auth.Header must be non-empty when Auth.Mode is %q", p.Auth.Mode)
 		}
+		if err := validateHeaderName(p.Auth.Header); err != nil {
+			return fmt.Errorf("Auth.Header %w", err)
+		}
 		switch p.Auth.SigEncoding {
 		case "hex", "base64":
 		default:
@@ -400,15 +410,23 @@ func (p *HTTPProfile) Validate() error {
 		}
 	}
 
-	for i, h := range p.Headers {
-		if strings.TrimSpace(h.Name) == "" {
-			return fmt.Errorf("Headers[%d] has an empty name", i)
+	if err := validateHeaderEntries("Headers", p.Headers, map[string]bool{}); err != nil {
+		return err
+	}
+	if err := validateHeaderEntries("RequestHeaders", p.RequestHeaders, requestHeaderTemplates); err != nil {
+		return err
+	}
+	if err := validateHeaderEntries("ResponseHeaders", p.ResponseHeaders, responseHeaderTemplates); err != nil {
+		return err
+	}
+	for i, name := range p.OmitResponseHeaders {
+		if err := validateHeaderName(name); err != nil {
+			return fmt.Errorf("OmitResponseHeaders[%d]: %w", i, err)
 		}
-		if strings.ContainsAny(h.Name, ":\r\n") {
-			return fmt.Errorf("Headers[%d] name %q contains illegal characters", i, h.Name)
-		}
-		if strings.ContainsAny(h.Value, "\r\n") {
-			return fmt.Errorf("Headers[%d] value contains a line break", i)
+	}
+	if len(p.RequestHeaders) > 0 {
+		if err := p.validateAuthoritativeRequestHeaders(); err != nil {
+			return err
 		}
 	}
 
@@ -467,6 +485,117 @@ func validateCodec(label string, c BodyCodec) error {
 		}
 		if strings.ContainsAny(field, " \t\r\n\"\\{}[],:") {
 			return fmt.Errorf("%s name %q is not a valid JSON key", name, field)
+		}
+	}
+	return nil
+}
+
+func validateHeaderName(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("has an empty name")
+	}
+	// RFC 7230 token characters. Keeping this strict protects both the raw beacon
+	// writer and Go's response writer from header smuggling or silent drops.
+	const separators = "()<>@,;:\\\"/[]?={} \t"
+	for _, char := range name {
+		if char < 33 || char > 126 || strings.ContainsRune(separators, char) {
+			return fmt.Errorf("name %q contains an illegal character", name)
+		}
+	}
+	return nil
+}
+
+var requestHeaderTemplates = map[string]bool{
+	"host": true, "user_agent": true, "content_type": true,
+	"content_length": true, "auth": true, "method": true, "path": true,
+	"request_target": true, "operation": true,
+}
+
+var responseHeaderTemplates = map[string]bool{
+	"content_type": true, "content_length": true, "operation": true, "status": true,
+}
+
+func validateHeaderEntries(label string, headers []HeaderEntry, allowed map[string]bool) error {
+	for i, header := range headers {
+		if err := validateHeaderName(header.Name); err != nil {
+			return fmt.Errorf("%s[%d] %w", label, i, err)
+		}
+		if strings.ContainsAny(header.Value, "\r\n") {
+			return fmt.Errorf("%s[%d] value contains a line break", label, i)
+		}
+		for _, operation := range header.Operations {
+			switch strings.ToLower(operation) {
+			case "register", "task", "result", "ack":
+			default:
+				return fmt.Errorf("%s[%d] has unknown operation %q", label, i, operation)
+			}
+		}
+
+		rest := header.Value
+		for {
+			start := strings.Index(rest, "{{")
+			if start < 0 {
+				break
+			}
+			end := strings.Index(rest[start+2:], "}}")
+			if end < 0 {
+				return fmt.Errorf("%s[%d] has an unterminated template", label, i)
+			}
+			name := rest[start+2 : start+2+end]
+			if !allowed[name] {
+				return fmt.Errorf("%s[%d] uses unknown template %q", label, i, "{{"+name+"}}")
+			}
+			rest = rest[start+2+end+2:]
+		}
+	}
+	return nil
+}
+
+func headerEntryApplies(header HeaderEntry, operation string) bool {
+	if len(header.Operations) == 0 {
+		return true
+	}
+	for _, candidate := range header.Operations {
+		if strings.EqualFold(candidate, operation) {
+			return true
+		}
+	}
+	return false
+}
+
+func headerTemplatePresent(headers []HeaderEntry, operation, name, token string) bool {
+	for _, header := range headers {
+		if headerEntryApplies(header, operation) && strings.EqualFold(header.Name, name) &&
+			(token == "" || strings.Contains(header.Value, token)) {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *HTTPProfile) validateAuthoritativeRequestHeaders() error {
+	operations := []struct {
+		name   string
+		method string
+	}{
+		{"register", p.Methods.Register}, {"task", p.Methods.Task},
+		{"result", p.Methods.Result}, {"ack", p.Methods.Ack},
+	}
+	for _, operation := range operations {
+		if !headerTemplatePresent(p.RequestHeaders, operation.name, "Host", "") {
+			return fmt.Errorf("RequestHeaders must provide Host for %s", operation.name)
+		}
+		if p.Auth.Mode != authNone && !headerTemplatePresent(p.RequestHeaders, operation.name, p.Auth.Header, "{{auth}}") {
+			return fmt.Errorf("RequestHeaders must provide %s with {{auth}} for %s", p.Auth.Header, operation.name)
+		}
+		if method := strings.ToUpper(operation.method); method != "GET" && method != "HEAD" &&
+			!headerTemplatePresent(p.RequestHeaders, operation.name, "Content-Length", "{{content_length}}") {
+			return fmt.Errorf("RequestHeaders must provide Content-Length with {{content_length}} for %s", operation.name)
+		}
+	}
+	for _, header := range p.RequestHeaders {
+		if strings.Contains(header.Value, "{{user_agent}}") && len(p.UserAgents) == 0 {
+			return fmt.Errorf("RequestHeaders uses {{user_agent}} but UserAgents is empty")
 		}
 	}
 	return nil

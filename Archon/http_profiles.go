@@ -45,19 +45,28 @@ var httpProfileEncodings = map[string]bool{
 // are preserved as written, because the document is stored and shipped verbatim;
 // this type exists only to read the values that need checking.
 type httpProfileDocument struct {
-	Name     string `json:"name"`
-	Enabled  *bool  `json:"enabled"`
-	BindPort int    `json:"bind_port"`
-	BindAddr string `json:"bind_addr"`
-	Scheme   string `json:"scheme"`
-	TLS      struct {
+	Name       string `json:"name"`
+	Enabled    *bool  `json:"enabled"`
+	BindPort   int    `json:"bind_port"`
+	BindAddr   string `json:"bind_addr"`
+	Scheme     string `json:"scheme"`
+	HostHeader string `json:"host_header"`
+	BeaconHost string `json:"beacon_host"`
+	TLS        struct {
 		CertFile   string `json:"cert_file"`
 		KeyFile    string `json:"key_file"`
 		SPKISHA256 string `json:"spki_sha256"`
 	} `json:"tls"`
-	URIs map[string][]string `json:"uris"`
-	Auth struct {
-		Mode string `json:"mode"`
+	URIs                map[string][]string `json:"uris"`
+	Methods             map[string]string   `json:"methods"`
+	UserAgents          []string            `json:"user_agents"`
+	Headers             []HTTPHeaderSpec    `json:"headers"`
+	RequestHeaders      []HTTPHeaderSpec    `json:"request_headers"`
+	ResponseHeaders     []HTTPHeaderSpec    `json:"response_headers"`
+	OmitResponseHeaders []string            `json:"omit_response_headers"`
+	Auth                struct {
+		Mode   string `json:"mode"`
+		Header string `json:"header"`
 	} `json:"auth"`
 	RequestBody struct {
 		Encoding string `json:"encoding"`
@@ -139,6 +148,114 @@ func (d *MasterDatabase) DeleteHTTPProfile(name string) error {
 	return nil
 }
 
+func validateArchonHeaderName(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("has an empty name")
+	}
+	const separators = "()<>@,;:\\\"/[]?={} \t"
+	for _, char := range name {
+		if char < 33 || char > 126 || strings.ContainsRune(separators, char) {
+			return fmt.Errorf("name %q contains an illegal character", name)
+		}
+	}
+	return nil
+}
+
+func validateArchonHeaders(label string, headers []HTTPHeaderSpec, allowed map[string]bool) error {
+	for i, header := range headers {
+		if err := validateArchonHeaderName(header.Name); err != nil {
+			return fmt.Errorf("%s[%d] %w", label, i, err)
+		}
+		if strings.ContainsAny(header.Value, "\r\n") {
+			return fmt.Errorf("%s[%d].value contains a line break", label, i)
+		}
+		for _, operation := range header.Operations {
+			switch strings.ToLower(operation) {
+			case "register", "task", "result", "ack":
+			default:
+				return fmt.Errorf("%s[%d] has unknown operation %q", label, i, operation)
+			}
+		}
+		rest := header.Value
+		for {
+			start := strings.Index(rest, "{{")
+			if start < 0 {
+				break
+			}
+			end := strings.Index(rest[start+2:], "}}")
+			if end < 0 {
+				return fmt.Errorf("%s[%d] has an unterminated template", label, i)
+			}
+			name := rest[start+2 : start+2+end]
+			if !allowed[name] {
+				return fmt.Errorf("%s[%d] uses unknown template %q", label, i, "{{"+name+"}}")
+			}
+			rest = rest[start+2+end+2:]
+		}
+	}
+	return nil
+}
+
+func archonHeaderApplies(header HTTPHeaderSpec, operation string) bool {
+	if len(header.Operations) == 0 {
+		return true
+	}
+	for _, candidate := range header.Operations {
+		if strings.EqualFold(candidate, operation) {
+			return true
+		}
+	}
+	return false
+}
+
+func validateArchonAuthoritativeHeaders(profile httpProfileDocument) error {
+	if len(profile.RequestHeaders) == 0 {
+		return nil
+	}
+	has := func(operation, name, token string) bool {
+		for _, header := range profile.RequestHeaders {
+			if archonHeaderApplies(header, operation) && strings.EqualFold(header.Name, name) &&
+				(token == "" || strings.Contains(header.Value, token)) {
+				return true
+			}
+		}
+		return false
+	}
+	authMode := profile.Auth.Mode
+	if authMode == "" {
+		authMode = "hmac-sha256"
+	}
+	authHeader := profile.Auth.Header
+	if authHeader == "" {
+		authHeader = "X-Sig"
+	}
+	for _, operation := range []string{"register", "task", "result", "ack"} {
+		if !has(operation, "Host", "") {
+			return fmt.Errorf("request_headers must provide Host for %s", operation)
+		}
+		if authMode != "none" && !has(operation, authHeader, "{{auth}}") {
+			return fmt.Errorf("request_headers must provide %s with {{auth}} for %s", authHeader, operation)
+		}
+		method := strings.ToUpper(profile.Methods[operation])
+		if method == "" {
+			if operation == "task" || operation == "ack" {
+				method = "GET"
+			} else {
+				method = "POST"
+			}
+		}
+		if method != "GET" && method != "HEAD" && !has(operation, "Content-Length", "{{content_length}}") {
+			return fmt.Errorf("request_headers must provide Content-Length with {{content_length}} for %s", operation)
+		}
+	}
+	for _, header := range profile.RequestHeaders {
+		if strings.Contains(header.Value, "{{user_agent}}") && len(profile.UserAgents) == 0 {
+			return fmt.Errorf("request_headers uses {{user_agent}} but user_agents is empty")
+		}
+	}
+	return nil
+}
+
 // normalizeHTTPProfileDocument validates a profile and returns the document that
 // should be stored.
 //
@@ -168,6 +285,12 @@ func normalizeHTTPProfileDocument(name, document string) (string, error) {
 	case "", "http", "https":
 	default:
 		return "", fmt.Errorf("scheme must be \"http\" or \"https\", got %q", parsed.Scheme)
+	}
+	if strings.ContainsAny(parsed.HostHeader, "\r\n") {
+		return "", fmt.Errorf("host_header contains a line break")
+	}
+	if strings.ContainsAny(parsed.BeaconHost, "\r\n") {
+		return "", fmt.Errorf("beacon_host contains a line break")
 	}
 
 	// Every operation the beacon routes to needs somewhere to go.
@@ -205,6 +328,36 @@ func normalizeHTTPProfileDocument(name, document string) (string, error) {
 	case "", "hmac-sha256", "shared-header", "none":
 	default:
 		return "", fmt.Errorf("auth.mode must be \"hmac-sha256\", \"shared-header\" or \"none\", got %q", parsed.Auth.Mode)
+	}
+	if parsed.Auth.Header != "" {
+		if err := validateArchonHeaderName(parsed.Auth.Header); err != nil {
+			return "", fmt.Errorf("auth.header %w", err)
+		}
+	}
+
+	requestTemplates := map[string]bool{
+		"host": true, "user_agent": true, "content_type": true, "content_length": true,
+		"auth": true, "method": true, "path": true, "request_target": true, "operation": true,
+	}
+	responseTemplates := map[string]bool{
+		"content_type": true, "content_length": true, "operation": true, "status": true,
+	}
+	if err := validateArchonHeaders("headers", parsed.Headers, map[string]bool{}); err != nil {
+		return "", err
+	}
+	if err := validateArchonHeaders("request_headers", parsed.RequestHeaders, requestTemplates); err != nil {
+		return "", err
+	}
+	if err := validateArchonHeaders("response_headers", parsed.ResponseHeaders, responseTemplates); err != nil {
+		return "", err
+	}
+	if err := validateArchonAuthoritativeHeaders(parsed); err != nil {
+		return "", err
+	}
+	for i, name := range parsed.OmitResponseHeaders {
+		if err := validateArchonHeaderName(name); err != nil {
+			return "", fmt.Errorf("omit_response_headers[%d] %w", i, err)
+		}
 	}
 
 	// Re-serialise the typed view so the stored document always carries the name,

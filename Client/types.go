@@ -75,10 +75,12 @@ type HTTPBodyCodec struct {
 	PadMax     int    `json:"pad_max"`
 }
 
-// HTTPHeader is one request header, in the order it should be sent.
+// HTTPHeader is one header in an authoritative wire template. Operations limits
+// it to register, task, result and/or ack; an empty list applies it everywhere.
 type HTTPHeader struct {
-	Name  string `json:"name"`
-	Value string `json:"value"`
+	Name       string   `json:"name"`
+	Value      string   `json:"value"`
+	Operations []string `json:"operations,omitempty"`
 }
 
 // HTTPAuth describes how requests are authenticated to a listener.
@@ -100,15 +102,16 @@ type HTTPListener struct {
 	// certificate, so a self-signed listener cannot be impersonated.
 	SPKISHA256 string `json:"spki_sha256"`
 
-	URIs         map[string][]string `json:"uris"`           // operation -> path(s)
-	Methods      map[string]string   `json:"methods"`        // operation -> HTTP method
-	UserAgents   []string            `json:"user_agents"`    // rotational pool
-	Headers      []HTTPHeader        `json:"headers"`        // emitted in this order
-	RequestBody  HTTPBodyCodec       `json:"request_body"`   // outbound body encoding
-	ResponseBody HTTPBodyCodec       `json:"response_body"`  // inbound body encoding
-	Auth         HTTPAuth            `json:"auth"`           // request authentication
-	TimeoutSecs  int                 `json:"timeout_secs"`   // per-request timeout
-	MaxBodyBytes int64               `json:"max_body_bytes"` // response size cap
+	URIs           map[string][]string `json:"uris"`            // operation -> path(s)
+	Methods        map[string]string   `json:"methods"`         // operation -> HTTP method
+	UserAgents     []string            `json:"user_agents"`     // rotational pool
+	Headers        []HTTPHeader        `json:"headers"`         // legacy custom headers before automatic headers
+	RequestHeaders []HTTPHeader        `json:"request_headers"` // authoritative ordered wire template when non-empty
+	RequestBody    HTTPBodyCodec       `json:"request_body"`    // outbound body encoding
+	ResponseBody   HTTPBodyCodec       `json:"response_body"`   // inbound body encoding
+	Auth           HTTPAuth            `json:"auth"`            // request authentication
+	TimeoutSecs    int                 `json:"timeout_secs"`    // per-request timeout
+	MaxBodyBytes   int64               `json:"max_body_bytes"`  // response size cap
 }
 
 // baseURL returns the scheme://host prefix for this listener.

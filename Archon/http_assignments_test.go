@@ -307,6 +307,14 @@ func TestTransportUpdatePayloadMatchesSharedVector(t *testing.T) {
 			"result":   "POST",
 			"ack":      "GET",
 		},
+		RequestHeaders: []HTTPHeaderSpec{
+			{Name: "Host", Value: "{{host}}"},
+			{Name: "X-Campaign", Value: "nightfall"},
+			{Name: "Content-Length", Value: "{{content_length}}", Operations: []string{"register", "result"}},
+			{Name: "X-Sig", Value: "{{auth}}"},
+			{Name: "Connection", Value: "close"},
+		},
+		Auth: map[string]interface{}{"mode": "hmac-sha256", "header": "X-Sig", "sig_encoding": "hex"},
 	}
 
 	produced, err := buildTransportUpdatePayload("http", []HTTPListenerSpec{spec}, 3, 60)
