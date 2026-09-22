@@ -303,6 +303,17 @@ func (api *APIServer) handleBuildDNSServer(w http.ResponseWriter, r *http.Reques
 	api.sendSuccess(w, "DNS server build saved", artifact)
 }
 
+func validateClientBuildRequest(req ClientBuildRequest) error {
+	mode := strings.ToLower(strings.TrimSpace(req.Transport))
+	if mode == "" {
+		mode = "dns"
+	}
+	if mode != "http" && len(req.DNSDomains) == 0 {
+		return fmt.Errorf("at least one DNS domain is required for %s transport", mode)
+	}
+	return nil
+}
+
 // handleBuildClient builds a client binary with provided configuration
 func (api *APIServer) handleBuildClient(w http.ResponseWriter, r *http.Request) {
 	// Acquire build lock to prevent concurrent builds from interfering
@@ -315,9 +326,9 @@ func (api *APIServer) handleBuildClient(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Validate
-	if len(req.DNSDomains) == 0 {
-		api.sendError(w, http.StatusBadRequest, "at least one DNS domain is required")
+	// Validate transport prerequisites before applying platform defaults.
+	if err := validateClientBuildRequest(req); err != nil {
+		api.sendError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 

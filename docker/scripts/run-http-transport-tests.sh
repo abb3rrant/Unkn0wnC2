@@ -1,15 +1,11 @@
 #!/bin/bash
 # End-to-end checks for the malleable HTTP/HTTPS transport.
 #
-# Scope, honestly: this covers the listener's externally visible behaviour and the
-# Archon API that drives it. It does not run a beacon over HTTP, because that needs
-# a build whose transport is HTTP, which the setup step in this compose file does
-# not produce. The wire format between beacon and listener is covered instead by
-# testdata/http_transport_vectors.json, asserted by both modules' unit tests.
-#
-# Requires an *enabled* profile to be present on dns1 before the service starts.
-# Adding a new profile file needs a restart (a listener has to bind its port);
-# editing an existing one hot-reloads.
+# This runs against the deployed Archon, HTTPS listener, and a real HTTP-only
+# beacon built by Archon's API from the same profile the listener loads. A
+# successful check-in proves TLS/SPKI, request encoding, authentication, and the
+# profile's enforced authoritative request headers agree across all processes.
+# A benign command/result round trip proves task delivery and result submission.
 
 ARCHON_URL="${ARCHON_URL:-https://172.20.0.10:8443}"
 ADMIN_PASS="${ADMIN_PASSWORD:-TestAdmin2026!}"
@@ -65,6 +61,21 @@ api_get() {
     curl -ks -b "$COOKIE_JAR" -H "X-CSRF-Token: ${CSRF_TOKEN}" "${ARCHON_URL}$1"
 }
 
+wait_result() {
+    local task_id="$1"
+    for _ in $(seq 1 40); do
+        local task status
+        task=$(api_get "/api/tasks/${task_id}")
+        status=$(echo "$task" | jq -r '.status // ""')
+        if [ "$status" = "completed" ] || [ "$status" = "failed" ]; then
+            echo "$task" | jq -r '.result // ""'
+            return 0
+        fi
+        sleep 3
+    done
+    return 1
+}
+
 echo ""
 echo "========================================="
 echo "  HTTP Transport E2E Tests"
@@ -97,11 +108,56 @@ else
 fi
 
 # A configured path without a signature must look identical to an unmatched one.
-RESPONSE=$(curl -ks -o /tmp/listener-body2.txt -w "%{http_code}" "${LISTENER_URL}/api/v1/sync?d=x")
+RESPONSE=$(curl -ks -D /tmp/listener-headers.txt -o /tmp/listener-body2.txt -w "%{http_code}" "${LISTENER_URL}/api/v1/sync?d=x")
 if [ "$RESPONSE" = "404" ]; then
     pass "unsigned request is indistinguishable from a missing endpoint"
 else
     fail "unsigned request is indistinguishable from a missing endpoint" "got ${RESPONSE}"
+fi
+
+if grep -qi '^X-Request-Type: task' /tmp/listener-headers.txt && ! grep -qi '^Date:' /tmp/listener-headers.txt; then
+    pass "custom response header is present and Date is omitted"
+else
+    fail "custom response profile" "$(tr '\r\n' ' ' < /tmp/listener-headers.txt)"
+fi
+
+# ---------------------------------------------------------------------------
+# Real HTTP-only beacon check-in and command/result path
+# ---------------------------------------------------------------------------
+echo ""
+echo "[HTTP-only beacon]"
+
+HTTP_BEACON_ID=""
+for _ in $(seq 1 20); do
+    BEACONS=$(api_get "/api/beacons")
+    HTTP_BEACON_ID=$(echo "$BEACONS" | jq -r 'first(.beacons[]? | select(.beacon_name == "http-e2e-beacon") | .id) // ""')
+    if [ -n "$HTTP_BEACON_ID" ]; then
+        break
+    fi
+    sleep 3
+done
+
+if [ -n "$HTTP_BEACON_ID" ]; then
+    pass "HTTP-only beacon checked in through the custom HTTPS profile"
+else
+    fail "HTTP-only beacon check-in" "http-e2e-beacon did not appear within 60 seconds"
+fi
+
+if [ -n "$HTTP_BEACON_ID" ]; then
+    TASK_RESPONSE=$(api_post "/api/beacons/${HTTP_BEACON_ID}/task" "{\"beacon_id\":\"${HTTP_BEACON_ID}\",\"command\":\"printf HTTP_E2E_OK\"}")
+    TASK_ID=$(echo "$TASK_RESPONSE" | jq -r '.data.task_id // empty')
+    if [ -n "$TASK_ID" ]; then
+        RESULT=$(wait_result "$TASK_ID") || RESULT=""
+        if [ "$RESULT" = "HTTP_E2E_OK" ]; then
+            pass "HTTP-only task and result completed through Archon"
+        else
+            fail "HTTP-only task and result" "expected HTTP_E2E_OK, got ${RESULT:-no result}"
+        fi
+    else
+        fail "HTTP-only task creation" "$(echo "$TASK_RESPONSE" | head -c 200)"
+    fi
+else
+    fail "HTTP-only task and result" "skipped because the beacon did not check in"
 fi
 
 # ---------------------------------------------------------------------------

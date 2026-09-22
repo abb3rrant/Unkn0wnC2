@@ -6,17 +6,18 @@ issue-agent graph's `verify` stage.
 
 ## Overview
 
-Three tiers of testing:
+Four tiers of testing:
 
 | Tier | Scope | Where it runs | Gate |
 |------|-------|---------------|------|
 | Unit | Go tests per component (`Archon/`, `Client/`, `Server/`) | Go 1.24 toolchain | `go test` |
+| HTTP transport E2E (Docker) | HTTPS listener, custom profiles, HTTP-only beacon, task/result, runtime push | `docker-wk` | `run-http-transport-tests.sh` |
 | Integration (Docker) | Live C2 stack: beacon check-in, task exec, Shadow Mesh | `docker-wk` | `run-tests.sh` |
 | Extended E2E (Docker) | DNS comms malleability, edge cases, all phase configs | `docker-wk` | `run-extended-tests.sh` |
 
-The Docker tiers are the definitive validation. They build the Archon server,
-spin up two DNS C2 servers + a live beacon client, then verify real end-to-end
-behavior over DNS.
+The Docker tiers are the definitive validation. They build Archon, two listener/DNS
+servers, DNS and HTTP-only beacons, and verify real control-plane behavior over
+both transports.
 
 ---
 
@@ -71,7 +72,7 @@ package) and `Server` (dns-server) pass.
 ```bash
 COMPOSE="docker compose -f docker/docker-compose.yml"
 
-$COMPOSE up -d archon dns1 dns2 client setup
+$COMPOSE up -d archon dns1 dns2 client http-client setup
 ```
 
 `setup` logs in to Archon, builds via the builder API, and writes binaries to
@@ -79,6 +80,7 @@ the shared `builds` volume:
 
 ```
 builds/beacon                baseline beacon (alpha.test, dns1)
+builds/beacon-http           HTTP-only beacon (custom HTTPS profile, dns1 listener)
 builds/beacon-mesh           Shadow Mesh beacon (bravo.test, dns2)
 builds/beacon-a-record       Go A-record polling client
 builds/beacon-unencrypted    Go base36-only client (no AES)
@@ -101,10 +103,25 @@ Verify the stack is healthy:
 ```bash
 $COMPOSE ps
 # archon should show "healthy"
-$COMPOSE exec -T archon ls /opt/unkn0wnc2/builds/   # all 5 beacon + 2 dns-server binaries
+$COMPOSE exec -T archon ls /opt/unkn0wnc2/builds/   # all 6 beacon + 2 dns-server binaries
 ```
 
-### 2) Run the Integration suite
+### 2) Run the HTTP transport E2E suite
+
+```bash
+$COMPOSE --profile http-test run --rm --no-deps http-test
+```
+
+Exercises the live HTTPS listener, camouflage responses, custom response headers,
+omitted headers, profile CRUD validation, an Archon-built HTTP-only beacon using
+an authoritative ordered request-header profile, a benign command/result round
+trip, and runtime transport-update queueing.
+
+A successful HTTP-only check-in also proves the listener accepted the enforced
+`X-Profile` request fingerprint and that the beacon verified the generated SPKI
+pin. Expected: **ALL TESTS PASSED (14/14)**.
+
+### 3) Run the Integration suite
 
 ```bash
 $COMPOSE --profile test run --rm --no-deps test
@@ -115,7 +132,7 @@ Exercises: Archon web UI health, Go beacon check-in, task creation + result
 
 Expected: **ALL TESTS PASSED (6/6)**.
 
-### 3) Run the Extended E2E suite
+### 4) Run the Extended E2E suite
 
 ```bash
 $COMPOSE --profile extended-test run --rm --no-deps extended-test
@@ -128,7 +145,7 @@ edge cases, special characters, and multi-beacon/domain failover.
 Expected: **ALL TESTS PASSED** (some beacons may be reported `SKIP` only if a
 specific variant binary did not build; a failed required test fails the run).
 
-### 4) Teardown
+### 5) Teardown
 
 ```bash
 $COMPOSE down --remove-orphans --volumes
@@ -142,7 +159,8 @@ stale beacon registrations or `Text file busy` collisions).
 
 ## Exit codes
 
-- Integration suite: exit `0` on ALL PASS, non-zero if any test failed.
+- HTTP transport suite: exit `0` on ALL PASS, non-zero if any test failed.
+- Integration suite: same.
 - Extended suite: same.
 - `setup`/`up` failures return non-zero and must block any test interpretation.
 
@@ -183,6 +201,7 @@ For the issue-agent graph, this document is the reviewed `Unkn0wnC2` test
 manifest. The `verify` stage must:
 1. Run Tier 1 unit tests where they build standalone (`go test ./...` in
    `Archon/` and `Server/`; `Client/` coverage comes via the Docker E2E path).
-2. Bring up the Docker stack once, run Integration + Extended with `--no-deps`.
+2. Bring up the Docker stack once, then run HTTP transport, Integration, and
+   Extended suites with `--no-deps`.
 3. Teardown (`down --volumes`) unconditionally; cleanup failure blocks success.
 4. Treat the candidate branch/commit SHA as the build source (not base).

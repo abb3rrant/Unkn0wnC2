@@ -31,6 +31,7 @@
     { "name": "Host", "value": "{{host}}" },
     { "name": "Accept", "value": "application/json, text/plain, */*" },
     { "name": "Accept-Language", "value": "en-US,en;q=0.9" },
+    { "name": "X-Profile", "value": "cdn-assets" },
     { "name": "User-Agent", "value": "{{user_agent}}" },
     { "name": "Content-Type", "value": "application/json", "operations": ["register", "result"] },
     { "name": "Content-Length", "value": "{{content_length}}", "operations": ["register", "result"] },

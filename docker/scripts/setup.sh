@@ -154,6 +154,70 @@ cp "${BUILDS_DIR}/client/${CLIENT_FILE}" "${BUILDS_DIR}/beacon"
 chmod +x "${BUILDS_DIR}/beacon"
 
 # --------------------------------------------------------
+# Build HTTP-only client from the exact listener profile
+# --------------------------------------------------------
+echo "[Setup] Building HTTP-only client with authoritative headers..."
+HTTP_PROFILE_PATH="/opt/unkn0wnc2/profiles/cdn-assets.json"
+if [ ! -r "$HTTP_PROFILE_PATH" ]; then
+    echo "[Setup] ERROR: HTTP profile is unavailable at ${HTTP_PROFILE_PATH}"
+    exit 1
+fi
+
+# The generic image remains DNS-only. This test topology opts in explicitly,
+# before either listener starts, while retaining the image-generated SPKI pin.
+HTTP_PROFILE_TEMP="${HTTP_PROFILE_PATH}.tmp"
+jq '.enabled = true | .beacon_host = "172.20.0.11:8443"' \
+    "$HTTP_PROFILE_PATH" > "$HTTP_PROFILE_TEMP"
+mv "$HTTP_PROFILE_TEMP" "$HTTP_PROFILE_PATH"
+
+# Project the listener document onto the beacon schema exactly as Archon's
+# frontend does. Server-only response, bind, and certificate-file fields stay in
+# the listener profile; the beacon receives the request wire shape and SPKI pin.
+HTTP_LISTENER=$(jq '{
+    name,
+    scheme,
+    host: .beacon_host,
+    host_header,
+    spki_sha256: .tls.spki_sha256,
+    uris,
+    methods,
+    user_agents,
+    headers,
+    request_headers,
+    request_body,
+    response_body,
+    auth,
+    timeout_secs: 15,
+    max_body_bytes
+}' "$HTTP_PROFILE_PATH")
+HTTP_BUILD_REQUEST=$(jq -n \
+    --arg arch "$GOARCH" \
+    --argjson listener "$HTTP_LISTENER" \
+    '{
+        dns_domains: [],
+        platform: "linux",
+        architecture: $arch,
+        sleep_min: 2,
+        sleep_max: 3,
+        beacon_name: "http-e2e-beacon",
+        staged_registration: false,
+        static_link: true,
+        transport: "http",
+        http_listeners: [$listener]
+    }')
+HTTP_CLIENT_RESP=$(api_post "/api/builder/client" "$HTTP_BUILD_REQUEST")
+HTTP_CLIENT_FILE=$(echo "$HTTP_CLIENT_RESP" | jq -r '.data.filename // empty')
+HTTP_BUILD_ID=$(echo "$HTTP_CLIENT_RESP" | jq -r '.data.build_id // empty')
+if [ -z "$HTTP_CLIENT_FILE" ]; then
+    echo "[Setup] ERROR: HTTP-only client build failed"
+    echo "$HTTP_CLIENT_RESP" | jq .
+    exit 1
+fi
+cp "${BUILDS_DIR}/client/${HTTP_CLIENT_FILE}" "${BUILDS_DIR}/beacon-http"
+chmod +x "${BUILDS_DIR}/beacon-http"
+echo "[Setup] HTTP-only client built: ${HTTP_CLIENT_FILE} (BuildID: ${HTTP_BUILD_ID})"
+
+# --------------------------------------------------------
 # Build second client for multi-DNS test (uses both resolvers via system DNS)
 # --------------------------------------------------------
 echo "[Setup] Building multi-DNS client (Shadow Mesh test)..."
@@ -272,6 +336,7 @@ echo "  Archon:         ${ARCHON_URL}"
 echo "  DNS Server 1:   172.20.0.11:53 (alpha.test)"
 echo "  DNS Server 2:   172.20.0.12:53 (bravo.test)"
 echo "  Beacon (Go):    172.20.0.20 -> dns1 (BuildID: ${BUILD_ID})"
+echo "  Beacon (HTTP):  172.20.0.21 -> dns1:8443 (BuildID: ${HTTP_BUILD_ID})"
 echo "  Beacon (mesh):  -> dns2 (BuildID: ${BUILD2_ID})"
 echo ""
 echo "  Extended test beacons:"

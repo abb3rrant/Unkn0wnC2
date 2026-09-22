@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -111,6 +112,38 @@ func (l *scriptedListener) seenOperations() []string {
 		operations = append(operations, operationForPath(path))
 	}
 	return operations
+}
+
+func (l *scriptedListener) seenMessages(t *testing.T) []string {
+	t.Helper()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	messages := make([]string, 0, len(l.requests))
+	for _, request := range l.requests {
+		encoded := request.body
+		if len(encoded) == 0 {
+			parsed, err := url.Parse(request.path)
+			if err != nil {
+				t.Fatalf("parse captured HTTP path: %v", err)
+			}
+			queryValue := parsed.Query().Get(l.codec.Field)
+			if l.codec.Encoding == codecRaw || l.codec.Encoding == "" {
+				encoded = []byte(queryValue)
+			} else {
+				encoded, err = json.Marshal(map[string]string{l.codec.Field: queryValue})
+				if err != nil {
+					t.Fatalf("wrap captured query value: %v", err)
+				}
+			}
+		}
+		message, err := decodeHTTPBody(l.codec, encoded, l.key)
+		if err != nil {
+			t.Fatalf("decode captured HTTP body: %v", err)
+		}
+		messages = append(messages, message)
+	}
+	return messages
 }
 
 // operationForPath maps a listener path back to an operation for the scripted server.
@@ -323,6 +356,14 @@ func TestHTTPOnlyMode_ResultAndAckCarryNoDNS(t *testing.T) {
 	}
 	if operations[3] != "ack" {
 		t.Errorf("STATUS did not route to the ack path: %v", operations)
+	}
+
+	messages := server.seenMessages(t)
+	for index, message := range messages {
+		parts := strings.Split(message, "|")
+		if len(parts) < 2 || len(parts[len(parts)-1]) != 5 {
+			t.Fatalf("HTTP control message %d has no five-digit protocol timestamp: %q", index, message)
+		}
 	}
 }
 

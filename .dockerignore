@@ -19,4 +19,5 @@ assets/WebUI
 .claude
 docker/Dockerfile
 docker/docker-compose.yml
-docs/
+docs/*
+!docs/http-transport.md

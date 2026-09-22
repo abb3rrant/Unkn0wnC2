@@ -65,7 +65,7 @@ RUN openssl req -x509 -newkey rsa:2048 -nodes \
         | openssl pkey -pubin -outform der 2>/dev/null \
         | openssl dgst -sha256 -binary | openssl base64 -A) && \
     jq --arg pin "$SPKI" \
-        '.tls.spki_sha256 = $pin | .enabled = false' \
+        '.tls.spki_sha256 = $pin | .enabled = false | .beacon_host = "172.20.0.11:8443"' \
         /src/Server/profiles/cdn-assets.json.example \
         > /opt/unkn0wnc2/profiles/cdn-assets.json && \
     echo "HTTP listener pin: $SPKI"

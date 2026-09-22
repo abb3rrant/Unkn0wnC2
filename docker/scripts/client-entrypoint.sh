@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-BINARY="/opt/unkn0wnc2/builds/beacon"
+BINARY="${CLIENT_BINARY:-/opt/unkn0wnc2/builds/beacon}"
 
 echo "[Client] Waiting for beacon binary..."
 for i in $(seq 1 120); do

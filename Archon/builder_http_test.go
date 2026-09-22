@@ -1,10 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 // TestBuildClient_EmbedsHTTPTransportConfig is the end-to-end check that a beacon
@@ -97,6 +102,149 @@ func TestBuildClient_EmbedsHTTPTransportConfig(t *testing.T) {
 		if !bytes.Contains(raw, []byte(want)) {
 			t.Errorf("built binary does not contain the %s (%q)", name, want)
 		}
+	}
+}
+
+func TestValidateClientBuildRequest_AllowsHTTPOnlyWithoutDNSDomains(t *testing.T) {
+	req := ClientBuildRequest{
+		Transport: "http",
+		HTTPListeners: []HTTPListenerSpec{{
+			Name: "edge",
+			Host: "127.0.0.1:8443",
+		}},
+	}
+	if err := validateClientBuildRequest(req); err != nil {
+		t.Fatalf("HTTP-only build unexpectedly requires DNS: %v", err)
+	}
+}
+
+func TestValidateClientBuildRequest_RequiresDNSForDNSAndDualModes(t *testing.T) {
+	for _, mode := range []string{"", "dns", "dual"} {
+		t.Run(mode, func(t *testing.T) {
+			if err := validateClientBuildRequest(ClientBuildRequest{Transport: mode}); err == nil {
+				t.Fatal("build without DNS domains was accepted")
+			}
+		})
+	}
+}
+
+func TestBuildClient_HTTPOnlyBinaryCallsBackWithCustomHeaders(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping beacon process test in short mode")
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	captured := make(chan string, 1)
+	serveErr := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			serveErr <- err
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+
+		reader := bufio.NewReader(conn)
+		var lines []string
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				serveErr <- err
+				return
+			}
+			line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+			if line == "" {
+				break
+			}
+			lines = append(lines, line)
+		}
+
+		if _, err := conn.Write([]byte("HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")); err != nil {
+			serveErr <- err
+			return
+		}
+		captured <- strings.Join(lines, "\n")
+	}()
+
+	sourceRoot, err := filepath.Abs("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const marker = "process-callback-marker"
+	req := ClientBuildRequest{
+		DNSDomains:   nil,
+		Platform:     "linux",
+		Architecture: "amd64",
+		SleepMin:     1,
+		SleepMax:     1,
+		BeaconName:   "http-process-test",
+		Transport:    "http",
+		HTTPListeners: []HTTPListenerSpec{{
+			Name:   "process-listener",
+			Scheme: "http",
+			Host:   listener.Addr().String(),
+			URIs: map[string][]string{
+				"register": {"/api/v1/ping"},
+				"task":     {"/api/v1/sync"},
+				"result":   {"/api/v1/report"},
+				"ack":      {"/api/v1/ack"},
+			},
+			Methods: map[string]string{
+				"register": "POST", "task": "GET", "result": "POST", "ack": "GET",
+			},
+			RequestHeaders: []HTTPHeaderSpec{
+				{Name: "X-Process-Test", Value: marker},
+				{Name: "Host", Value: "{{host}}"},
+				{Name: "Content-Type", Value: "application/json", Operations: []string{"register", "result"}},
+				{Name: "Content-Length", Value: "{{content_length}}", Operations: []string{"register", "result"}},
+				{Name: "X-Sig", Value: "{{auth}}"},
+				{Name: "Connection", Value: "close"},
+			},
+			RequestBody:  map[string]interface{}{"encoding": "aes-gcm-base36", "field": "d"},
+			ResponseBody: map[string]interface{}{"encoding": "aes-gcm-base36", "field": "d"},
+			Auth:         map[string]interface{}{"mode": "hmac-sha256", "header": "X-Sig", "sig_encoding": "hex"},
+			TimeoutSecs:  5,
+		}},
+	}
+
+	binaryPath, err := buildClient(req, sourceRoot, "process-test-encryption-key", "processtest")
+	if err != nil {
+		t.Fatalf("buildClient() error = %v", err)
+	}
+	defer os.RemoveAll(filepath.Dir(binaryPath))
+
+	command := exec.Command(binaryPath)
+	if err := command.Start(); err != nil {
+		t.Fatalf("failed to launch built beacon: %v", err)
+	}
+	defer func() {
+		if command.Process != nil {
+			_ = command.Process.Kill()
+			_, _ = command.Process.Wait()
+		}
+	}()
+
+	select {
+	case request := <-captured:
+		if !strings.HasPrefix(request, "POST /api/v1/ping HTTP/1.1\n") {
+			t.Fatalf("first callback has the wrong request line:\n%s", request)
+		}
+		if !strings.Contains(request, "X-Process-Test: "+marker) {
+			t.Fatalf("compiled beacon lost the custom header:\n%s", request)
+		}
+		if !strings.Contains(request, "X-Sig: ") {
+			t.Fatalf("compiled beacon sent no authentication header:\n%s", request)
+		}
+	case err := <-serveErr:
+		t.Fatalf("callback listener failed: %v", err)
+	case <-time.After(12 * time.Second):
+		t.Fatal("compiled HTTP-only beacon did not call back within 12 seconds")
 	}
 }
 

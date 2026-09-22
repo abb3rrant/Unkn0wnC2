@@ -33,9 +33,9 @@ services:
       - SERVER_BINARY=dns-server-1
     volumes:
       - builds:/opt/unkn0wnc2/builds:ro
-      # Malleable HTTP listener profiles. The image ships cdn-assets.json disabled,
-      # so this mount is inert until an enabled profile is placed here.
-      - ./profiles:/opt/unkn0wnc2/profiles
+      # Setup opts the generated profile into the E2E topology while retaining
+      # its per-build SPKI pin and authoritative custom-header template.
+      - http-profiles:/opt/unkn0wnc2/profiles
     ports:
       # HTTP/HTTPS listener. The host port avoids archon's own 8443; the container
       # port must match an enabled profile's bind_port.
@@ -59,7 +59,7 @@ services:
       - SERVER_BINARY=dns-server-2
     volumes:
       - builds:/opt/unkn0wnc2/builds:ro
-      - ./profiles:/opt/unkn0wnc2/profiles
+      - http-profiles:/opt/unkn0wnc2/profiles
     ports:
       # Offset on the host so both DNS servers, and archon, can each publish one.
       - "8446:8443"
@@ -87,6 +87,23 @@ services:
       c2net:
         ipv4_address: 172.20.0.20
 
+  http-client:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: http-client
+    entrypoint: ["/scripts/client-entrypoint.sh"]
+    environment:
+      - CLIENT_BINARY=/opt/unkn0wnc2/builds/beacon-http
+    volumes:
+      - builds:/opt/unkn0wnc2/builds:ro
+    depends_on:
+      dns1:
+        condition: service_started
+    networks:
+      c2net:
+        ipv4_address: 172.20.0.21
+
   setup:
     build:
       context: ..
@@ -98,12 +115,34 @@ services:
       - ARCHON_URL=https://172.20.0.10:8443
     volumes:
       - builds:/opt/unkn0wnc2/builds
+      - http-profiles:/opt/unkn0wnc2/profiles
     depends_on:
       archon:
         condition: service_healthy
     networks:
       c2net:
         ipv4_address: 172.20.0.100
+
+  http-test:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: http-test-runner
+    entrypoint: ["/scripts/run-http-transport-tests.sh"]
+    environment:
+      - ARCHON_URL=https://172.20.0.10:8443
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-TestAdmin2026!}
+      - LISTENER_URL=https://172.20.0.11:8443
+    depends_on:
+      dns1:
+        condition: service_started
+      http-client:
+        condition: service_started
+    networks:
+      c2net:
+        ipv4_address: 172.20.0.202
+    profiles:
+      - http-test
 
   test:
     build:
@@ -122,6 +161,8 @@ services:
       dns2:
         condition: service_started
       client:
+        condition: service_started
+      http-client:
         condition: service_started
     networks:
       c2net:
@@ -147,6 +188,8 @@ services:
         condition: service_started
       client:
         condition: service_started
+      http-client:
+        condition: service_started
     networks:
       c2net:
         ipv4_address: 172.20.0.201
@@ -156,6 +199,7 @@ services:
 volumes:
   builds:
   archon-data:
+  http-profiles:
 
 networks:
   c2net:

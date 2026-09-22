@@ -638,7 +638,12 @@ func (b *Beacon) sendControlMessage(message string, phase PhaseConfig) (string, 
 		return b.client.sendPhaseCommand(message, phase)
 	}
 
-	response, err := b.transport.Send(operationForMessage(message), message)
+	// DNS appends the protocol timestamp inside sendPhaseCommand. HTTP must carry
+	// the same plaintext framing because the shared server parser uses the final
+	// field to separate DATA payloads (which may themselves contain pipes).
+	timestamp := fmt.Sprintf("%05d", time.Now().Unix()%100000)
+	wireMessage := fmt.Sprintf("%s|%s", message, timestamp)
+	response, err := b.transport.Send(operationForMessage(message), wireMessage)
 	if err == nil {
 		return response, nil
 	}
