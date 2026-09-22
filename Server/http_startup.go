@@ -1,79 +1,90 @@
-// Package main wires the malleable HTTP/HTTPS listeners into server startup.
+// Package main wires the HTTP/HTTPS transport into server startup and keeps it in
+// step with the control plane.
 //
-// HTTP transport is opt-in and profile-driven: a server with no profile
-// directory behaves exactly as it did before this transport existed. When the
-// directory exists, a profile that cannot start is a startup error rather than a
-// warning, because silently skipping it would leave an operator believing a
-// listener was up while beacons failed to reach it.
+// Two sources of profiles exist, and they are treated differently on purpose:
+//
+//   - Profiles in the local profile directory are this host's own configuration. A
+//     profile that cannot start is a startup error, because the operator put it
+//     there and needs to know immediately.
+//   - Profiles assigned by Archon belong to the control plane. One that cannot start
+//     is recorded and reported, never fatal: this process is first of all a DNS
+//     server, and it must keep answering DNS even if an assigned listener is
+//     unusable.
 package main
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"time"
 )
 
-// httpProfileReloadInterval is how often profile files are re-read. It is short
-// enough that a URI rotation takes effect within a poll cycle, and long enough
-// that it costs nothing measurable.
-const httpProfileReloadInterval = 30 * time.Second
+const (
+	// httpProfileReloadInterval is how often profile files are re-read. Short
+	// enough that a URI rotation takes effect within a poll cycle, and long enough
+	// that it costs nothing measurable.
+	httpProfileReloadInterval = 30 * time.Second
 
-// httpProfileStore is the process-wide store backing all HTTP listeners.
-var httpProfileStore *HTTPProfileStore
+	// httpControlPlaneSyncInterval is how often assigned profiles are fetched.
+	httpControlPlaneSyncInterval = 60 * time.Second
 
-// activeHTTPListeners holds the running listeners so shutdown can stop them.
-var activeHTTPListeners []*HTTPListener
+	// httpControlPlaneFirstSyncDelay lets the master client connect before the first
+	// fetch, since startup begins the transport before the link to Archon is up.
+	httpControlPlaneFirstSyncDelay = 10 * time.Second
+)
 
-// startHTTPListeners loads profiles and starts one listener per enabled profile.
-// It returns the started listeners, or an error if any of them could not start.
-func startHTTPListeners(cfg Config) ([]*HTTPListener, error) {
+// httpRegistry owns the running listeners, once startup has begun.
+var httpRegistry *HTTPRegistry
+
+// startHTTPTransport loads local profiles, starts a listener per enabled profile,
+// and begins the reconcilers. HTTP transport is opt-in: no configured profile
+// directory means the server runs DNS-only, exactly as before.
+func startHTTPTransport(cfg Config) error {
 	if cfg.HTTPProfileDir == "" {
-		return nil, nil
+		return nil
 	}
 
 	store := NewHTTPProfileStore(cfg.HTTPProfileDir)
 	if err := store.Load(); err != nil {
-		return nil, fmt.Errorf("failed to load HTTP profiles from %s: %w", cfg.HTTPProfileDir, err)
-	}
-	httpProfileStore = store
-
-	profiles := store.List()
-	if len(profiles) == 0 {
-		LogInfo("HTTP transport: no profiles found in %s (disabled)", cfg.HTTPProfileDir)
-		return nil, nil
+		// A local profile that does not parse or validate is the operator's own
+		// configuration being wrong, so it stops startup.
+		return fmt.Errorf("failed to load HTTP profiles from %s: %w", cfg.HTTPProfileDir, err)
 	}
 
-	var started []*HTTPListener
-	for _, profile := range profiles {
-		if !profile.Enabled {
-			LogInfo("HTTP transport: profile %q is disabled, skipping", profile.Name)
-			continue
-		}
+	httpRegistry = NewHTTPRegistry(store, c2Manager, cfg.Debug)
 
-		listener, err := NewHTTPListener(profile, store, c2Manager, cfg.Debug)
-		if err != nil {
-			stopHTTPListeners(started)
-			return nil, err
-		}
-		if err := listener.Start(); err != nil {
-			stopHTTPListeners(started)
-			return nil, err
-		}
-
-		started = append(started, listener)
+	result := httpRegistry.Reconcile()
+	if failed := failedFileProfiles(store, result); len(failed) > 0 {
+		httpRegistry.Shutdown()
+		httpRegistry = nil
+		return fmt.Errorf("local HTTP profile(s) could not start: %v", failed)
 	}
 
-	if len(started) > 0 {
-		go httpProfileReloadLoop(store)
-		LogInfo("HTTP transport: %d listener(s) active, profiles hot-reload every %s",
-			len(started), httpProfileReloadInterval)
+	if len(store.List()) == 0 {
+		LogInfo("HTTP transport: no local profiles in %s; waiting on the control plane", cfg.HTTPProfileDir)
+	} else {
+		LogInfo("HTTP transport: %s", httpRegistry.Describe())
 	}
 
-	return started, nil
+	httpRegistry.Watch()
+	go httpProfileReloadLoop(store)
+	go httpControlPlaneSyncLoop(cfg)
+
+	return nil
 }
 
-// httpProfileReloadLoop picks up profile edits without a restart.
+// failedFileProfiles returns the locally-configured profiles that failed to start.
+// Assigned profiles are excluded: those are reported through the checkin state
+// instead, so an unusable assignment cannot stop the server.
+func failedFileProfiles(store *HTTPProfileStore, result ReconcileResult) []string {
+	var failed []string
+	for _, name := range result.Failed {
+		if store.Source(name) == profileSourceFile {
+			failed = append(failed, name)
+		}
+	}
+	return failed
+}
+
+// httpProfileReloadLoop picks up edits to local profile files without a restart.
 func httpProfileReloadLoop(store *HTTPProfileStore) {
 	ticker := time.NewTicker(httpProfileReloadInterval)
 	defer ticker.Stop()
@@ -85,27 +96,66 @@ func httpProfileReloadLoop(store *HTTPProfileStore) {
 		}
 		if applied > 0 {
 			LogInfo("HTTP transport: %d profile(s) hot-reloaded", applied)
+			// A reload can change a profile's enabled flag or a field the socket
+			// depends on, which only the reconciler can act on.
+			if httpRegistry != nil {
+				httpRegistry.Reconcile()
+			}
 		}
 	}
 }
 
-// stopHTTPListeners shuts listeners down, reporting any that refused to stop.
-func stopHTTPListeners(listeners []*HTTPListener) {
-	for _, listener := range listeners {
-		if listener == nil {
-			continue
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		err := listener.Stop(ctx)
-		cancel()
-		if err != nil && !errors.Is(err, context.Canceled) {
-			LogWarn("HTTP transport: listener %q did not stop cleanly: %v", listener.profileName, err)
-		}
+// httpControlPlaneSyncLoop fetches assigned profiles on an interval.
+func httpControlPlaneSyncLoop(cfg Config) {
+	timer := time.NewTimer(httpControlPlaneFirstSyncDelay)
+	defer timer.Stop()
+
+	for {
+		<-timer.C
+		SyncHTTPProfilesFromControlPlane(cfg)
+		timer.Reset(httpControlPlaneSyncInterval)
 	}
 }
 
-// StopHTTPListeners stops every listener started by startHTTPListeners.
+// SyncHTTPProfilesFromControlPlane fetches the profiles Archon assigns to this
+// server and applies them.
+//
+// A failed fetch is not an error state: the last known assignment stays in force, so
+// a control-plane outage does not tear down working listeners.
+func SyncHTTPProfilesFromControlPlane(cfg Config) {
+	registry := httpRegistry
+	if registry == nil || masterClient == nil {
+		return
+	}
+
+	profiles, err := masterClient.FetchHTTPProfiles()
+	if err != nil {
+		LogWarn("HTTP transport: could not fetch assigned profiles: %v", err)
+		return
+	}
+
+	result, applyErr := registry.ApplyRemote(profiles)
+	if applyErr != nil {
+		LogWarn("HTTP transport: %v", applyErr)
+	}
+	if cfg.Debug || result.Changed() {
+		LogInfo("HTTP transport after sync: %s", registry.Describe())
+	}
+}
+
+// StopHTTPListeners stops every listener the registry started.
 func StopHTTPListeners() {
-	stopHTTPListeners(activeHTTPListeners)
-	activeHTTPListeners = nil
+	if httpRegistry == nil {
+		return
+	}
+	httpRegistry.Shutdown()
+	httpRegistry = nil
+}
+
+// HTTPListenerStatuses reports the live listener state, for the control plane.
+func HTTPListenerStatuses() []HTTPListenerStatus {
+	if httpRegistry == nil {
+		return []HTTPListenerStatus{}
+	}
+	return httpRegistry.Status()
 }

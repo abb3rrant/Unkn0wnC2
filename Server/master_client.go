@@ -60,12 +60,12 @@ func NewMasterClient(masterURL, serverID, apiKey string, tlsCACert string, tlsIn
 	}
 
 	tr := &http.Transport{
-		TLSClientConfig:       tlsConfig,
-		MaxIdleConns:           100,
-		MaxIdleConnsPerHost:    20,
-		MaxConnsPerHost:        50,
-		IdleConnTimeout:        90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
+		TLSClientConfig:     tlsConfig,
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 20,
+		MaxConnsPerHost:     50,
+		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout: 10 * time.Second,
 	}
 
 	return &MasterClient{
@@ -90,14 +90,14 @@ type CheckinRequest struct {
 }
 
 type CheckinResponse struct {
-	Success                bool                  `json:"success"`
-	Message                string                `json:"message"`
-	PendingCaches          []StagerCacheTask     `json:"pending_caches,omitempty"`
-	DomainUpdates          []string              `json:"domain_updates,omitempty"`
-	CompletedExfilSessions []string              `json:"completed_exfil_sessions,omitempty"`
-	MissingChunkRequests   []MissingChunkRequest `json:"missing_chunk_requests,omitempty"`
-	BuildFormats           []string                                `json:"build_formats,omitempty"`
-	BuildPhaseConfigs      map[string]map[string]interface{}       `json:"build_phase_configs,omitempty"`
+	Success                bool                              `json:"success"`
+	Message                string                            `json:"message"`
+	PendingCaches          []StagerCacheTask                 `json:"pending_caches,omitempty"`
+	DomainUpdates          []string                          `json:"domain_updates,omitempty"`
+	CompletedExfilSessions []string                          `json:"completed_exfil_sessions,omitempty"`
+	MissingChunkRequests   []MissingChunkRequest             `json:"missing_chunk_requests,omitempty"`
+	BuildFormats           []string                          `json:"build_formats,omitempty"`
+	BuildPhaseConfigs      map[string]map[string]interface{} `json:"build_phase_configs,omitempty"`
 }
 
 // MissingChunkRequest represents a request for missing chunks from Master
@@ -1284,4 +1284,64 @@ func (mc *MasterClient) GetTaskStatus(taskID string) (string, error) {
 	}
 
 	return resp.Status, nil
+}
+
+// HTTPProfileAssignment is one profile Archon assigns to this DNS server. The
+// document is passed through as written so the listener validates the same JSON an
+// operator authored, rather than a re-encoded copy.
+type HTTPProfileAssignment struct {
+	Name     string          `json:"name"`
+	Revision int64           `json:"revision"`
+	Document json.RawMessage `json:"document"`
+}
+
+// FetchHTTPProfiles retrieves the profiles assigned to this DNS server.
+//
+// This is a separate request rather than part of Checkin() because Checkin already
+// returns a seven-value tuple; widening it further would be worse than one more
+// focused call. The caller decides how often to ask, and applies what it gets.
+func (mc *MasterClient) FetchHTTPProfiles() ([]*HTTPProfile, error) {
+	endpoint := fmt.Sprintf("/api/dns-server/http-profiles?dns_server_id=%s&api_key=%s", mc.serverID, mc.apiKey)
+
+	respData, err := mc.doRequest("GET", endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch assigned HTTP profiles: %w", err)
+	}
+
+	var resp struct {
+		Success  bool                    `json:"success"`
+		Message  string                  `json:"message"`
+		Profiles []HTTPProfileAssignment `json:"profiles"`
+	}
+	if err := json.Unmarshal(respData, &resp); err != nil {
+		return nil, fmt.Errorf("failed to parse assigned HTTP profiles: %w", err)
+	}
+	if !resp.Success {
+		return nil, fmt.Errorf("assigned HTTP profiles rejected: %s", resp.Message)
+	}
+
+	profiles := make([]*HTTPProfile, 0, len(resp.Profiles))
+	for _, assignment := range resp.Profiles {
+		// Start from defaults so a sparse document is still a usable listener, the
+		// same way a profile file is loaded.
+		profile := DefaultHTTPProfile()
+		profile.Name = assignment.Name
+
+		if len(assignment.Document) > 0 {
+			if err := json.Unmarshal(assignment.Document, &profile); err != nil {
+				// One malformed assignment must not discard the rest, or a single
+				// bad profile would take down every listener on this server.
+				logf("[HTTP] Assigned profile %q could not be parsed: %v", assignment.Name, err)
+				continue
+			}
+		}
+
+		// The assignment name is authoritative: it is what the operator sees and
+		// what a detach will name.
+		profile.Name = assignment.Name
+		profile.SourcePath = ""
+		profiles = append(profiles, &profile)
+	}
+
+	return profiles, nil
 }

@@ -28,10 +28,10 @@ import (
 
 // Global variables
 var (
-	c2Manager              *C2Manager             // c2Manager handles all C2 operations including beacon management and tasking
-	masterClient           *MasterClient          // masterClient handles communication with Master Server (distributed mode only)
-	debugMode              bool                   // debugMode enables verbose logging for troubleshooting
-	forwardRateLimiter     *ForwardingRateLimiter // Rate limiter for DNS forwarding abuse prevention
+	c2Manager          *C2Manager             // c2Manager handles all C2 operations including beacon management and tasking
+	masterClient       *MasterClient          // masterClient handles communication with Master Server (distributed mode only)
+	debugMode          bool                   // debugMode enables verbose logging for troubleshooting
+	forwardRateLimiter *ForwardingRateLimiter // Rate limiter for DNS forwarding abuse prevention
 )
 
 // ForwardingRateLimiter tracks DNS query volume and pauses forwarding during abuse
@@ -1022,13 +1022,12 @@ func startServer(cfg Config) int {
 	c2Manager = NewC2Manager(debugMode, cfg.EncryptionKey, cfg.StagerJitter, DatabaseFileName, cfg.Domain)
 
 	// Start malleable HTTP/HTTPS listeners. This is optional: with no profile
-	// directory configured the server runs DNS-only, exactly as before.
-	httpListeners, httpErr := startHTTPListeners(cfg)
-	if httpErr != nil {
+	// directory configured the server runs DNS-only, exactly as before. Assigned
+	// profiles arrive from Archon shortly after startup and are applied live.
+	if httpErr := startHTTPTransport(cfg); httpErr != nil {
 		LogError("HTTP transport startup failed: %v", httpErr)
 		return 1
 	}
-	activeHTTPListeners = httpListeners
 	defer StopHTTPListeners()
 
 	serverStart := time.Now()
@@ -1128,12 +1127,21 @@ func startServer(cfg Config) int {
 	// Start periodic check-in (every 30 seconds)
 	masterClient.StartPeriodicCheckin(30*time.Second, func() map[string]interface{} {
 		beacons := c2Manager.GetBeacons()
+		// The HTTP listener state rides the free-form stats map, so the operator's
+		// listener page can show what is actually serving rather than what was
+		// assigned to it.
+		httpListeners := []HTTPListenerStatus{}
+		if httpRegistry != nil {
+			httpListeners = httpRegistry.Status()
+		}
+
 		return map[string]interface{}{
-			"domain":       cfg.Domain,
-			"bind_addr":    cfg.BindAddr,
-			"server_addr":  cfg.SvrAddr,
-			"beacon_count": len(beacons),
-			"uptime":       time.Since(serverStart).Seconds(),
+			"domain":         cfg.Domain,
+			"bind_addr":      cfg.BindAddr,
+			"server_addr":    cfg.SvrAddr,
+			"beacon_count":   len(beacons),
+			"uptime":         time.Since(serverStart).Seconds(),
+			"http_listeners": httpListeners,
 		}
 	}, func(cacheTasks []StagerCacheTask) {
 		// Handle stager cache tasks pushed from Master

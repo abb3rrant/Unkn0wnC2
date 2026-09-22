@@ -604,7 +604,18 @@ type HTTPProfileStore struct {
 	mu       sync.RWMutex
 	profiles map[string]*HTTPProfile
 	stamps   map[string]fileStamp
+	// sources records whether a profile came from a file on this host or was
+	// delivered by Archon. A remote profile wins over a file of the same name, so
+	// an operator editing files cannot silently override what the control plane
+	// assigned to this listener.
+	sources map[string]string
 }
+
+// Profile sources.
+const (
+	profileSourceFile   = "file"
+	profileSourceRemote = "remote"
+)
 
 // NewHTTPProfileStore creates an empty store for a directory.
 func NewHTTPProfileStore(dir string) *HTTPProfileStore {
@@ -612,6 +623,7 @@ func NewHTTPProfileStore(dir string) *HTTPProfileStore {
 		dir:      dir,
 		profiles: make(map[string]*HTTPProfile),
 		stamps:   make(map[string]fileStamp),
+		sources:  make(map[string]string),
 	}
 }
 
@@ -652,16 +664,47 @@ func (s *HTTPProfileStore) Load() error {
 
 	stamps := make(map[string]fileStamp, len(profiles))
 	byName := make(map[string]*HTTPProfile, len(profiles))
+
+	s.mu.RLock()
+	existingSources := s.sources
+	s.mu.RUnlock()
+
+	sources := make(map[string]string, len(profiles))
 	for _, p := range profiles {
+		// A profile delivered by Archon survives a directory reload.
+		if existingSources[p.Name] == profileSourceRemote {
+			if existing, ok := s.Get(p.Name); ok {
+				byName[p.Name] = existing
+				sources[p.Name] = profileSourceRemote
+				continue
+			}
+		}
 		byName[p.Name] = p
+		sources[p.Name] = profileSourceFile
 		if info, err := os.Stat(p.SourcePath); err == nil {
 			stamps[p.SourcePath] = fileStamp{ModTime: info.ModTime(), Size: info.Size()}
+		}
+	}
+
+	// Remote profiles with no file behind them are not in `profiles`, so carry
+	// them over explicitly.
+	for name, source := range existingSources {
+		if source != profileSourceRemote {
+			continue
+		}
+		if _, present := byName[name]; present {
+			continue
+		}
+		if existing, ok := s.Get(name); ok {
+			byName[name] = existing
+			sources[name] = profileSourceRemote
 		}
 	}
 
 	s.mu.Lock()
 	s.profiles = byName
 	s.stamps = stamps
+	s.sources = sources
 	s.mu.Unlock()
 	return nil
 }
@@ -710,7 +753,16 @@ func (s *HTTPProfileStore) Reload() (applied int, rejected int) {
 		}
 
 		s.mu.Lock()
+		if s.sources[profile.Name] == profileSourceRemote {
+			// Archon owns this name; the file is ignored until the assignment is
+			// removed. Record the stamp so the file is not re-read every tick.
+			s.stamps[path] = stamp
+			s.mu.Unlock()
+			logf("[HTTP] Ignoring file %s: profile %q is assigned by the control plane", path, profile.Name)
+			continue
+		}
 		s.profiles[profile.Name] = profile
+		s.sources[profile.Name] = profileSourceFile
 		s.stamps[path] = stamp
 		s.mu.Unlock()
 
@@ -829,4 +881,66 @@ func parseFirstCertificate(pemBytes []byte) (*x509.Certificate, error) {
 // pemEncodeBlock wraps DER bytes in a single PEM block.
 func pemEncodeBlock(blockType string, der []byte) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: blockType, Bytes: der})
+}
+
+// Source returns where a live profile came from.
+func (s *HTTPProfileStore) Source(name string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if source, ok := s.sources[name]; ok {
+		return source
+	}
+	return ""
+}
+
+// UpsertRemote installs a profile delivered by Archon, replacing any file profile
+// with the same name. The profile is validated here as well as on the way in, so a
+// document that reached this process by any route still has to be usable before it
+// can affect a listener.
+func (s *HTTPProfileStore) UpsertRemote(profile *HTTPProfile) error {
+	if profile == nil {
+		return fmt.Errorf("profile is required")
+	}
+	if profile.Name == "" {
+		return fmt.Errorf("profile has no name")
+	}
+	profile.applyDefaults()
+	if err := profile.Validate(); err != nil {
+		return fmt.Errorf("assigned profile %q is invalid: %w", profile.Name, err)
+	}
+	profile.SourcePath = ""
+
+	s.mu.Lock()
+	s.profiles[profile.Name] = profile
+	s.sources[profile.Name] = profileSourceRemote
+	s.mu.Unlock()
+
+	return nil
+}
+
+// RemoveRemote drops a profile that the control plane no longer assigns. A file
+// profile of the same name is not restored until the next reload, which is
+// deliberate: the assignment is authoritative for as long as it exists.
+func (s *HTTPProfileStore) RemoveRemote(name string) {
+	s.mu.Lock()
+	if s.sources[name] == profileSourceRemote {
+		delete(s.profiles, name)
+		delete(s.sources, name)
+	}
+	s.mu.Unlock()
+}
+
+// RemoteNames lists the profiles currently assigned by the control plane.
+func (s *HTTPProfileStore) RemoteNames() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	names := make([]string, 0, len(s.sources))
+	for name, source := range s.sources {
+		if source == profileSourceRemote {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
 }

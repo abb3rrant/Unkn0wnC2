@@ -973,8 +973,24 @@ func (api *APIServer) handleListDNSServers(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Attach the assignment and the last reported state to each listener, so the page
+	// needs one request rather than one per listener.
+	enriched := make([]map[string]interface{}, 0, len(servers))
+	for _, server := range servers {
+		assigned, err := api.db.GetAssignedHTTPProfileNames(server.ID)
+		if err != nil {
+			assigned = []string{}
+		}
+		enriched = append(enriched, map[string]interface{}{
+			"server":             server,
+			"assigned_profiles":  assigned,
+			"reported_listeners": api.db.GetDNSServerHTTPListeners(server.ID),
+		})
+	}
+
 	api.sendJSON(w, map[string]interface{}{
-		"servers": servers,
+		"servers":   servers,
+		"listeners": enriched,
 	})
 }
 
@@ -987,6 +1003,17 @@ func (api *APIServer) handleDNSServerCheckin(w http.ResponseWriter, r *http.Requ
 	}
 
 	dnsServerID := r.Header.Get("X-DNS-Server-ID")
+
+	// The server reports which listeners it is actually serving in its free-form
+	// stats. Recording it is what lets the listener page show reality rather than
+	// intent, and it needs no new check-in field.
+	if raw, ok := req.Stats["http_listeners"]; ok {
+		if encoded, err := json.Marshal(raw); err == nil {
+			if err := api.db.SetDNSServerHTTPListeners(dnsServerID, string(encoded)); err != nil {
+				fmt.Printf("[API] Warning: %v\n", err)
+			}
+		}
+	}
 
 	// Update check-in time and detect if this is first checkin
 	isFirstCheckin, err := api.db.UpdateDNSServerCheckin(dnsServerID)
@@ -3457,12 +3484,19 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	// Infrastructure map endpoint
 	operatorRouter.HandleFunc("/infrastructure", api.handleGetInfrastructure).Methods("GET")
 
+	// Listener management: a DNS server is a listener that answers DNS and serves the
+	// HTTP profiles assigned to it.
+	operatorRouter.HandleFunc("/listeners/{id}", api.handleGetListener).Methods("GET")
+	operatorRouter.HandleFunc("/listeners/{id}/http-profiles", api.handleAssignHTTPProfile).Methods("POST")
+	operatorRouter.HandleFunc("/listeners/{id}/http-profiles/{name}", api.handleUnassignHTTPProfile).Methods("DELETE")
+
 	// DNS server endpoints (API key auth required) - with high rate limits
 	dnsRouter := router.PathPrefix("/api/dns-server").Subrouter()
 	dnsRouter.Use(api.rateLimitMiddleware(api.dnsLimiter))
 	dnsRouter.Use(api.dnsServerAuthMiddleware)
 
 	dnsRouter.HandleFunc("/register", api.handleDNSServerRegistration).Methods("POST")
+	dnsRouter.HandleFunc("/http-profiles", api.handleFetchAssignedHTTPProfiles).Methods("GET")
 	dnsRouter.HandleFunc("/checkin", api.handleDNSServerCheckin).Methods("POST")
 	dnsRouter.HandleFunc("/beacon", api.handleBeaconReport).Methods("POST")
 	dnsRouter.HandleFunc("/beacon-status", api.handleBeaconStatusUpdate).Methods("POST")
