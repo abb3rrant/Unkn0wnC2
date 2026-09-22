@@ -26,17 +26,17 @@ func TestHTTPProfileValidate_Table(t *testing.T) {
 		{
 			name:    "bind port zero",
 			mutate:  func(p *HTTPProfile) { p.BindPort = 0 },
-			wantErr: "BindPort must be in range",
+			wantErr: "bind_port must be in range",
 		},
 		{
 			name:    "bind port too high",
 			mutate:  func(p *HTTPProfile) { p.BindPort = 70000 },
-			wantErr: "BindPort must be in range",
+			wantErr: "bind_port must be in range",
 		},
 		{
 			name:    "unknown scheme",
 			mutate:  func(p *HTTPProfile) { p.Scheme = "ftp" },
-			wantErr: "Scheme must be",
+			wantErr: "scheme must be",
 		},
 		{
 			name:    "no task uri",
@@ -56,7 +56,7 @@ func TestHTTPProfileValidate_Table(t *testing.T) {
 		{
 			name:    "bad method",
 			mutate:  func(p *HTTPProfile) { p.Methods.Task = "DELETE" },
-			wantErr: "Methods.task must be",
+			wantErr: "methods.task must be",
 		},
 		{
 			name:    "bad request encoding",
@@ -126,12 +126,12 @@ func TestHTTPProfileValidate_Table(t *testing.T) {
 		{
 			name:    "bad max body",
 			mutate:  func(p *HTTPProfile) { p.MaxBodyBytes = 0 },
-			wantErr: "MaxBodyBytes must be positive",
+			wantErr: "max_body_bytes must be positive",
 		},
 		{
 			name:    "jitter inverted",
 			mutate:  func(p *HTTPProfile) { p.Jitter.MinMs, p.Jitter.MaxMs = 500, 100 },
-			wantErr: "Jitter.MaxMs",
+			wantErr: "jitter.max_ms",
 		},
 	}
 

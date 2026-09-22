@@ -114,15 +114,6 @@ type HTTPListener struct {
 	MaxBodyBytes   int64               `json:"max_body_bytes"`  // response size cap
 }
 
-// baseURL returns the scheme://host prefix for this listener.
-func (l HTTPListener) baseURL() string {
-	scheme := l.Scheme
-	if scheme == "" {
-		scheme = "https"
-	}
-	return scheme + "://" + l.Host
-}
-
 // GetDomains returns the list of domains to use
 // Prioritizes DNSDomains array, falls back to ServerDomain for backward compatibility
 func (c *Config) GetDomains() []string {

@@ -1077,7 +1077,11 @@ func startServer(cfg Config) int {
 	LogInfo("==================================================")
 
 	// Initialize Master Client
-	masterClient = NewMasterClient(cfg.MasterServer, cfg.MasterServerID, cfg.MasterAPIKey, cfg.MasterTLSCACert, cfg.MasterTLSInsecure, debugMode)
+	masterClient, err = NewMasterClient(cfg.MasterServer, cfg.MasterServerID, cfg.MasterAPIKey, cfg.MasterTLSCACert, cfg.MasterSPKIPin, cfg.MasterTLSInsecure, debugMode)
+	if err != nil {
+		logf("[Master Client] Failed to configure TLS: %v", err)
+		os.Exit(1)
+	}
 
 	// Register with Master and retrieve active domain list
 	LogInfo("Registering with Master Server...")

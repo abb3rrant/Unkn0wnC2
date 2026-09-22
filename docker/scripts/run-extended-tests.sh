@@ -6,7 +6,7 @@ set -e
 # rapid tasks, and domain failover for the Go beacon.
 
 ARCHON_URL="${ARCHON_URL:-https://172.20.0.10:8443}"
-ADMIN_PASS="${ADMIN_PASSWORD:-TestAdmin2026!}"
+ADMIN_PASS="${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}"
 COOKIE_JAR="/tmp/ext-test-cookies.txt"
 BUILDS_DIR="/opt/unkn0wnc2/builds"
 PIDS=()
@@ -23,6 +23,8 @@ pass() { PASSED=$((PASSED + 1)); TOTAL=$((TOTAL + 1)); green "  PASS: $1"; }
 fail() { FAILED=$((FAILED + 1)); TOTAL=$((TOTAL + 1)); red   "  FAIL: $1 — $2"; }
 skip() { SKIPPED=$((SKIPPED + 1)); TOTAL=$((TOTAL + 1)); yellow "  SKIP: $1"; }
 
+# ShellCheck cannot follow a function invoked only through an EXIT trap.
+# shellcheck disable=SC2317
 cleanup() {
     for pid in "${PIDS[@]}"; do
         kill "$pid" 2>/dev/null || true
@@ -31,7 +33,7 @@ cleanup() {
 trap cleanup EXIT
 
 login() {
-    for attempt in $(seq 1 20); do
+    for _ in $(seq 1 20); do
         HTTP_CODE=$(curl -ks -c "$COOKIE_JAR" \
             -X POST "${ARCHON_URL}/api/auth/login" \
             -H "Content-Type: application/json" \

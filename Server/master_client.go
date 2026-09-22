@@ -6,6 +6,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
@@ -29,34 +31,54 @@ type MasterClient struct {
 	checkinMutex sync.RWMutex
 }
 
-// NewMasterClient creates a new master server client
-func NewMasterClient(masterURL, serverID, apiKey string, tlsCACert string, tlsInsecure bool, debug bool) *MasterClient {
-	// Configure HTTP client with TLS
-	tlsConfig := &tls.Config{
-		MinVersion:         tls.VersionTLS12,
-		InsecureSkipVerify: tlsInsecure,
-	}
+// newMasterTLSConfig configures either normal PKI verification or an explicit
+// SPKI pin for self-signed Archon deployments. An unpinned insecure mode remains
+// available only as an explicit legacy/operator choice.
+func newMasterTLSConfig(tlsCACert, spkiPin string, tlsInsecure bool) (*tls.Config, error) {
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
 
-	// If CA cert provided, load it
 	if tlsCACert != "" {
 		caCert, err := os.ReadFile(tlsCACert)
 		if err != nil {
-			if debug {
-				fmt.Printf("[Master Client] Warning: Failed to load CA cert from %s: %v\n", tlsCACert, err)
-			}
-		} else {
-			caCertPool := x509.NewCertPool()
-			if caCertPool.AppendCertsFromPEM(caCert) {
-				tlsConfig.RootCAs = caCertPool
-				if debug {
-					fmt.Printf("[Master Client] Loaded CA certificate from %s\n", tlsCACert)
-				}
-			} else {
-				if debug {
-					fmt.Printf("[Master Client] Warning: Failed to parse CA cert from %s\n", tlsCACert)
-				}
-			}
+			return nil, fmt.Errorf("read master CA certificate: %w", err)
 		}
+		caCertPool := x509.NewCertPool()
+		if !caCertPool.AppendCertsFromPEM(caCert) {
+			return nil, fmt.Errorf("parse master CA certificate %q", tlsCACert)
+		}
+		tlsConfig.RootCAs = caCertPool
+	}
+
+	if spkiPin != "" {
+		expected, err := base64.StdEncoding.DecodeString(spkiPin)
+		if err != nil || len(expected) != sha256.Size {
+			return nil, fmt.Errorf("invalid master SPKI pin")
+		}
+		// #nosec G402 -- certificate authentication is replaced by the mandatory SPKI comparison below.
+		tlsConfig.InsecureSkipVerify = true
+		tlsConfig.VerifyConnection = func(state tls.ConnectionState) error {
+			if len(state.PeerCertificates) == 0 {
+				return fmt.Errorf("master presented no certificate")
+			}
+			sum := sha256.Sum256(state.PeerCertificates[0].RawSubjectPublicKeyInfo)
+			if !hmac.Equal(sum[:], expected) {
+				return fmt.Errorf("master SPKI pin mismatch")
+			}
+			return nil
+		}
+	} else {
+		// #nosec G402 -- true is an explicit legacy option; generated listeners carry a pin.
+		tlsConfig.InsecureSkipVerify = tlsInsecure
+	}
+
+	return tlsConfig, nil
+}
+
+// NewMasterClient creates a new master server client.
+func NewMasterClient(masterURL, serverID, apiKey, tlsCACert, spkiPin string, tlsInsecure bool, debug bool) (*MasterClient, error) {
+	tlsConfig, err := newMasterTLSConfig(tlsCACert, spkiPin, tlsInsecure)
+	if err != nil {
+		return nil, err
 	}
 
 	tr := &http.Transport{
@@ -77,7 +99,7 @@ func NewMasterClient(masterURL, serverID, apiKey string, tlsCACert string, tlsIn
 			Timeout:   30 * time.Second,
 		},
 		debug: debug,
-	}
+	}, nil
 }
 
 // Request/Response structures

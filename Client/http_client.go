@@ -20,7 +20,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -375,18 +374,15 @@ func (t *httpTransport) tlsConfig() (*tls.Config, error) {
 		ServerName:         hostOnly(t.listener.Host),
 		InsecureSkipVerify: true, // replaced by the pin check below
 		MinVersion:         tls.VersionTLS12,
-		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-			if len(rawCerts) == 0 {
+		VerifyConnection: func(state tls.ConnectionState) error {
+			if len(state.PeerCertificates) == 0 {
 				return fmt.Errorf("listener presented no certificate")
 			}
 			if expected == "" {
 				// No pin configured: the profile asked for unpinned TLS.
 				return nil
 			}
-			cert, err := x509.ParseCertificate(rawCerts[0])
-			if err != nil {
-				return fmt.Errorf("failed to parse listener certificate: %w", err)
-			}
+			cert := state.PeerCertificates[0]
 			sum := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
 			actual := base64.StdEncoding.EncodeToString(sum[:])
 			if actual != expected {
@@ -616,7 +612,7 @@ func readChunkedBody(reader *bufio.Reader, maxBody int64) ([]byte, error) {
 			sizeLine = sizeLine[:index]
 		}
 		size, err := strconv.ParseInt(strings.TrimSpace(sizeLine), 16, 64)
-		if err != nil {
+		if err != nil || size < 0 {
 			return nil, fmt.Errorf("malformed chunk size %q", sizeLine)
 		}
 		if size == 0 {

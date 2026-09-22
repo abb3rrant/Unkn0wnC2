@@ -35,17 +35,17 @@ type C2QueryInfo struct {
 
 // BeaconPhaseConfig holds per-phase malleable settings for a beacon (learned from build config)
 type BeaconPhaseConfig struct {
-	RegQueryType      string `json:"reg_query_type,omitempty"`       // "TXT" or "A"
-	RegEncrypted      bool   `json:"reg_encrypted"`
-	RegACKIP          string `json:"reg_ack_ip,omitempty"`
-	PollQueryType     string `json:"poll_query_type,omitempty"`      // "TXT" or "A"
-	PollEncrypted     bool   `json:"poll_encrypted"`
-	PollACKIP         string `json:"poll_ack_ip,omitempty"`
-	PollTaskIP        string `json:"poll_task_ip,omitempty"`
-	TxtFollowUpSecs   int    `json:"txt_follow_up_secs,omitempty"`
-	ExfilQueryType    string `json:"exfil_query_type,omitempty"`     // "TXT" or "A"
-	ExfilEncrypted    bool   `json:"exfil_encrypted"`
-	ExfilACKIP        string `json:"exfil_ack_ip,omitempty"`
+	RegQueryType    string `json:"reg_query_type,omitempty"` // "TXT" or "A"
+	RegEncrypted    bool   `json:"reg_encrypted"`
+	RegACKIP        string `json:"reg_ack_ip,omitempty"`
+	PollQueryType   string `json:"poll_query_type,omitempty"` // "TXT" or "A"
+	PollEncrypted   bool   `json:"poll_encrypted"`
+	PollACKIP       string `json:"poll_ack_ip,omitempty"`
+	PollTaskIP      string `json:"poll_task_ip,omitempty"`
+	TxtFollowUpSecs int    `json:"txt_follow_up_secs,omitempty"`
+	ExfilQueryType  string `json:"exfil_query_type,omitempty"` // "TXT" or "A"
+	ExfilEncrypted  bool   `json:"exfil_encrypted"`
+	ExfilACKIP      string `json:"exfil_ack_ip,omitempty"`
 }
 
 // Beacon represents a connected beacon client
@@ -103,9 +103,9 @@ type ExpectedResult struct {
 	TotalSize      int
 	TotalChunks    int
 	ReceivedAt     time.Time
-	ReceivedData   []string        // Store chunks in order
-	LastChunkIndex int             // Track last chunk received for progress calculation
-	ReceivedChunks map[int]bool    // Track which chunk indices we've received (deduplication)
+	ReceivedData   []string     // Store chunks in order
+	LastChunkIndex int          // Track last chunk received for progress calculation
+	ReceivedChunks map[int]bool // Track which chunk indices we've received (deduplication)
 }
 
 // ChunkedTaskState tracks a multi-chunk task being delivered to a beacon
@@ -199,15 +199,15 @@ type C2Manager struct {
 	mutex                sync.RWMutex                    // main mutex for beacons, tasks, recentMessages, tasksInProgress
 	exfilMutex           sync.RWMutex                    // separate mutex for exfil operations (exfilSessions, exfilTagIndex, metadataAssemblers, pendingLabelChunks)
 	stagerMutex          sync.RWMutex                    // separate mutex for stager operations (stagerSessions, cachedStagerSessions, completedStagerLogs)
-	taskCounter          int // Counter for local tasks (standalone mode)
-	domainTaskCounter    int // Counter for domain update tasks (D prefix to avoid conflicts)
+	taskCounter          int                             // Counter for local tasks (standalone mode)
+	domainTaskCounter    int                             // Counter for domain update tasks (D prefix to avoid conflicts)
 	debug                bool
 	aesKey               []byte
-	jitterConfig         StagerJitter // Stager timing configuration
-	domain               string           // The domain this server is authoritative for
-	buildFormats         map[string]bool                // payload formats pushed from Archon build configs
-	buildPhaseConfigs    map[string]*BeaconPhaseConfig  // per-build phase configs pushed from Archon (key: build ID)
-	chunkedTasks         map[string]*ChunkedTaskState   // key: "beaconID:taskID", tracks multi-chunk delivery
+	jitterConfig         StagerJitter                  // Stager timing configuration
+	domain               string                        // The domain this server is authoritative for
+	buildFormats         map[string]bool               // payload formats pushed from Archon build configs
+	buildPhaseConfigs    map[string]*BeaconPhaseConfig // per-build phase configs pushed from Archon (key: build ID)
+	chunkedTasks         map[string]*ChunkedTaskState  // key: "beaconID:taskID", tracks multi-chunk delivery
 }
 
 // CachedStagerSession tracks stager sessions created from cached data (no Master roundtrip)
@@ -827,18 +827,6 @@ func (c2 *C2Manager) GetEncryptionKey() []byte {
 	return c2.aesKey
 }
 
-// isPrintableASCII checks if a string contains only printable ASCII characters
-// Used to validate that decrypted data is likely valid C2 traffic
-func isPrintableASCII(s string) bool {
-	for _, r := range s {
-		// Allow printable ASCII (space to ~) plus newlines/tabs
-		if r < 32 && r != 9 && r != 10 && r != 13 || r > 126 {
-			return false
-		}
-	}
-	return true
-}
-
 // decodeBeaconData decodes and decrypts beacon data using AES-GCM + base36
 func (c2 *C2Manager) decodeBeaconData(encoded string) (string, error) {
 	// Remove dots from DNS labels (e.g., "abc.def" -> "abcdef")
@@ -1201,15 +1189,6 @@ func (c2 *C2Manager) buildMetadataFromTracker(tracker *ExfilTagTracker, counter 
 	return meta
 }
 
-func (c2 *C2Manager) cacheChunkInMemory(session *ExfilSession, chunkIndex uint32, data []byte) {
-	c2.exfilMutex.Lock()
-	defer c2.exfilMutex.Unlock()
-	if session.PendingChunks == nil {
-		session.PendingChunks = make(map[uint32][]byte)
-	}
-	session.PendingChunks[chunkIndex] = append([]byte(nil), data...)
-}
-
 // handleExfilChunk ingests a dedicated exfil client's chunk and forwards to Master.
 // DNS server does NOT assemble - Master handles all assembly.
 func (c2 *C2Manager) handleExfilChunk(encoded string, meta *ExfilMetadata, clientIP string, plaintextOverride []byte) (bool, error) {
@@ -1479,40 +1458,6 @@ func (c2 *C2Manager) syncSessionChunksToMaster(sessionID string, totalChunks int
 
 		if err := c2.db.MarkExfilChunkSynced(sessionID, chunkIndex); err != nil && c2.debug {
 			logf("[Exfil] Failed to mark chunk synced (session=%s idx=%d): %v", sessionID, chunkIndex, err)
-		}
-	}
-}
-
-func (c2 *C2Manager) submitExfilChunkToMaster(session *ExfilSession, meta *ExfilMetadata, payload []byte) {
-	if masterClient == nil || session == nil || meta == nil {
-		return
-	}
-
-	c2.exfilMutex.RLock()
-	req := ExfilChunkRequest{
-		SessionID:   session.SessionID,
-		JobID:       session.JobID,
-		ChunkIndex:  int(meta.ChunkIndex),
-		TotalChunks: int(session.TotalChunks),
-		PayloadB64:  base64.StdEncoding.EncodeToString(payload),
-		FileName:    session.FileName,
-		FileSize:    int64(session.FileSize),
-		IsFinal:     meta.IsFinal(),
-	}
-	c2.exfilMutex.RUnlock()
-
-	_, err := masterClient.SubmitExfilChunk(req)
-	if err != nil {
-		if c2.debug {
-			logf("[Exfil] Failed to forward chunk %d for session %s: %v - will retry from disk", meta.ChunkIndex, session.SessionID, err)
-		}
-		return
-	}
-
-	// Mark as synced in DB
-	if c2.db != nil {
-		if err := c2.db.MarkExfilChunkSynced(session.SessionID, int(meta.ChunkIndex)); err != nil && c2.debug {
-			logf("[Exfil] Failed to mark chunk synced (session=%s idx=%d): %v", session.SessionID, meta.ChunkIndex, err)
 		}
 	}
 }
@@ -1810,11 +1755,12 @@ func (c2 *C2Manager) AddDomainUpdateTask(beaconID, command string) string {
 
 	// Persist task
 	if c2.db != nil {
-		go func() {
-			if err := c2.db.SaveTask(task); err != nil && c2.debug {
+		taskSnapshot := *task
+		go func(t Task) {
+			if err := c2.db.SaveTask(&t); err != nil && c2.debug {
 				logf("[DB] Failed to save domain task: %v", err)
 			}
-		}()
+		}(taskSnapshot)
 	}
 
 	return taskID
@@ -1874,11 +1820,12 @@ func (c2 *C2Manager) AddTaskFromMaster(masterTaskID, beaconID, command string) {
 
 	// Persist task
 	if c2.db != nil {
-		go func() {
-			if err := c2.db.SaveTask(task); err != nil && c2.debug {
+		taskSnapshot := *task
+		go func(t Task) {
+			if err := c2.db.SaveTask(&t); err != nil && c2.debug {
 				logf("[DB] Failed to save Archon task: %v", err)
 			}
-		}()
+		}(taskSnapshot)
 	}
 }
 
@@ -2226,7 +2173,42 @@ func (c2 *C2Manager) deliverNextTask(beacon *Beacon, encrypted bool, peekOnly ..
 	return "ACK", true, encrypted, nil
 }
 
-// processBeaconQuery handles incoming DNS queries from beacons
+// authorizeBeaconControl binds post-registration control traffic to the
+// registered beacon and, where applicable, to that beacon's task. Encryption
+// uses the listener-wide key, so task ownership is still required after a
+// successful decrypt. Legacy plain-base36 traffic is accepted only for beacons
+// already registered in that mode and cannot downgrade an encrypted beacon.
+func (c2 *C2Manager) authorizeBeaconControl(parts []string, encrypted bool) bool {
+	if len(parts) < 2 {
+		return false
+	}
+	msgType, beaconID := parts[0], parts[1]
+	if msgType == "STG" || msgType == "CHUNK" {
+		return true
+	}
+
+	c2.mutex.RLock()
+	defer c2.mutex.RUnlock()
+	beacon, exists := c2.beacons[beaconID]
+	if msgType == "CHK" {
+		return encrypted || !exists || beacon.Encoding == "base36"
+	}
+	if !exists || (!encrypted && beacon.Encoding != "base36") {
+		return false
+	}
+
+	switch msgType {
+	case "TASKGET", "RESULT_META", "DATA", "RESULT_COMPLETE", "RESULT":
+		if len(parts) < 3 {
+			return false
+		}
+		task, ok := c2.tasks[parts[2]]
+		return ok && task.BeaconID == beaconID
+	default:
+		return true
+	}
+}
+
 // processBeaconQuery parses an incoming DNS query from a beacon or stager.
 // queryType is the DNS record type (1=A, 16=TXT) to enable A-record peek mode.
 // Returns (response, isC2, encrypted) — encrypted=false means respond with plain base36.
@@ -2240,13 +2222,17 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string, info *C2Q
 	// Starts true; set to false for plain-base36 beacons and all stager traffic.
 	encrypted := true
 
-	// Check if query matches our domain
-	if !strings.HasSuffix(qname, c2.domain) {
+	// Match the configured DNS suffix on a label boundary. A bare string suffix
+	// would accept attacker.example when the authoritative domain is example.
+	normalizedQName := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(qname)), ".")
+	normalizedDomain := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(c2.domain)), ".")
+	if normalizedDomain == "" || !strings.HasSuffix(normalizedQName, "."+normalizedDomain) {
 		if c2.debug {
 			logf("[C2] Domain mismatch: query=%q server domain=%q", qname, c2.domain)
 		}
 		return "", false, true
 	}
+	qname = strings.TrimSuffix(strings.TrimSpace(qname), ".")
 
 	// Extract payload (subdomain)
 	parts := strings.Split(qname, ".")
@@ -2257,7 +2243,7 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string, info *C2Q
 	// Payload is everything before the domain
 	// e.g. payload.timestamp.domain.com -> payload (strip timestamp too)
 	// Format: <base36_data>[.<more_data>].<timestamp>.<domain>
-	domainParts := strings.Split(c2.domain, ".")
+	domainParts := strings.Split(normalizedDomain, ".")
 	payloadParts := parts[:len(parts)-len(domainParts)]
 
 	// SHADOW MESH: Stagers include a timestamp label for cache busting
@@ -2456,6 +2442,12 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string, info *C2Q
 	}
 
 	msgType := msgParts[0]
+	if !c2.authorizeBeaconControl(msgParts, encrypted) {
+		if c2.debug {
+			logf("[C2] Rejected unauthorized %s message", msgType)
+		}
+		return "", false, true
+	}
 
 	// Populate caller metadata early so dedup'd messages still get phase-aware IP selection
 	if info != nil {

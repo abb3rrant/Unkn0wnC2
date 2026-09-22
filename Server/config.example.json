@@ -20,5 +20,8 @@
   "master_server": "",
   "master_api_key": "",
   "master_server_id": "dns1",
+  "master_tls_ca_cert": "",
+  "master_tls_spki_sha256": "",
+  "master_tls_insecure": false,
   "http_profile_dir": "/opt/unkn0wnc2/profiles"
 }

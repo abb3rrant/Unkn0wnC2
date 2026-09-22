@@ -6,9 +6,12 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net"
@@ -31,6 +34,23 @@ var (
 	// buildMutex prevents concurrent builds from interfering with each other
 	buildMutex sync.Mutex
 )
+
+func certificateSPKISHA256(path string) (string, error) {
+	pemBytes, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read TLS certificate: %w", err)
+	}
+	block, _ := pem.Decode(pemBytes)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return "", fmt.Errorf("TLS certificate %q is not PEM encoded", path)
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return "", fmt.Errorf("parse TLS certificate: %w", err)
+	}
+	sum := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
+	return base64.StdEncoding.EncodeToString(sum[:]), nil
+}
 
 // Builder request structures
 type DNSServerBuildRequest struct {
@@ -795,6 +815,11 @@ func (api *APIServer) handleBuildStager(w http.ResponseWriter, r *http.Request) 
 
 // buildDNSServer compiles a DNS server with embedded configuration
 func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKey, serverID string) (string, error) {
+	masterSPKIPin, err := certificateSPKISHA256(api.config.TLSCert)
+	if err != nil {
+		return "", fmt.Errorf("pin Archon TLS certificate: %w", err)
+	}
+
 	// Create temporary directory for build
 	buildDir, err := os.MkdirTemp("", "dns-server-build-*")
 	if err != nil {
@@ -870,10 +895,14 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 	configStr = strings.ReplaceAll(configStr, "MasterAPIKey:      \"\",", fmt.Sprintf("MasterAPIKey:      \"%s\",", apiKey))
 	configStr = strings.ReplaceAll(configStr, "MasterAPIKey:      \"\", // REQUIRED: Set by builder", fmt.Sprintf("MasterAPIKey:      \"%s\", // REQUIRED: Set by builder", apiKey))
 	configStr = strings.ReplaceAll(configStr, "MasterServerID:    \"dns1\",", fmt.Sprintf("MasterServerID:    \"%s\",", serverID))
+	configStr = strings.ReplaceAll(configStr, "MasterSPKIPin:     \"\",", fmt.Sprintf("MasterSPKIPin:     \"%s\",", masterSPKIPin))
 
 	// Verify MasterServer was set after replacement
 	if strings.Contains(configStr, "MasterServer:      \"\",") {
 		return "", fmt.Errorf("CRITICAL: MasterServer replacement failed - empty value still present in config")
+	}
+	if strings.Contains(configStr, "MasterSPKIPin:     \"\",") {
+		return "", fmt.Errorf("CRITICAL: Master TLS SPKI pin replacement failed")
 	}
 
 	// Verify all critical defaults were replaced
@@ -901,18 +930,19 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 		}
 	}
 
-	// Clean and download dependencies to ensure compatible versions
-	modTidyCmd := exec.Command("go", "mod", "tidy")
-	modTidyCmd.Dir = buildDir
-	modTidyCmd.Env = append(os.Environ(), "GOOS=linux", fmt.Sprintf("GOARCH=%s", runtime.GOARCH))
-	if output, err := modTidyCmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("go mod tidy failed: %w\nOutput: %s", err, string(output))
+	// Download exactly the dependency graph pinned by go.mod/go.sum. Builder
+	// requests must never rewrite release inputs at runtime.
+	modDownloadCmd := exec.Command("go", "mod", "download")
+	modDownloadCmd.Dir = buildDir
+	modDownloadCmd.Env = append(os.Environ(), "GOOS=linux", fmt.Sprintf("GOARCH=%s", runtime.GOARCH))
+	if output, err := modDownloadCmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("go mod download failed: %w\nOutput: %s", err, string(output))
 	}
 
 	// Build binary to temp location
 	// CGO_ENABLED=0 produces a fully static binary with no glibc dependency
 	outputPath := filepath.Join(buildDir, "dns-server")
-	cmd := exec.Command("go", "build", "-trimpath", "-ldflags=-s -w", "-o", outputPath, ".")
+	cmd := exec.Command("go", "build", "-mod=readonly", "-trimpath", "-ldflags=-s -w", "-o", outputPath, ".")
 	cmd.Dir = buildDir
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", fmt.Sprintf("GOARCH=%s", runtime.GOARCH))
 
@@ -1073,7 +1103,9 @@ func buildClient(req ClientBuildRequest, sourceRoot, encryptionKey, buildID stri
 		listenersJSON = string(encoded)
 	}
 
-	configContent := fmt.Sprintf(`package main
+	configContent := fmt.Sprintf(`//go:build generated
+
+package main
 
 import "encoding/json"
 
@@ -1166,11 +1198,11 @@ func getConfig() Config {
 		return "", fmt.Errorf("failed to write config: %w", err)
 	}
 
-	// Clean and download dependencies
-	modTidyCmd := exec.Command("go", "mod", "tidy")
-	modTidyCmd.Dir = buildDir
-	if output, err := modTidyCmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("go mod tidy failed: %w\nOutput: %s", err, string(output))
+	// Download the pinned graph without allowing a build request to mutate it.
+	modDownloadCmd := exec.Command("go", "mod", "download")
+	modDownloadCmd.Dir = buildDir
+	if output, err := modDownloadCmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("go mod download failed: %w\nOutput: %s", err, string(output))
 	}
 
 	// Build binary to temp location
@@ -1197,7 +1229,7 @@ func getConfig() Config {
 	}
 
 	outputPath := filepath.Join(buildDir, fmt.Sprintf("beacon%s", ext))
-	cmd := exec.Command("go", "build", "-trimpath", "-ldflags=-s -w", "-o", outputPath, ".")
+	cmd := exec.Command("go", "build", "-mod=readonly", "-tags=generated", "-trimpath", "-ldflags=-s -w", "-o", outputPath, ".")
 	cmd.Dir = buildDir
 	cmd.Env = env
 

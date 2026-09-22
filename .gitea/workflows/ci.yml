@@ -1,0 +1,142 @@
+name: CI
+
+on:
+  push:
+    branches: [main, feature/http-transport]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: 1.25.14
+          cache: false
+
+      - name: Install pinned verification tools
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@v0.6.1
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          go install github.com/zricethezav/gitleaks/v8@v8.24.3
+
+      - name: Verify module graphs
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          for module in Archon Client Server tools/builder; do
+            (
+              cd "$module"
+              go mod verify
+              go mod tidy -diff
+            )
+          done
+
+      - name: Vet, test with race detector, and staticcheck
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          for module in Archon Client Server tools/builder; do
+            (
+              cd "$module"
+              go vet ./...
+              go test -race -count=1 ./...
+              staticcheck ./...
+            )
+          done
+
+      - name: Check known Go vulnerabilities
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          for module in Archon Client Server tools/builder; do
+            (cd "$module" && govulncheck ./...)
+          done
+
+      - name: Scan Git history for secrets
+        run: gitleaks git --redact --no-banner --verbose
+
+      - name: Check shell scripts
+        uses: ludeeus/action-shellcheck@00cae500b08a931fb5698e11e79bfbd38e612a38 # 2.0.0
+        with:
+          scandir: .
+          severity: warning
+
+  release-artifacts:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: 1.25.14
+          cache: false
+
+      - name: Install pinned SBOM generator
+        env:
+          GOTOOLCHAIN: local
+        run: go install github.com/anchore/syft/cmd/syft@v1.38.2
+
+      - name: Build release archives, checksums, and SBOMs
+        env:
+          GOTOOLCHAIN: local
+        run: ./scripts/build-release.sh
+
+      - name: Smoke-test the native artifact
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/unkn0wnc2-release
+          tar -xzf "dist/Unkn0wnC2-v$(tr -d '[:space:]' < VERSION)-linux-amd64.tar.gz" -C /tmp/unkn0wnc2-release
+          test -x "/tmp/unkn0wnc2-release/Unkn0wnC2-v$(tr -d '[:space:]' < VERSION)-linux-amd64/bin/unkn0wnc2"
+          sha256sum -c dist/SHA256SUMS
+
+      - name: Build and smoke-test the production container
+        run: |
+          set -euo pipefail
+          VERSION=$(tr -d '[:space:]' < VERSION)
+          COMMIT=$(git rev-parse HEAD)
+          BUILD_DATE=$(date -u -d "@$(git show -s --format=%ct HEAD)" +%Y-%m-%d)
+          IMAGE="unkn0wnc2:${VERSION}-${COMMIT}"
+          docker build --pull=false \
+            --build-arg VERSION="$VERSION" \
+            --build-arg GIT_COMMIT="$COMMIT" \
+            --build-arg BUILD_DATE="$BUILD_DATE" \
+            -f docker/Dockerfile.release -t "$IMAGE" .
+          test "$(docker image inspect --format '{{.Config.User}}' "$IMAGE")" = "10001:10001"
+          docker run --rm --entrypoint /opt/unkn0wnc2/unkn0wnc2 "$IMAGE" -h
+          docker image inspect --format '{{.Id}}' "$IMAGE" > "dist/Unkn0wnC2-v${VERSION}-linux-amd64.container-image-id.txt"
+          syft "docker:${IMAGE}" -q -o "cyclonedx-json=dist/Unkn0wnC2-v${VERSION}-linux-amd64.container.sbom.cdx.json"
+          (
+            cd dist
+            sha256sum ./*.container-image-id.txt ./*.container.sbom.cdx.json >> SHA256SUMS
+            sha256sum -c SHA256SUMS
+          )
+
+      - name: Upload release evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: Unkn0wnC2-release-candidate
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14

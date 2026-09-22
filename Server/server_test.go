@@ -2,12 +2,48 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestMasterTLSConfigPinsArchonCertificate(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer server.Close()
+	cert, err := x509.ParseCertificate(server.TLS.Certificates[0].Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
+	pin := base64.StdEncoding.EncodeToString(sum[:])
+
+	cfg, err := newMasterTLSConfig("", pin, false)
+	if err != nil {
+		t.Fatalf("newMasterTLSConfig() error = %v", err)
+	}
+	if cfg.VerifyConnection == nil {
+		t.Fatal("SPKI pin did not install VerifyConnection")
+	}
+	state := tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}}
+	if err := cfg.VerifyConnection(state); err != nil {
+		t.Fatalf("correct pin rejected: %v", err)
+	}
+	wrongPin := base64.StdEncoding.EncodeToString(make([]byte, sha256.Size))
+	wrong, err := newMasterTLSConfig("", wrongPin, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := wrong.VerifyConnection(state); err == nil {
+		t.Fatal("wrong SPKI pin accepted")
+	}
+}
 
 // =============================================================================
 // Crypto Tests
@@ -172,6 +208,93 @@ func TestC2ManagerEncryptionKey(t *testing.T) {
 // =============================================================================
 // Beacon/Client Tests
 // =============================================================================
+
+func TestBeaconQueryRejectsNonLabelDomainSuffix(t *testing.T) {
+	c2 := NewC2Manager(false, "testkey", StagerJitter{}, ":memory:", "example.com")
+	defer c2.db.Close()
+	encoded, err := encryptAndEncode("CHK|suffix-beacon|host|user|linux|amd64", c2.aesKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response, isC2, _ := c2.processBeaconQuery(encoded+".notexample.com", "127.0.0.1", nil); isC2 || response != "" {
+		t.Fatalf("confusing domain suffix accepted: response=%q isC2=%v", response, isC2)
+	}
+	if got := len(c2.GetBeacons()); got != 0 {
+		t.Fatalf("confusing domain suffix registered %d beacons, want 0", got)
+	}
+	if response, isC2, _ := c2.processBeaconQuery(encoded+".example.com.", "127.0.0.1", nil); !isC2 || response != "ACK" {
+		t.Fatalf("valid absolute query rejected: response=%q isC2=%v", response, isC2)
+	}
+	if got := len(c2.GetBeacons()); got != 1 {
+		t.Fatalf("valid absolute query registered %d beacons, want 1", got)
+	}
+}
+
+func TestPlainCheckInCannotDowngradeEncryptedBeacon(t *testing.T) {
+	c2 := NewC2Manager(false, "testkey", StagerJitter{}, ":memory:", "example.com")
+	defer c2.db.Close()
+	c2.beacons["victim"] = &Beacon{ID: "victim"}
+
+	msg := "CHK|victim|host|user|linux|amd64|00000"
+	response, handled, _ := c2.processBeaconQuery(base36EncodeString(msg)+".example.com", "127.0.0.1", nil)
+	if handled || response != "" {
+		t.Fatalf("plain check-in downgraded encrypted beacon: response=%q handled=%v", response, handled)
+	}
+	if got := c2.beacons["victim"].Encoding; got != "" {
+		t.Fatalf("beacon encoding changed to %q", got)
+	}
+}
+
+func TestTaskChunkRequestRequiresRegisteredTaskOwner(t *testing.T) {
+	c2 := NewC2Manager(false, "testkey", StagerJitter{}, ":memory:", "example.com")
+	defer c2.db.Close()
+
+	const taskID = "T0001"
+	c2.beacons["victim"] = &Beacon{ID: "victim", Encoding: "base36"}
+	c2.beacons["other"] = &Beacon{ID: "other", Encoding: "base36"}
+	c2.tasks[taskID] = &Task{ID: taskID, BeaconID: "victim", Command: strings.Repeat("x", MaxTaskChunkPayload+1)}
+
+	query := func(beaconID string) (string, bool) {
+		msg := fmt.Sprintf("TASKGET|%s|%s|1", beaconID, taskID)
+		response, handled, _ := c2.processBeaconQuery(base36EncodeString(msg)+".example.com", "127.0.0.1", nil)
+		return response, handled
+	}
+
+	if response, handled := query("ghost"); handled || response != "" {
+		t.Fatalf("unknown beacon received task data: response=%q handled=%v", response, handled)
+	}
+	if response, handled := query("other"); handled || response != "" {
+		t.Fatalf("non-owner beacon received task data: response=%q handled=%v", response, handled)
+	}
+	if response, handled := query("victim"); !handled || !strings.HasPrefix(response, "TASKC|"+taskID+"|") {
+		t.Fatalf("task owner did not receive task data: response=%q handled=%v", response, handled)
+	}
+}
+
+func TestResultDataRequiresRegisteredTaskOwner(t *testing.T) {
+	c2 := NewC2Manager(false, "testkey", StagerJitter{}, ":memory:", "example.com")
+	defer c2.db.Close()
+
+	const taskID = "T0002"
+	c2.beacons["victim"] = &Beacon{ID: "victim", Encoding: "base36"}
+	c2.tasks[taskID] = &Task{ID: taskID, BeaconID: "victim", Command: "whoami"}
+
+	send := func(beaconID string) (string, bool) {
+		msg := fmt.Sprintf("DATA|%s|%s|1|1|forged|00000", beaconID, taskID)
+		response, handled, _ := c2.processBeaconQuery(base36EncodeString(msg)+".example.com", "127.0.0.1", nil)
+		return response, handled
+	}
+
+	if response, handled := send("ghost"); handled || response != "" {
+		t.Fatalf("unknown beacon result accepted: response=%q handled=%v", response, handled)
+	}
+	if got := len(c2.expectedResults); got != 0 {
+		t.Fatalf("unknown beacon created %d result states, want 0", got)
+	}
+	if response, handled := send("victim"); !handled || response != "ACK" {
+		t.Fatalf("task owner result rejected: response=%q handled=%v", response, handled)
+	}
+}
 
 func TestBeaconRegistration(t *testing.T) {
 	c2 := NewC2Manager(true, "testkey", StagerJitter{JitterMinMs: 100, JitterMaxMs: 200}, ":memory:", "example.com")
@@ -708,9 +831,9 @@ func TestBuildTXTRData(t *testing.T) {
 		input    string
 		expected int // expected length (including length prefix)
 	}{
-		{"", 1},            // Empty string = single zero byte
-		{"ACK", 4},         // 3 chars + 1 length byte
-		{"NACK", 5},        // 4 chars + 1 length byte
+		{"", 1},                         // Empty string = single zero byte
+		{"ACK", 4},                      // 3 chars + 1 length byte
+		{"NACK", 5},                     // 4 chars + 1 length byte
 		{strings.Repeat("A", 255), 256}, // Max single segment
 	}
 
@@ -785,7 +908,7 @@ func TestIsBase36Label(t *testing.T) {
 		{"abc123", true},
 		{"0", true},
 		{"abcdefghijklmnopqrstuvwxyz0123456789", true},
-		{"ABC", false},  // uppercase not allowed
+		{"ABC", false},     // uppercase not allowed
 		{"abc-123", false}, // hyphen not allowed
 		{"abc.123", false}, // dot not allowed
 		{"", false},
@@ -1776,8 +1899,8 @@ func TestComms_EncryptedResponseFlag(t *testing.T) {
 	// Verify processBeaconQuery returns encrypted=true for encrypted beacons
 	// and encrypted=false for unencrypted beacons.
 	cases := []struct {
-		encoding  string
-		wantEncr  bool
+		encoding string
+		wantEncr bool
 	}{
 		{"aes-gcm-base36", true},
 		{"base36", false},

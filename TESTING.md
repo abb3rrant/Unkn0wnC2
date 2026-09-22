@@ -10,7 +10,7 @@ Four tiers of testing:
 
 | Tier | Scope | Where it runs | Gate |
 |------|-------|---------------|------|
-| Unit | Go tests per component (`Archon/`, `Client/`, `Server/`) | Go 1.24 toolchain | `go test` |
+| Unit | Go tests per component (`Archon/`, `Client/`, `Server/`) | Go 1.25.14 toolchain | `go test` |
 | HTTP transport E2E (Docker) | HTTPS listener, custom profiles, HTTP-only beacon, task/result, runtime push | `docker-wk` | `run-http-transport-tests.sh` |
 | Integration (Docker) | Live C2 stack: beacon check-in, task exec, Shadow Mesh | `docker-wk` | `run-tests.sh` |
 | Extended E2E (Docker) | DNS comms malleability, edge cases, all phase configs | `docker-wk` | `run-extended-tests.sh` |
@@ -27,7 +27,7 @@ both transports.
   `docker-wk.thebitcrypt.net` (Docker 20.10, Compose v2).
 - Source tree with the `docker/` directory (the Compose file and Dockerfile
   build from the repo root as context).
-- ~2 GB free disk. Compose images use `golang:1.24-bookworm` and pull Go module
+- ~2 GB free disk. Compose images use a digest-pinned Go 1.25.14 base and pull Go module
   deps on first build (subsequent builds are cached).
 - `jq`, `curl`, `sqlite3` — present inside the containers, no host install needed.
 
@@ -38,23 +38,16 @@ both transports.
 Each of `Archon/`, `Client/`, `Server/` is its own Go module.
 
 ```bash
-cd Archon && go test ./...   # server-side logic, DB, builder
-cd Server && go test ./...   # DNS server, comms formats, chunking
+cd Archon && go test ./...        # control plane, DB, builder
+cd Client && go test ./...        # beacon transports, framing, deduplication
+cd Server && go test ./...        # listener, DNS/HTTP, chunking, mesh behavior
+cd tools/builder && go test ./... # standalone builder utility
 ```
 
-These two modules build and test standalone with Go 1.24+ (SQLite temp DBs and
-in-memory tests; no network or Docker). Both are green: `Archon` (master
-package) and `Server` (dns-server) pass.
-
-> **Client module caveat:** `Client/` is **not** standalone-buildable in the
-> repo. The Archon builder generates `Client/config.go` (the `getConfig()`
-> function and embedded beacon configuration) into the build directory at build
-> time, and that generated file is not checked in. Running `go test ./...` in a
-> fresh `Client/` checkout fails to build with `main.go:52:9: undefined:
-> getConfig`. The `client_test.go` pure-function tests (crypto, base36, exfil
-> framing) run only through the Archon builder path. Do not "fix" this by
-> committing a stub `config.go` — the config is deliberately injected per build.
-> Client unit coverage is exercised through the Docker E2E path instead.
+All modules build and test from a clean checkout with Go 1.25.14+. `Client/` ships
+an inert `config_default.go` solely for compilation and tests. Archon writes
+`config.go` and builds with the `generated` tag for every deployable beacon, so
+the development configuration can never be included in an operator build.
 
 ---
 
@@ -70,6 +63,9 @@ package) and `Server` (dns-server) pass.
 ### 1) Bring up the core stack (this runs `setup` exactly once)
 
 ```bash
+export ENCRYPTION_KEY=$(openssl rand -hex 32)
+export JWT_SECRET=$(openssl rand -hex 32)
+export ADMIN_PASSWORD=$(openssl rand -hex 24)
 COMPOSE="docker compose -f docker/docker-compose.yml"
 
 $COMPOSE up -d archon dns1 dns2 client http-client setup
@@ -142,7 +138,7 @@ Exercises: A-record polling, unencrypted (base36) comms, staged registration,
 large-result exfiltration (chunked), rapid consecutive tasks, minimal-output
 edge cases, special characters, and multi-beacon/domain failover.
 
-Expected: **ALL TESTS PASSED** (some beacons may be reported `SKIP` only if a
+Expected: **ALL TESTS PASSED (14/14)** (some beacons may be reported `SKIP` only if a
 specific variant binary did not build; a failed required test fails the run).
 
 ### 5) Teardown
@@ -168,8 +164,9 @@ Treat skipped/timed-out/unavailable stages as **incomplete**, not passing.
 
 ## Secrets & data handling
 
-- Test credentials are non-secret defaults defined in `docker-compose.yml`
-  (`ADMIN_PASSWORD=TestAdmin2026!`, fixed `ENCRYPTION_KEY`/`JWT_SECRET`).
+- Compose refuses to start unless `ADMIN_PASSWORD`, `ENCRYPTION_KEY`, and
+  `JWT_SECRET` are supplied. Generate disposable values for each run as shown
+  above; never reuse production credentials.
 - Never place real `.env`, private keys, or production credentials in the
   Compose environment or test scripts.
 

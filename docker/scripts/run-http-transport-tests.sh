@@ -8,7 +8,7 @@
 # A benign command/result round trip proves task delivery and result submission.
 
 ARCHON_URL="${ARCHON_URL:-https://172.20.0.10:8443}"
-ADMIN_PASS="${ADMIN_PASSWORD:-TestAdmin2026!}"
+ADMIN_PASS="${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}"
 LISTENER_URL="${LISTENER_URL:-https://172.20.0.11:8443}"
 COOKIE_JAR="/tmp/http-transport-cookies.txt"
 PASSED=0
@@ -22,7 +22,7 @@ pass() { PASSED=$((PASSED + 1)); TOTAL=$((TOTAL + 1)); green "  PASS: $1"; }
 fail() { FAILED=$((FAILED + 1)); TOTAL=$((TOTAL + 1)); red   "  FAIL: $1 — $2"; }
 
 login() {
-    for attempt in $(seq 1 10); do
+    for _ in $(seq 1 10); do
         HTTP_CODE=$(curl -ks -c "$COOKIE_JAR" \
             -X POST "${ARCHON_URL}/api/auth/login" \
             -H "Content-Type: application/json" \
@@ -61,6 +61,18 @@ api_get() {
     curl -ks -b "$COOKIE_JAR" -H "X-CSRF-Token: ${CSRF_TOKEN}" "${ARCHON_URL}$1"
 }
 
+wait_listener() {
+    for _ in $(seq 1 30); do
+        local code
+        code=$(curl -ks --connect-timeout 2 --max-time 3 -o /dev/null -w "%{http_code}" "${LISTENER_URL}/not/a/route" || true)
+        if [ "$code" != "000" ]; then
+            return 0
+        fi
+        sleep 2
+    done
+    return 1
+}
+
 wait_result() {
     local task_id="$1"
     for _ in $(seq 1 40); do
@@ -91,6 +103,11 @@ fi
 # ---------------------------------------------------------------------------
 echo ""
 echo "[Listener]"
+
+if ! wait_listener; then
+    red "  FATAL: HTTPS listener did not become ready"
+    exit 1
+fi
 
 # An unmatched path must return the profile's not-found status with an empty body,
 # so a scanner cannot tell a wrong path from a wrong signature.

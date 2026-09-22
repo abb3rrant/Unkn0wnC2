@@ -41,6 +41,7 @@ type transportManager struct {
 
 	mode       string
 	transports []*httpTransport
+	c2Key      []byte
 
 	// fallbackAfter is how many consecutive HTTP failures make a dual-mode
 	// beacon use the DNS path.
@@ -73,6 +74,7 @@ func newTransportManager(cfg *Config, aesKey []byte) *transportManager {
 		mode:          normalizeTransportMode(cfg.Transport),
 		fallbackAfter: cfg.HTTPFallbackAfterFailures,
 		backoff:       time.Duration(cfg.HTTPRetryBackoffSecs) * time.Second,
+		c2Key:         append([]byte(nil), aesKey...),
 	}
 
 	if manager.fallbackAfter <= 0 {
@@ -249,7 +251,7 @@ func (m *transportManager) ApplyUpdate(payload string) error {
 	}
 
 	m.mu.RLock()
-	key := m.aesKey()
+	key := append([]byte(nil), m.c2Key...)
 	m.mu.RUnlock()
 
 	var transports []*httpTransport
@@ -284,13 +286,4 @@ func (m *transportManager) ApplyUpdate(payload string) error {
 	m.lastErr = nil
 
 	return nil
-}
-
-// aesKey returns the key shared by the live transports. All transports for a
-// beacon use the same C2 key, so the first one is representative.
-func (m *transportManager) aesKey() []byte {
-	if len(m.transports) == 0 {
-		return nil
-	}
-	return m.transports[0].aesKey
 }

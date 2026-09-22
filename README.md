@@ -12,8 +12,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/version-0.9.0-blue" alt="Version"/>
   <img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="License"/>
-  <img src="https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go" alt="Go"/>
-  <img src="https://img.shields.io/badge/Rust-1.70+-orange?logo=rust" alt="Rust"/>
+  <img src="https://img.shields.io/badge/Go-1.25.14+-00ADD8?logo=go" alt="Go"/>
   <img src="https://img.shields.io/badge/C-99-A8B9CC?logo=c" alt="C"/>
 </p>
 
@@ -127,7 +126,7 @@ APTs are more than capable of building custom tooling with extensive post-exploi
 ### Prerequisites
 - Linux server with public IP
 - Domain(s) with NS records pointing to your server
-- Go 1.24+, Rust 1.70+, GCC (build script checks all dependencies)
+- Go 1.25.14+ and GCC with the required cross-compilers (the build script checks all dependencies)
 
 **Archon Server:** 2 CPU / 2 GB RAM minimum. 4 GB recommended if exfiltrating large files with aggressive timings.
 **Listeners:** 1 CPU / 512 MB RAM is sufficient.

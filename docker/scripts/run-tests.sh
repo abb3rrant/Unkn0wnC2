@@ -2,7 +2,7 @@
 set -e
 
 ARCHON_URL="${ARCHON_URL:-https://172.20.0.10:8443}"
-ADMIN_PASS="${ADMIN_PASSWORD:-TestAdmin2026!}"
+ADMIN_PASS="${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}"
 COOKIE_JAR="/tmp/test-cookies.txt"
 PASSED=0
 FAILED=0
@@ -17,7 +17,7 @@ fail() { FAILED=$((FAILED + 1)); TOTAL=$((TOTAL + 1)); red   "  FAIL: $1 — $2"
 
 # Authenticate with retries (SQLite contention under load)
 login() {
-    for attempt in $(seq 1 10); do
+    for _ in $(seq 1 10); do
         HTTP_CODE=$(curl -ks -c "$COOKIE_JAR" \
             -X POST "${ARCHON_URL}/api/auth/login" \
             -H "Content-Type: application/json" \
@@ -47,7 +47,7 @@ api_post() {
 wait_result() {
     local task_id="$1"
     local timeout_iters="${2:-12}"
-    for i in $(seq 1 "$timeout_iters"); do
+    for _ in $(seq 1 "$timeout_iters"); do
         local STATUS RESULT_DATA
         STATUS=$(api_get "/api/tasks/${task_id}" | jq -r '.status // ""' 2>/dev/null) || true
         if [ "$STATUS" = "completed" ] || [ "$STATUS" = "failed" ]; then
@@ -96,7 +96,7 @@ yellow "--- Go Beacon Check-in ---"
 
 BEACON_FOUND=false
 BEACON_ID=""
-for i in $(seq 1 12); do
+for _ in $(seq 1 12); do
     BEACONS=$(api_get "/api/beacons")
     # API returns {"beacons":[...]} not {"data":[...]}
     BEACON_COUNT=$(echo "$BEACONS" | jq -r '.beacons | length // 0')
@@ -166,7 +166,7 @@ if [ -x "$MESH_BINARY" ]; then
     echo "       Started mesh beacon (PID: ${MESH_PID})"
 
     MESH_FOUND=false
-    for i in $(seq 1 12); do
+    for _ in $(seq 1 12); do
         login
         BEACONS3=$(api_get "/api/beacons")
         BEACON_COUNT3=$(echo "$BEACONS3" | jq -r '.beacons | length // 0')

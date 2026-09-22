@@ -2,10 +2,10 @@ module unkn0wnc2/master
 
 go 1.24.0
 
-toolchain go1.24.1
+toolchain go1.25.14
 
 require (
-	github.com/golang-jwt/jwt/v5 v5.2.0
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/gorilla/mux v1.8.1
 	github.com/gorilla/websocket v1.5.3
 	golang.org/x/crypto v0.18.0

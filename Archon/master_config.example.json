@@ -4,8 +4,10 @@
   "tls_cert": "certs/master.crt",
   "tls_key": "certs/master.key",
   "database_path": "master.db",
+  "encryption_key": "CHANGE_ME_GENERATED_WITH_OPENSSL_RAND_HEX_16",
   "jwt_secret": "CHANGE_THIS_SECRET_IN_PRODUCTION",
   "session_timeout": 60,
+  "trusted_proxy_cidrs": [],
   "debug": false,
   "dns_servers": [
     {

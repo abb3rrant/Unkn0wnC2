@@ -1627,14 +1627,9 @@ func (d *MasterDatabase) GetActiveBeaconsPaginated(minutesThreshold, limit, offs
 		ORDER BY last_seen DESC
 	`
 
-	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
-	}
-	if offset > 0 {
-		query += fmt.Sprintf(" OFFSET %d", offset)
-	}
-
-	rows, err := d.db.Query(query, threshold)
+	query, paginationArgs := appendPagination(query, limit, offset)
+	args := append([]interface{}{threshold}, paginationArgs...)
+	rows, err := d.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1671,6 +1666,19 @@ func (d *MasterDatabase) GetActiveBeaconsPaginated(minutesThreshold, limit, offs
 	return beacons, rows.Err()
 }
 
+func appendPagination(query string, limit, offset int) (string, []interface{}) {
+	if offset < 0 {
+		offset = 0
+	}
+	if limit > 0 {
+		return query + " LIMIT ? OFFSET ?", []interface{}{limit, offset}
+	}
+	if offset > 0 {
+		return query + " LIMIT -1 OFFSET ?", []interface{}{offset}
+	}
+	return query, nil
+}
+
 // GetAllBeaconsPaginated retrieves all beacons with pagination support (no time filter)
 // This preserves history - beacons are shown regardless of when they last checked in
 func (d *MasterDatabase) GetAllBeaconsPaginated(limit, offset int) ([]Beacon, error) {
@@ -1686,14 +1694,8 @@ func (d *MasterDatabase) GetAllBeaconsPaginated(limit, offset int) ([]Beacon, er
 		ORDER BY last_seen DESC
 	`
 
-	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
-	}
-	if offset > 0 {
-		query += fmt.Sprintf(" OFFSET %d", offset)
-	}
-
-	rows, err := d.db.Query(query)
+	query, args := appendPagination(query, limit, offset)
+	rows, err := d.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -3013,11 +3015,8 @@ func (d *MasterDatabase) GetStagerSessions(limit int) ([]StagerSession, error) {
 		ORDER BY s.created_at DESC
 	`
 
-	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
-	}
-
-	rows, err := d.db.Query(query)
+	query, args := appendPagination(query, limit, 0)
+	rows, err := d.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -3720,14 +3719,8 @@ func (d *MasterDatabase) GetAllTasksPaginated(limit, offset int) ([]Task, error)
 		ORDER BY t.created_at DESC
 	`
 
-	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
-	}
-	if offset > 0 {
-		query += fmt.Sprintf(" OFFSET %d", offset)
-	}
-
-	rows, err := d.db.Query(query)
+	query, args := appendPagination(query, limit, offset)
+	rows, err := d.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}

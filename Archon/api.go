@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net"
 	"net/http"
 	"os"
@@ -28,14 +29,27 @@ import (
 	"github.com/gorilla/mux"
 )
 
+const maxAPIRequestBodyBytes = 4 << 20 // 4 MiB
+
+func securityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' wss:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
+		next.ServeHTTP(w, r)
+	})
+}
+
 // APIServer wraps the HTTP server and provides API functionality
 type APIServer struct {
 	db                       *MasterDatabase
 	config                   Config
 	jwtSecret                []byte
-	authLimiter              *RateLimiter      // Rate limiter for auth endpoints
-	apiLimiter               *RateLimiter      // Rate limiter for API endpoints
-	dnsLimiter               *RateLimiter      // Rate limiter for DNS server endpoints
+	authLimiter              *RateLimiter // Rate limiter for auth endpoints
+	apiLimiter               *RateLimiter // Rate limiter for API endpoints
+	dnsLimiter               *RateLimiter // Rate limiter for DNS server endpoints
+	trustedProxyNets         []*net.IPNet
 	dnsServerDomainCache     map[string]string // key: server ID, value: domain
 	dnsServerDomainCacheMu   sync.RWMutex
 	dnsServerDomainCacheTime time.Time
@@ -43,6 +57,13 @@ type APIServer struct {
 
 // NewAPIServer creates a new API server instance
 func NewAPIServer(db *MasterDatabase, config Config) *APIServer {
+	trustedProxyNets := make([]*net.IPNet, 0, len(config.TrustedProxyCIDRs))
+	for _, cidr := range config.TrustedProxyCIDRs {
+		if _, network, err := net.ParseCIDR(cidr); err == nil {
+			trustedProxyNets = append(trustedProxyNets, network)
+		}
+	}
+
 	return &APIServer{
 		db:                   db,
 		config:               config,
@@ -50,7 +71,75 @@ func NewAPIServer(db *MasterDatabase, config Config) *APIServer {
 		authLimiter:          NewRateLimiter(5, time.Minute),    // 5 login attempts per minute
 		apiLimiter:           NewRateLimiter(100, time.Minute),  // 100 API requests per minute
 		dnsLimiter:           NewRateLimiter(1000, time.Minute), // 1000 DNS server API calls per minute
+		trustedProxyNets:     trustedProxyNets,
 		dnsServerDomainCache: make(map[string]string),
+	}
+}
+
+func (api *APIServer) isTrustedProxy(ip net.IP) bool {
+	for _, network := range api.trustedProxyNets {
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// clientIP returns the first untrusted hop, walking forwarding headers from the
+// socket peer toward the client. Headers are ignored unless the immediate peer
+// is explicitly configured as a trusted proxy.
+func (api *APIServer) clientIP(r *http.Request) string {
+	host := r.RemoteAddr
+	if parsed, _, err := net.SplitHostPort(host); err == nil {
+		host = parsed
+	}
+	peer := net.ParseIP(host)
+	if peer == nil || !api.isTrustedProxy(peer) {
+		return host
+	}
+
+	var hops []string
+	for _, value := range r.Header.Values("X-Forwarded-For") {
+		for _, hop := range strings.Split(value, ",") {
+			hops = append(hops, strings.TrimSpace(hop))
+		}
+	}
+	if len(hops) == 0 {
+		if realIP := strings.TrimSpace(r.Header.Get("X-Real-IP")); realIP != "" {
+			hops = append(hops, realIP)
+		}
+	}
+	for i := len(hops) - 1; i >= 0; i-- {
+		ip := net.ParseIP(hops[i])
+		if ip == nil {
+			continue
+		}
+		host = ip.String()
+		if !api.isTrustedProxy(ip) {
+			return host
+		}
+	}
+	return host
+}
+
+func requireRoles(roles ...string) func(http.Handler) http.Handler {
+	allowed := make(map[string]struct{}, len(roles))
+	for _, role := range roles {
+		allowed[role] = struct{}{}
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if _, ok := allowed[r.Header.Get("X-Operator-Role")]; !ok {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				_ = json.NewEncoder(w).Encode(ErrorResponse{
+					Error:   http.StatusText(http.StatusForbidden),
+					Message: "insufficient permissions",
+				})
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
 	}
 }
 
@@ -244,6 +333,34 @@ type TaskProgressRequest struct {
 
 // Middleware
 
+// requestBodyLimitMiddleware bounds every API request before authentication or
+// JSON decoding. This includes the public login and listener registration paths.
+func (api *APIServer) requestBodyLimitMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body == nil || (r.Method != http.MethodPost && r.Method != http.MethodPut &&
+			r.Method != http.MethodPatch && r.Method != http.MethodDelete) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if r.ContentLength > maxAPIRequestBodyBytes {
+			api.sendError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
+		body, err := io.ReadAll(io.LimitReader(r.Body, maxAPIRequestBodyBytes+1))
+		_ = r.Body.Close()
+		if err != nil {
+			api.sendError(w, http.StatusBadRequest, "failed to read request body")
+			return
+		}
+		if len(body) > maxAPIRequestBodyBytes {
+			api.sendError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		next.ServeHTTP(w, r)
+	})
+}
+
 // loggingMiddleware logs all API requests
 func (api *APIServer) loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -267,20 +384,7 @@ func (api *APIServer) loggingMiddleware(next http.Handler) http.Handler {
 func (api *APIServer) rateLimitMiddleware(limiter *RateLimiter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Extract IP address
-			ip := r.RemoteAddr
-			if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-				// Use first IP in X-Forwarded-For chain
-				ip = strings.Split(forwarded, ",")[0]
-				ip = strings.TrimSpace(ip)
-			} else if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
-				ip = realIP
-			}
-
-			// Strip port if present
-			if host, _, err := net.SplitHostPort(ip); err == nil {
-				ip = host
-			}
+			ip := api.clientIP(r)
 
 			// Check rate limit
 			if !limiter.Allow(ip) {
@@ -395,11 +499,20 @@ func (api *APIServer) authMiddleware(next http.Handler) http.Handler {
 			}
 		}
 
-		// Add claims to request context for handlers to use
+		// Resolve authorization state from the database on every request. JWT role
+		// claims are a login-time snapshot; using them directly would let a disabled
+		// or demoted operator retain access until token expiry.
+		operator, err := api.db.GetOperator(claims.OperatorID)
+		if err != nil || operator.ID == "" || !operator.IsActive {
+			api.sendError(w, http.StatusUnauthorized, "operator account is unavailable")
+			return
+		}
+
+		// Add current operator state to request headers for handlers to use.
 		r = r.WithContext(r.Context())
-		r.Header.Set("X-Operator-ID", claims.OperatorID)
-		r.Header.Set("X-Operator-Username", claims.Username)
-		r.Header.Set("X-Operator-Role", claims.Role)
+		r.Header.Set("X-Operator-ID", operator.ID)
+		r.Header.Set("X-Operator-Username", operator.Username)
+		r.Header.Set("X-Operator-Role", operator.Role)
 		r.Header.Set("X-JWT-ID", claims.JTI) // Add JTI for logout handler
 
 		next.ServeHTTP(w, r)
@@ -448,15 +561,6 @@ func (api *APIServer) dnsServerAuthMiddleware(next http.Handler) http.Handler {
 			apiKey = r.URL.Query().Get("api_key")
 		}
 
-		// Special handling for registration endpoint - allow with missing or unverified credentials
-		if strings.HasSuffix(r.URL.Path, "/register") {
-			// Store the extracted IDs for handler use (even if empty, handler will validate)
-			r.Header.Set("X-DNS-Server-ID", dnsServerID)
-			r.Header.Set("X-DNS-Server-APIKey", apiKey)
-			next.ServeHTTP(w, r)
-			return
-		}
-
 		if dnsServerID == "" || apiKey == "" {
 			api.sendError(w, http.StatusUnauthorized, "missing dns_server_id or api_key")
 			return
@@ -485,6 +589,7 @@ func (api *APIServer) dnsServerAuthMiddleware(next http.Handler) http.Handler {
 
 func (api *APIServer) sendError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(ErrorResponse{
 		Error:   http.StatusText(status),
@@ -494,6 +599,7 @@ func (api *APIServer) sendError(w http.ResponseWriter, status int, message strin
 
 func (api *APIServer) sendSuccess(w http.ResponseWriter, message string, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(SuccessResponse{
 		Success: true,
@@ -504,6 +610,7 @@ func (api *APIServer) sendSuccess(w http.ResponseWriter, message string, data in
 
 func (api *APIServer) sendJSON(w http.ResponseWriter, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(data)
 }
@@ -634,6 +741,7 @@ func (api *APIServer) handleLogout(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
 		MaxAge:   -1, // Delete cookie immediately
 	})
 	http.SetCookie(w, &http.Cookie{
@@ -642,6 +750,7 @@ func (api *APIServer) handleLogout(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		HttpOnly: false,
 		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
 		MaxAge:   -1, // Delete cookie immediately
 	})
 
@@ -1893,22 +2002,16 @@ func (api *APIServer) handleDNSServerRegistration(w http.ResponseWriter, r *http
 		return
 	}
 
-	// Check if this is an existing DNS server (re-registration) or new registration
+	// The builder pre-provisions the record and credentials before producing the
+	// listener artifact. Middleware has already authenticated those credentials;
+	// registration is therefore a metadata refresh, never an enrollment path.
 	existingValid, err := api.db.VerifyDNSServerAPIKey(req.ServerID, req.APIKey)
-	if err == nil && existingValid {
-		// Server exists and API key is valid - this is a re-registration (e.g., server restart)
-		// Update the record
-		if api.config.Debug {
-			fmt.Printf("[API] DNS server re-registration: %s (%s)\n", req.ServerID, req.Domain)
-		}
-	} else {
-		// Either server doesn't exist or API key is invalid
-		// This should be a first-time registration from a built binary
-		// The builder should have already created the record, so verify the API key matches
-		// what was embedded in the binary at build time
-		if api.config.Debug {
-			fmt.Printf("[API] DNS server first-time registration: %s (%s)\n", req.ServerID, req.Domain)
-		}
+	if err != nil || !existingValid {
+		api.sendError(w, http.StatusUnauthorized, "invalid credentials")
+		return
+	}
+	if api.config.Debug {
+		fmt.Printf("[API] DNS server re-registration: %s (%s)\n", req.ServerID, req.Domain)
 	}
 
 	// Update or insert DNS server record
@@ -2653,6 +2756,23 @@ func (api *APIServer) handleGetExfilTransfer(w http.ResponseWriter, r *http.Requ
 	api.sendSuccess(w, "exfil transfer retrieved", transfer)
 }
 
+func downloadDisposition(fileName string) (string, string) {
+	safeName := filepath.Base(strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f || r == '"' || r == '\\' {
+			return -1
+		}
+		return r
+	}, fileName))
+	if safeName == "" || safeName == "." {
+		safeName = "artifact.bin"
+	}
+	disposition := mime.FormatMediaType("attachment", map[string]string{"filename": safeName})
+	if disposition == "" {
+		return `attachment; filename="artifact.bin"`, "artifact.bin"
+	}
+	return disposition, safeName
+}
+
 func (api *APIServer) handleDownloadExfilArtifact(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	sessionID := vars["id"]
@@ -2675,14 +2795,16 @@ func (api *APIServer) handleDownloadExfilArtifact(w http.ResponseWriter, r *http
 		fileName = sessionID + ".bin"
 	}
 
+	disposition, safeName := downloadDisposition(fileName)
 	reader := bytes.NewReader(data)
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", fileName))
+	w.Header().Set("Content-Disposition", disposition)
+	w.Header().Set("Cache-Control", "no-store")
 	if sha != "" {
 		w.Header().Set("X-Exfil-SHA256", sha)
 	}
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
-	http.ServeContent(w, r, fileName, time.Now(), reader)
+	http.ServeContent(w, r, safeName, time.Now(), reader)
 }
 
 // Stager Management Handlers
@@ -3371,8 +3493,10 @@ func (api *APIServer) panicRecoveryMiddleware(next http.Handler) http.Handler {
 
 // SetupRoutes configures all API routes
 func (api *APIServer) SetupRoutes(router *mux.Router) {
-	// Add panic recovery middleware to all routes
+	// Add recovery and request-size protection to every route before auth/body parsing.
+	router.Use(securityHeadersMiddleware)
 	router.Use(api.panicRecoveryMiddleware)
+	router.Use(api.requestBodyLimitMiddleware)
 
 	// Web UI endpoints (serve HTML)
 	router.HandleFunc("/", api.handleRoot).Methods("GET")
@@ -3411,6 +3535,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	operatorRouter.Use(api.rateLimitMiddleware(api.apiLimiter))
 	operatorRouter.Use(api.authMiddleware)
 	operatorRouter.Use(api.csrfMiddleware) // CSRF protection for web UI
+	operatorWrite := requireRoles("admin", "operator")
 
 	operatorRouter.HandleFunc("/auth/logout", api.handleLogout).Methods("POST")
 	operatorRouter.HandleFunc("/auth/me", api.handleCurrentUser).Methods("GET")
@@ -3425,19 +3550,19 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	operatorRouter.HandleFunc("/operators/{id}/status", api.handleToggleOperatorStatus).Methods("POST")
 
 	operatorRouter.HandleFunc("/dns-servers", api.handleListDNSServers).Methods("GET")
-	operatorRouter.HandleFunc("/dns-servers/{id}", api.handleDeleteDNSServer).Methods("DELETE")
+	operatorRouter.Handle("/dns-servers/{id}", operatorWrite(http.HandlerFunc(api.handleDeleteDNSServer))).Methods("DELETE")
 	operatorRouter.HandleFunc("/beacons", api.handleListBeacons).Methods("GET")
 	operatorRouter.HandleFunc("/beacons/{id}", api.handleGetBeacon).Methods("GET")
 	operatorRouter.HandleFunc("/beacons/{id}/build-config", api.handleGetBeaconBuildConfig).Methods("GET")
 	operatorRouter.HandleFunc("/beacons/{id}/dns-contacts", api.handleGetBeaconDNSContacts).Methods("GET")
 	operatorRouter.HandleFunc("/beacons/{id}/domains", api.handleGetBeaconDomains).Methods("GET")
-	operatorRouter.HandleFunc("/beacons/{id}/domains", api.handleUpdateBeaconDomain).Methods("PUT")
-	operatorRouter.HandleFunc("/beacons/{id}/domains", api.handleAddBeaconDomain).Methods("POST")
-	operatorRouter.HandleFunc("/beacons/{id}", api.handleDeleteBeacon).Methods("DELETE")
-	operatorRouter.HandleFunc("/beacons/{id}/task", api.handleCreateTask).Methods("POST")
+	operatorRouter.Handle("/beacons/{id}/domains", operatorWrite(http.HandlerFunc(api.handleUpdateBeaconDomain))).Methods("PUT")
+	operatorRouter.Handle("/beacons/{id}/domains", operatorWrite(http.HandlerFunc(api.handleAddBeaconDomain))).Methods("POST")
+	operatorRouter.Handle("/beacons/{id}", operatorWrite(http.HandlerFunc(api.handleDeleteBeacon))).Methods("DELETE")
+	operatorRouter.Handle("/beacons/{id}/task", operatorWrite(http.HandlerFunc(api.handleCreateTask))).Methods("POST")
 	operatorRouter.HandleFunc("/tasks", api.handleListTasks).Methods("GET")
 	operatorRouter.HandleFunc("/tasks/{id}", api.handleGetTask).Methods("GET")
-	operatorRouter.HandleFunc("/tasks/{id}", api.handleDeleteTask).Methods("DELETE")
+	operatorRouter.Handle("/tasks/{id}", operatorWrite(http.HandlerFunc(api.handleDeleteTask))).Methods("DELETE")
 	operatorRouter.HandleFunc("/tasks/{id}/result", api.handleGetTaskResult).Methods("GET")
 	operatorRouter.HandleFunc("/tasks/{id}/progress", api.handleGetTaskProgress).Methods("GET")
 	operatorRouter.HandleFunc("/tasks/{id}/status", api.handleGetTaskStatus).Methods("GET")
@@ -3448,37 +3573,37 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	operatorRouter.HandleFunc("/exfil/transfers/{id}/download", api.handleDownloadExfilArtifact).Methods("GET")
 
 	// Builder endpoints
-	operatorRouter.HandleFunc("/builder/dns-server", api.handleBuildDNSServer).Methods("POST")
-	operatorRouter.HandleFunc("/builder/client", api.handleBuildClient).Methods("POST")
+	operatorRouter.Handle("/builder/dns-server", operatorWrite(http.HandlerFunc(api.handleBuildDNSServer))).Methods("POST")
+	operatorRouter.Handle("/builder/client", operatorWrite(http.HandlerFunc(api.handleBuildClient))).Methods("POST")
 	operatorRouter.HandleFunc("/builder/client-binaries", api.handleListClientBinaries).Methods("GET")
-	operatorRouter.HandleFunc("/builder/stager", api.handleBuildStager).Methods("POST")
+	operatorRouter.Handle("/builder/stager", operatorWrite(http.HandlerFunc(api.handleBuildStager))).Methods("POST")
 	operatorRouter.HandleFunc("/builder/builds", api.handleListBuilds).Methods("GET")
 	operatorRouter.HandleFunc("/builder/builds/download", api.handleDownloadBuild).Methods("GET")
-	operatorRouter.HandleFunc("/builder/builds/delete", api.handleDeleteBuild).Methods("DELETE")
+	operatorRouter.Handle("/builder/builds/delete", operatorWrite(http.HandlerFunc(api.handleDeleteBuild))).Methods("DELETE")
 
 	// Malleable HTTP listener profiles
 	operatorRouter.HandleFunc("/http/profiles", api.handleListHTTPProfiles).Methods("GET")
-	operatorRouter.HandleFunc("/http/profiles", api.handleSaveHTTPProfile).Methods("POST")
+	operatorRouter.Handle("/http/profiles", operatorWrite(http.HandlerFunc(api.handleSaveHTTPProfile))).Methods("POST")
 	operatorRouter.HandleFunc("/http/profiles/{name}", api.handleGetHTTPProfile).Methods("GET")
-	operatorRouter.HandleFunc("/http/profiles/{name}", api.handleDeleteHTTPProfile).Methods("DELETE")
-	operatorRouter.HandleFunc("/http/transport", api.handlePushTransportUpdate).Methods("POST")
+	operatorRouter.Handle("/http/profiles/{name}", operatorWrite(http.HandlerFunc(api.handleDeleteHTTPProfile))).Methods("DELETE")
+	operatorRouter.Handle("/http/transport", operatorWrite(http.HandlerFunc(api.handlePushTransportUpdate))).Methods("POST")
 
 	// Stager session endpoints
 	operatorRouter.HandleFunc("/stager/sessions", api.handleListStagerSessions).Methods("GET")
 	operatorRouter.HandleFunc("/stager/sessions/{id}", api.handleGetStagerSession).Methods("GET")
-	operatorRouter.HandleFunc("/stager/sessions/{id}", api.handleDeleteStagerSession).Methods("DELETE")
-	operatorRouter.HandleFunc("/stager/sessions/{id}/status", api.handleUpdateStagerSessionStatus).Methods("PATCH")
+	operatorRouter.Handle("/stager/sessions/{id}", operatorWrite(http.HandlerFunc(api.handleDeleteStagerSession))).Methods("DELETE")
+	operatorRouter.Handle("/stager/sessions/{id}/status", operatorWrite(http.HandlerFunc(api.handleUpdateStagerSessionStatus))).Methods("PATCH")
 
 	// Exfil transfer management endpoints
-	operatorRouter.HandleFunc("/exfil/transfers/{id}", api.handleDeleteExfilTransfer).Methods("DELETE")
-	operatorRouter.HandleFunc("/exfil/transfers/{id}/status", api.handleUpdateExfilTransferStatus).Methods("PATCH")
+	operatorRouter.Handle("/exfil/transfers/{id}", operatorWrite(http.HandlerFunc(api.handleDeleteExfilTransfer))).Methods("DELETE")
+	operatorRouter.Handle("/exfil/transfers/{id}/status", operatorWrite(http.HandlerFunc(api.handleUpdateExfilTransferStatus))).Methods("PATCH")
 
 	// Task management endpoints
-	operatorRouter.HandleFunc("/tasks/{id}/status", api.handleUpdateTaskStatus).Methods("PATCH")
+	operatorRouter.Handle("/tasks/{id}/status", operatorWrite(http.HandlerFunc(api.handleUpdateTaskStatus))).Methods("PATCH")
 
 	// Bulk operation endpoints
-	operatorRouter.HandleFunc("/tasks/bulk", api.handleBulkTaskAction).Methods("POST")
-	operatorRouter.HandleFunc("/beacons/bulk/task", api.handleBulkBeaconTask).Methods("POST")
+	operatorRouter.Handle("/tasks/bulk", operatorWrite(http.HandlerFunc(api.handleBulkTaskAction))).Methods("POST")
+	operatorRouter.Handle("/beacons/bulk/task", operatorWrite(http.HandlerFunc(api.handleBulkBeaconTask))).Methods("POST")
 
 	// Log viewing endpoints
 	operatorRouter.HandleFunc("/logs", api.handleGetLogs).Methods("GET")
@@ -3490,8 +3615,8 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	// Listener management: a DNS server is a listener that answers DNS and serves the
 	// HTTP profiles assigned to it.
 	operatorRouter.HandleFunc("/listeners/{id}", api.handleGetListener).Methods("GET")
-	operatorRouter.HandleFunc("/listeners/{id}/http-profiles", api.handleAssignHTTPProfile).Methods("POST")
-	operatorRouter.HandleFunc("/listeners/{id}/http-profiles/{name}", api.handleUnassignHTTPProfile).Methods("DELETE")
+	operatorRouter.Handle("/listeners/{id}/http-profiles", operatorWrite(http.HandlerFunc(api.handleAssignHTTPProfile))).Methods("POST")
+	operatorRouter.Handle("/listeners/{id}/http-profiles/{name}", operatorWrite(http.HandlerFunc(api.handleUnassignHTTPProfile))).Methods("DELETE")
 
 	// DNS server endpoints (API key auth required) - with high rate limits
 	dnsRouter := router.PathPrefix("/api/dns-server").Subrouter()
@@ -3584,9 +3709,9 @@ func (api *APIServer) handleExfilsPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *APIServer) handleLogsPage(w http.ResponseWriter, r *http.Request) {
-	http.ServeFile(w, r, filepath.Join(api.config.WebRoot, "logs.html"))
+	serveNoCache(w, r, filepath.Join(api.config.WebRoot, "logs.html"))
 }
 
 func (api *APIServer) handleReportPage(w http.ResponseWriter, r *http.Request) {
-	http.ServeFile(w, r, filepath.Join(api.config.WebRoot, "report.html"))
+	serveNoCache(w, r, filepath.Join(api.config.WebRoot, "report.html"))
 }

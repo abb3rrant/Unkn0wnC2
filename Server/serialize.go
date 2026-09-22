@@ -33,7 +33,7 @@ func appendName(b []byte, name string) ([]byte, error) {
 			continue
 		}
 		if len(lab) > 63 {
-			return nil, fmt.Errorf("DNS label exceeds 63 bytes (%d): %.20s...", len(lab), lab)
+			return nil, fmt.Errorf("DNS label exceeds 63 bytes (%d): %.20s", len(lab), lab)
 		}
 		b = append(b, byte(len(lab)))
 		b = append(b, lab...)
@@ -64,7 +64,7 @@ func appendNameCompressed(b []byte, name string, nameOffsets map[string]int) ([]
 			continue
 		}
 		if len(lab) > 63 {
-			return nil, fmt.Errorf("DNS label exceeds 63 bytes (%d): %.20s...", len(lab), lab)
+			return nil, fmt.Errorf("DNS label exceeds 63 bytes (%d): %.20s", len(lab), lab)
 		}
 		b = append(b, byte(len(lab)))
 		b = append(b, lab...)

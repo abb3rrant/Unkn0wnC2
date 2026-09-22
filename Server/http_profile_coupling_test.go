@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -68,7 +69,7 @@ func startListenerFor(t *testing.T, c2 *C2Manager, dir string, profile *HTTPProf
 	if err := listener.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	t.Cleanup(func() { listener.Stop(nil) })
+	t.Cleanup(func() { listener.Stop(context.Background()) })
 
 	return listener, "http://" + listener.Addr(), store
 }

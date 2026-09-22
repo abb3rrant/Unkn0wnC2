@@ -305,21 +305,21 @@ func (p *HTTPProfile) applyDefaults() {
 // what to fix, and is shared by the listener and the Archon profile API.
 func (p *HTTPProfile) Validate() error {
 	if p.BindPort < 1 || p.BindPort > 65535 {
-		return fmt.Errorf("BindPort must be in range [1, 65535], got %d", p.BindPort)
+		return fmt.Errorf("bind_port must be in range [1, 65535], got %d", p.BindPort)
 	}
 	switch p.Scheme {
 	case "http", "https":
 	default:
-		return fmt.Errorf("Scheme must be \"http\" or \"https\", got %q", p.Scheme)
+		return fmt.Errorf("scheme must be \"http\" or \"https\", got %q", p.Scheme)
 	}
 	if p.MaxBodyBytes < 1 {
-		return fmt.Errorf("MaxBodyBytes must be positive, got %d", p.MaxBodyBytes)
+		return fmt.Errorf("max_body_bytes must be positive, got %d", p.MaxBodyBytes)
 	}
 	if p.Jitter.MinMs < 0 || p.Jitter.MaxMs < 0 {
-		return fmt.Errorf("Jitter values must be non-negative")
+		return fmt.Errorf("jitter values must be non-negative")
 	}
 	if p.Jitter.MaxMs > 0 && p.Jitter.MaxMs < p.Jitter.MinMs {
-		return fmt.Errorf("Jitter.MaxMs (%d) must be >= Jitter.MinMs (%d)", p.Jitter.MaxMs, p.Jitter.MinMs)
+		return fmt.Errorf("jitter.max_ms (%d) must be >= jitter.min_ms (%d)", p.Jitter.MaxMs, p.Jitter.MinMs)
 	}
 	if strings.ContainsAny(p.HostHeader, "\r\n") {
 		return fmt.Errorf("HostHeader contains a line break")
@@ -359,7 +359,7 @@ func (p *HTTPProfile) Validate() error {
 		switch strings.ToUpper(method) {
 		case "GET", "POST", "PUT", "HEAD":
 		default:
-			return fmt.Errorf("Methods.%s must be GET, POST, PUT or HEAD, got %q", op, method)
+			return fmt.Errorf("methods.%s must be GET, POST, PUT or HEAD, got %q", op, method)
 		}
 	}
 

@@ -20,6 +20,7 @@ Stager/stager-*
 *.pcap
 # Legacy build directory (removed - use build_new.sh)
 /build/
+/dist/
 # Builder workspace (production)
 /opt/unkn0wnc2/builders/*
 

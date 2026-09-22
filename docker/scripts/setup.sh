@@ -3,7 +3,7 @@ set -e
 
 ARCHON_URL="${ARCHON_URL:-https://172.20.0.10:8443}"
 ADMIN_USER="admin"
-ADMIN_PASS="${ADMIN_PASSWORD:-TestAdmin2026!}"
+ADMIN_PASS="${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}"
 COOKIE_JAR="/tmp/cookies.txt"
 BUILDS_DIR="/opt/unkn0wnc2/builds"
 

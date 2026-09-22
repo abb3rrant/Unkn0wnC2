@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,17 +45,19 @@ type WSMessage struct {
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
-	CheckOrigin: func(r *http.Request) bool {
-		origin := r.Header.Get("Origin")
-		if origin == "" {
-			return true
-		}
-		host := r.Host
-		if host == "" {
-			host = r.URL.Host
-		}
-		return strings.Contains(origin, host)
-	},
+	CheckOrigin:     websocketOriginAllowed,
+}
+
+func websocketOriginAllowed(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" || r.Host == "" {
+		return false
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Host == "" || parsed.User != nil {
+		return false
+	}
+	return strings.EqualFold(parsed.Host, r.Host)
 }
 
 // Global WebSocket hub
@@ -237,6 +240,12 @@ func (api *APIServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	operator, err := api.db.GetOperator(claims.OperatorID)
+	if err != nil || operator.ID == "" || !operator.IsActive {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		LogError("WebSocket upgrade failed: %v", err)
@@ -247,8 +256,8 @@ func (api *APIServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		hub:      wsHub,
 		conn:     conn,
 		send:     make(chan []byte, 256),
-		userID:   claims.OperatorID,
-		username: claims.Username,
+		userID:   operator.ID,
+		username: operator.Username,
 	}
 
 	wsHub.register <- client
@@ -520,6 +529,18 @@ func parseLogLine(line string) LogEntry {
 }
 
 // handleListLogFiles returns available log files
+func logFileMetadata(entry os.DirEntry) (map[string]interface{}, error) {
+	info, err := entry.Info()
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"name":     entry.Name(),
+		"size":     info.Size(),
+		"modified": info.ModTime(),
+	}, nil
+}
+
 func (api *APIServer) handleListLogFiles(w http.ResponseWriter, r *http.Request) {
 	logDirs := []string{"/opt/unkn0wnc2/logs", "./logs"}
 
@@ -540,18 +561,13 @@ func (api *APIServer) handleListLogFiles(w http.ResponseWriter, r *http.Request)
 				continue
 			}
 
-			info, err := entry.Info()
+			metadata, err := logFileMetadata(entry)
 			if err != nil {
 				continue
 			}
 
 			seen[entry.Name()] = true
-			files = append(files, map[string]interface{}{
-				"name":     entry.Name(),
-				"size":     info.Size(),
-				"modified": info.ModTime(),
-				"path":     filepath.Join(logDir, entry.Name()),
-			})
+			files = append(files, metadata)
 		}
 	}
 

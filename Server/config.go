@@ -34,11 +34,12 @@ type Config struct {
 	EncryptionKey     string       `json:"encryption_key"`
 	Debug             bool         `json:"debug"`
 	StagerJitter      StagerJitter `json:"stager"`
-	MasterServer      string       `json:"master_server"`       // Master server URL (e.g., "https://master.example.com")
-	MasterAPIKey      string       `json:"master_api_key"`      // API key for master authentication
-	MasterServerID    string       `json:"master_server_id"`    // Unique ID for this DNS server
-	MasterTLSCACert   string       `json:"master_tls_ca_cert"`  // Optional: CA certificate path for Master TLS verification
-	MasterTLSInsecure bool         `json:"master_tls_insecure"` // If true, skip TLS verification (default: true, Master binds to runtime IP)
+	MasterServer      string       `json:"master_server"`          // Master server URL (e.g., "https://master.example.com")
+	MasterAPIKey      string       `json:"master_api_key"`         // API key for master authentication
+	MasterServerID    string       `json:"master_server_id"`       // Unique ID for this DNS server
+	MasterTLSCACert   string       `json:"master_tls_ca_cert"`     // Optional: CA certificate path for Master TLS verification
+	MasterSPKIPin     string       `json:"master_tls_spki_sha256"` // Base64 SHA-256 of Archon's SubjectPublicKeyInfo
+	MasterTLSInsecure bool         `json:"master_tls_insecure"`    // Legacy explicit opt-out when neither CA nor pin is configured
 	// HTTPProfileDir is the directory of malleable HTTP/HTTPS listener profiles.
 	// One listener is started per enabled profile. An empty value, or a directory
 	// that does not exist, disables the HTTP transport and leaves pure-DNS
@@ -82,8 +83,9 @@ func DefaultConfig() Config {
 		MasterServer:      "https://master.example.com", // Sensible default; overridden by builder at build time
 		MasterAPIKey:      "",                           // REQUIRED: Set by builder
 		MasterServerID:    "dns1",
-		MasterTLSCACert:   "",   // Optional: Path to CA cert for production
-		MasterTLSInsecure: true, // Default: Skip TLS verification (Master uses runtime IP binding)
+		MasterTLSCACert:   "",
+		MasterSPKIPin:     "",
+		MasterTLSInsecure: false,
 		// HTTP transport is opt-in: the builder points this at the deployed
 		// profile directory, and a missing directory leaves the server DNS-only.
 		HTTPProfileDir: "/opt/unkn0wnc2/profiles",
@@ -96,22 +98,22 @@ func DefaultConfig() Config {
 // affect server startup unless callers opt in.
 func (c Config) Validate() error {
 	if c.BindPort < 1 || c.BindPort > 65535 {
-		return fmt.Errorf("BindPort must be in range [1, 65535], got %d", c.BindPort)
+		return fmt.Errorf("bind_port must be in range [1, 65535], got %d", c.BindPort)
 	}
 	if c.Domain == "" {
-		return fmt.Errorf("Domain must be non-empty")
+		return fmt.Errorf("domain must be non-empty")
 	}
 	if c.NS1 == "" {
-		return fmt.Errorf("NS1 must be non-empty")
+		return fmt.Errorf("ns1 must be non-empty")
 	}
 	if c.NS2 == "" {
-		return fmt.Errorf("NS2 must be non-empty")
+		return fmt.Errorf("ns2 must be non-empty")
 	}
 	if c.EncryptionKey == "" {
-		return fmt.Errorf("EncryptionKey must be non-empty")
+		return fmt.Errorf("encryption_key must be non-empty")
 	}
 	if c.MasterServer == "" {
-		return fmt.Errorf("MasterServer must be non-empty")
+		return fmt.Errorf("master_server must be non-empty")
 	}
 	return nil
 }
@@ -167,7 +169,8 @@ func tryLoadEmbeddedConfig() (Config, bool) {
 		MasterAPIKey:      "",
 		MasterServerID:    "dns1",
 		MasterTLSCACert:   "",
-		MasterTLSInsecure: true,
+		MasterSPKIPin:     "",
+		MasterTLSInsecure: false,
 		// Rewritten by the builder when HTTP listeners ship with this build. A
 		// missing directory leaves the server DNS-only.
 		HTTPProfileDir: "/opt/unkn0wnc2/profiles",

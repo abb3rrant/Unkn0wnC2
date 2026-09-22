@@ -758,11 +758,13 @@ func (d *Database) GetTasksByStatus(status string, limit int) ([]*Task, error) {
 		ORDER BY created_at DESC
 	`
 
+	args := []interface{}{status}
 	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
+		query += " LIMIT ?"
+		args = append(args, limit)
 	}
 
-	rows, err := d.db.Query(query, status)
+	rows, err := d.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -812,11 +814,13 @@ func (d *Database) GetAllTasksWithLimit(limit int) ([]*Task, error) {
 		ORDER BY created_at DESC
 	`
 
+	var args []interface{}
 	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
+		query += " LIMIT ?"
+		args = append(args, limit)
 	}
 
-	rows, err := d.db.Query(query)
+	rows, err := d.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}

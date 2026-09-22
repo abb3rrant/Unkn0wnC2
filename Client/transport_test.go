@@ -562,6 +562,74 @@ func TestHTTPTransport_NonSuccessStatusIsAnError(t *testing.T) {
 	}
 }
 
+func TestTransportManagerRetainsKeyAfterInvalidInitialHTTPConfig(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	manager := newTransportManager(&Config{
+		Transport:     transportHTTP,
+		HTTPListeners: []HTTPListener{{Name: "invalid-no-host"}},
+	}, key)
+	if manager.Mode() != transportDNS {
+		t.Fatalf("initial invalid HTTP config mode = %q, want dns", manager.Mode())
+	}
+
+	update := transportUpdate{
+		Mode: transportHTTP,
+		Listeners: []HTTPListener{{
+			Name:         "recovered",
+			Scheme:       "http",
+			Host:         "127.0.0.1:8080",
+			URIs:         map[string][]string{"register": {"/register"}, "task": {"/task"}, "result": {"/result"}, "ack": {"/ack"}},
+			Methods:      map[string]string{"register": "POST", "task": "POST", "result": "POST", "ack": "POST"},
+			RequestBody:  HTTPBodyCodec{Encoding: "raw"},
+			ResponseBody: HTTPBodyCodec{Encoding: "raw"},
+			Auth:         HTTPAuth{Mode: "hmac-sha256", Header: "X-Sig", SigEncoding: "hex"},
+		}},
+	}
+	payload, err := json.Marshal(update)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ApplyUpdate(string(payload)); err != nil {
+		t.Fatalf("ApplyUpdate() error = %v", err)
+	}
+	if len(manager.transports) != 1 {
+		t.Fatalf("transport count = %d, want 1", len(manager.transports))
+	}
+	if string(manager.transports[0].aesKey) != string(key) {
+		t.Fatalf("updated transport key = %x, want retained key %x", manager.transports[0].aesKey, key)
+	}
+}
+
+func TestReadChunkedBodyRejectsNegativeSize(t *testing.T) {
+	reader := bufio.NewReader(strings.NewReader("-1\r\n"))
+	if _, err := readChunkedBody(reader, 1024); err == nil {
+		t.Fatal("negative chunk size was accepted")
+	}
+}
+
+// TestTLSConfigPinsThroughVerifyConnection ensures custom verification also runs
+// for resumed TLS sessions. VerifyPeerCertificate is not called on every resumed
+// connection, while VerifyConnection is.
+func TestTLSConfigPinsThroughVerifyConnection(t *testing.T) {
+	transport, err := newHTTPTransport(testListener("127.0.0.1:443", func(l *HTTPListener) {
+		l.Scheme = "https"
+		l.SPKISHA256 = base64.StdEncoding.EncodeToString(make([]byte, 32))
+	}), testKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := transport.tlsConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.VerifyConnection == nil {
+		t.Fatal("TLS pinning must use VerifyConnection so resumed sessions are verified")
+	}
+	if cfg.VerifyPeerCertificate != nil {
+		t.Fatal("VerifyPeerCertificate should be nil when VerifyConnection owns pinning")
+	}
+}
+
 // TestHTTPTransport_RejectsWrongSPKIPin asserts a beacon refuses a certificate
 // whose SPKI does not match its pin — the property that makes a self-signed
 // listener safe to use.

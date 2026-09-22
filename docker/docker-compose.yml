@@ -11,9 +11,9 @@ services:
       - builds:/opt/unkn0wnc2/builds
       - archon-data:/opt/unkn0wnc2/data
     environment:
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6}
-      - JWT_SECRET=${JWT_SECRET:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-TestAdmin2026!}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
     networks:
       c2net:
         ipv4_address: 172.20.0.10
@@ -111,7 +111,7 @@ services:
     container_name: setup
     entrypoint: ["/scripts/setup.sh"]
     environment:
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-TestAdmin2026!}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
       - ARCHON_URL=https://172.20.0.10:8443
     volumes:
       - builds:/opt/unkn0wnc2/builds
@@ -131,7 +131,7 @@ services:
     entrypoint: ["/scripts/run-http-transport-tests.sh"]
     environment:
       - ARCHON_URL=https://172.20.0.10:8443
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-TestAdmin2026!}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
       - LISTENER_URL=https://172.20.0.11:8443
     depends_on:
       dns1:
@@ -152,7 +152,7 @@ services:
     entrypoint: ["/scripts/run-tests.sh"]
     environment:
       - ARCHON_URL=https://172.20.0.10:8443
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-TestAdmin2026!}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
     volumes:
       - builds:/opt/unkn0wnc2/builds:ro
     depends_on:
@@ -178,7 +178,7 @@ services:
     entrypoint: ["/scripts/run-extended-tests.sh"]
     environment:
       - ARCHON_URL=https://172.20.0.10:8443
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-TestAdmin2026!}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
     volumes:
       - builds:/opt/unkn0wnc2/builds
     depends_on:
