@@ -19,7 +19,7 @@ import (
 
 const (
 	// MasterDatabaseSchemaVersion tracks the current schema version
-	MasterDatabaseSchemaVersion = 18
+	MasterDatabaseSchemaVersion = 19
 
 	// MaxTaskCommandLength is the maximum length for task commands.
 	// DNS TXT responses are limited to ~512 bytes UDP. After encryption (AES-GCM adds 28 bytes)
@@ -27,9 +27,9 @@ const (
 	// the practical limit for a single DNS TXT response is ~180 bytes.
 	// With chunked delivery, commands up to MaxTaskCommandLength are split across
 	// multiple TXT responses of MaxTaskChunkPayload bytes each.
-	MaxTaskCommandLength  = 10000
-	MaxTaskChunkPayload   = 150
-	MaxTaskChunks         = 100
+	MaxTaskCommandLength = 10000
+	MaxTaskChunkPayload  = 150
+	MaxTaskChunks        = 100
 )
 
 // Package-level debug flag for database logging
@@ -284,6 +284,13 @@ func (d *MasterDatabase) applyMigrations(fromVersion int) error {
 	if fromVersion < 18 {
 		if err := d.migration18AddRegistrationStage(); err != nil {
 			return fmt.Errorf("migration 18 failed: %w", err)
+		}
+	}
+
+	// Migration 19: Store malleable HTTP listener profiles
+	if fromVersion < 19 {
+		if err := d.migration19AddHTTPProfiles(); err != nil {
+			return fmt.Errorf("migration 19 failed: %w", err)
 		}
 	}
 
@@ -1352,7 +1359,7 @@ func (d *MasterDatabase) GetDNSServers() ([]DNSServer, error) {
 			Address:     address,
 			Status:      status,
 			FirstSeen:   time.Unix(firstSeen, 0).Format(time.RFC3339),
-			LastCheckin:  time.Unix(lastCheckin, 0).Format(time.RFC3339),
+			LastCheckin: time.Unix(lastCheckin, 0).Format(time.RFC3339),
 			BeaconCount: beaconCount,
 			TaskCount:   taskCount,
 		})
@@ -1392,7 +1399,7 @@ func (d *MasterDatabase) GetActiveDNSServers() ([]DNSServer, error) {
 			Address:     address,
 			Status:      status,
 			FirstSeen:   time.Unix(firstSeen, 0).Format(time.RFC3339),
-			LastCheckin:  time.Unix(lastCheckin, 0).Format(time.RFC3339),
+			LastCheckin: time.Unix(lastCheckin, 0).Format(time.RFC3339),
 			BeaconCount: beaconCount,
 			TaskCount:   taskCount,
 		})
@@ -1552,8 +1559,8 @@ func (d *MasterDatabase) GetDNSServerBeacons(dnsServerID string, minutesThreshol
 			return nil, err
 		}
 
-		_ = username    // scanned but not in struct
-		_ = os          // scanned but not in struct
+		_ = username     // scanned but not in struct
+		_ = os           // scanned but not in struct
 		_ = contactCount // scanned but not in struct
 
 		beacons = append(beacons, DNSServerBeacon{
@@ -3544,7 +3551,6 @@ func (d *MasterDatabase) GetBeaconDomains(beaconID string) ([]BeaconDomain, erro
 		`, beaconID, now, beaconID)
 	}
 
-
 	rows, err := d.db.Query(`SELECT domain, active FROM beacon_domains WHERE beacon_id = ? ORDER BY domain`, beaconID)
 	if err != nil {
 		return nil, err
@@ -3874,7 +3880,6 @@ func (d *MasterDatabase) MarkTasksSent(taskIDs []string) error {
 	if len(taskIDs) == 0 {
 		return nil
 	}
-
 
 	now := time.Now().Unix()
 

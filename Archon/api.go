@@ -30,12 +30,12 @@ import (
 
 // APIServer wraps the HTTP server and provides API functionality
 type APIServer struct {
-	db             *MasterDatabase
-	config         Config
-	jwtSecret      []byte
-	authLimiter    *RateLimiter // Rate limiter for auth endpoints
-	apiLimiter     *RateLimiter // Rate limiter for API endpoints
-	dnsLimiter     *RateLimiter // Rate limiter for DNS server endpoints
+	db                       *MasterDatabase
+	config                   Config
+	jwtSecret                []byte
+	authLimiter              *RateLimiter      // Rate limiter for auth endpoints
+	apiLimiter               *RateLimiter      // Rate limiter for API endpoints
+	dnsLimiter               *RateLimiter      // Rate limiter for DNS server endpoints
 	dnsServerDomainCache     map[string]string // key: server ID, value: domain
 	dnsServerDomainCacheMu   sync.RWMutex
 	dnsServerDomainCacheTime time.Time
@@ -44,12 +44,12 @@ type APIServer struct {
 // NewAPIServer creates a new API server instance
 func NewAPIServer(db *MasterDatabase, config Config) *APIServer {
 	return &APIServer{
-		db:             db,
-		config:         config,
-		jwtSecret:      []byte(config.JWTSecret),
-		authLimiter:    NewRateLimiter(5, time.Minute),    // 5 login attempts per minute
-		apiLimiter:     NewRateLimiter(100, time.Minute),  // 100 API requests per minute
-		dnsLimiter:     NewRateLimiter(1000, time.Minute), // 1000 DNS server API calls per minute
+		db:                   db,
+		config:               config,
+		jwtSecret:            []byte(config.JWTSecret),
+		authLimiter:          NewRateLimiter(5, time.Minute),    // 5 login attempts per minute
+		apiLimiter:           NewRateLimiter(100, time.Minute),  // 100 API requests per minute
+		dnsLimiter:           NewRateLimiter(1000, time.Minute), // 1000 DNS server API calls per minute
 		dnsServerDomainCache: make(map[string]string),
 	}
 }
@@ -3424,6 +3424,13 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	operatorRouter.HandleFunc("/builder/builds", api.handleListBuilds).Methods("GET")
 	operatorRouter.HandleFunc("/builder/builds/download", api.handleDownloadBuild).Methods("GET")
 	operatorRouter.HandleFunc("/builder/builds/delete", api.handleDeleteBuild).Methods("DELETE")
+
+	// Malleable HTTP listener profiles
+	operatorRouter.HandleFunc("/http/profiles", api.handleListHTTPProfiles).Methods("GET")
+	operatorRouter.HandleFunc("/http/profiles", api.handleSaveHTTPProfile).Methods("POST")
+	operatorRouter.HandleFunc("/http/profiles/{name}", api.handleGetHTTPProfile).Methods("GET")
+	operatorRouter.HandleFunc("/http/profiles/{name}", api.handleDeleteHTTPProfile).Methods("DELETE")
+	operatorRouter.HandleFunc("/http/transport", api.handlePushTransportUpdate).Methods("POST")
 
 	// Stager session endpoints
 	operatorRouter.HandleFunc("/stager/sessions", api.handleListStagerSessions).Methods("GET")
