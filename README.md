@@ -12,7 +12,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/version-0.9.0-blue" alt="Version"/>
   <img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="License"/>
-  <img src="https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go" alt="Go"/>
+  <img src="https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go" alt="Go"/>
   <img src="https://img.shields.io/badge/Rust-1.70+-orange?logo=rust" alt="Rust"/>
   <img src="https://img.shields.io/badge/C-99-A8B9CC?logo=c" alt="C"/>
 </p>
@@ -21,7 +21,7 @@
 
 # 🎯 What Makes Unkn0wnC2 Different
 
-Unkn0wnC2 addresses two critical gaps that plague traditional DNS C2 frameworks:
+Unkn0wnC2 addresses three critical gaps that plague traditional C2 frameworks:
 
 ## ⏱️ **Malleable Exfiltration Timing**
 
@@ -39,7 +39,7 @@ Unkn0wnC2 addresses two critical gaps that plague traditional DNS C2 frameworks:
 
 **Unkn0wnC2's Solution:**
 - Supports single **or** multi-domain beacons
-- Hot-swappable domains: add new DNS servers to active beacons without restart
+- Hot-swappable domains: add new listener domains to active beacons without restart
 - Simple domain management: check/uncheck configured domains in real-time
 - Resilient infrastructure that adapts to takedowns and blocking
 
@@ -56,9 +56,11 @@ Unkn0wnC2 addresses two critical gaps that plague traditional DNS C2 frameworks:
 - **Dual mode splits the two roles:** DNS carries only an A-record task-readiness
   signal, and the task and its results travel over HTTP. DNS stays quiet; HTTP carries
   the volume
-- **Malleable HTTP profiles**: URIs, HTTP method, header set *and order*, user-agent
-  pool, body codec, status codes and response jitter are all profile-driven, so the
-  listener looks like whatever it is dressed as
+- **Fully malleable HTTP profiles**: URIs, methods, request-header set *and exact
+  order*, operation-specific headers, user-agent pools, body codecs, response headers,
+  omitted response headers, status codes and jitter are all profile-driven
+- **Live profile delivery**: Archon assigns profiles directly to listeners and applies
+  compatible changes without copying files or restarting the beacon
 - **Certificate pinning**: the beacon pins the listener's SPKI, so a self-signed
   listener cannot be impersonated
 - **Automatic fallback**: a dual-mode beacon returns to the full DNS path after
@@ -94,7 +96,7 @@ endpoint table and the deployment steps.
 - Test detection capabilities against malleable timing attacks
 - Prepare defenses for multi-domain C2 infrastructures
 
-> **Note:** Unkn0wnC2 is not a post-exploitation framework *(not yet, at least)*—it focuses specifically on covert DNS communications that mirror techniques used by Advanced Persistent Threats.
+> **Note:** Unkn0wnC2 is not a post-exploitation framework *(not yet, at least)*—it focuses on covert command-and-control communications that mirror techniques used by Advanced Persistent Threats.
 
 ---
 
@@ -125,10 +127,10 @@ APTs are more than capable of building custom tooling with extensive post-exploi
 ### Prerequisites
 - Linux server with public IP
 - Domain(s) with NS records pointing to your server
-- Go 1.21+, Rust 1.70+, GCC (build script checks all dependencies)
+- Go 1.24+, Rust 1.70+, GCC (build script checks all dependencies)
 
 **Archon Server:** 2 CPU / 2 GB RAM minimum. 4 GB recommended if exfiltrating large files with aggressive timings.
-**DNS Servers:** 1 CPU / 512 MB RAM is sufficient.
+**Listeners:** 1 CPU / 512 MB RAM is sufficient.
 
 ### Step 1: Configure DNS
 
@@ -191,35 +193,42 @@ Navigate to `https://<server-ip>:8443/` and log in with the credentials from the
 ### Step 5: Configure & Build
 
 1. **Change admin password** and create operators
-2. **Build DNS servers** with your domain(s)
-3. **Build beacons/stagers** for your targets
+2. **Build listeners** with your DNS domain(s)
+3. **Create HTTP profiles** if the listener will accept HTTP/HTTPS callbacks
+4. **Assign profiles** to listeners from Archon; assignments are delivered and applied live
+5. **Build beacons/stagers** and choose DNS, HTTP, or dual transport per beacon
 
 <p align="center">
   <img src="assets/WebUI/builder.png" alt="Builder" width="700"/>
 </p>
 
-### Step 6: Deploy DNS Servers
+### Step 6: Deploy Listeners
 
 > [!Warning]
-> It's recommended to disable DNS-Forwarding during the DNS Server build as it could be abused by bots/TAs for DNS amplification attacks. There are mitigations to prevent abuse, but they are not fully tested.
+> It's recommended to disable DNS-Forwarding during the listener build as it could be abused by bots/TAs for DNS amplification attacks. There are mitigations to prevent abuse, but they are not fully tested.
 
-DNS servers bind to 0.0.0.0, and should use a redirector or be public facing. DNS servers also need to be able to reach Archon on its configured IP & Port, so ensure they have access. Tailscale is a great option for this.
+Listeners are DNS-capable by default and bind DNS to `0.0.0.0`. They should use a redirector or be public facing. Each listener also needs to reach Archon on its configured IP and port; Tailscale is a great option for this.
+
+An HTTP profile adds an HTTP/HTTPS socket to the same listener process. The beacon's `host` controls where it connects, while `host_header` controls the wire-visible `Host` value. For HTTPS, generate or select a certificate and embed the matching `tls.spki_sha256` pin in the beacon profile.
+
+> [!NOTE]
+> Request-header presence and order are exact because the beacon writes HTTP manually. Response-header values and omissions are configurable, but Go controls response-header serialization order.
 
 ```bash
-# Stop systemd-resolved if using port 53
+# Stop systemd-resolved if using DNS port 53
 sudo systemctl stop systemd-resolved
 
-# Run DNS server
+# Run listener (DNS, plus any assigned HTTP/HTTPS profiles)
 sudo ./dns-server
 ```
 
 <details>
-<summary>Create systemd service for DNS Server</summary>
+<summary>Create systemd service for Listener</summary>
 
 ```bash
 sudo tee /etc/systemd/system/dns-server.service << 'EOF'
 [Unit]
-Description=Unkn0wnC2 DNS Server
+Description=Unkn0wnC2 Listener
 After=network.target
 
 [Service]
@@ -312,6 +321,19 @@ update_domains:["ns1.new-domain.com","ns2.other-domain.net"]
 </details>
 
 <details>
+<summary><strong>update_transport</strong> -- Change beacon transport (system command)</summary>
+
+Sent by Archon to move a live beacon between DNS, HTTP, and dual mode without restarting it. The payload includes the complete beacon-side listener profile, fallback threshold, and HTTP retry interval.
+
+```
+update_transport:{"mode":"dual","fallback_after_failures":3,"retry_backoff_secs":60,"listeners":[...]}
+```
+
+HTTP-only mode is strict and does not silently fall back to DNS. Dual mode falls back after the configured number of HTTP failures and probes HTTP again after the retry interval.
+
+</details>
+
+<details>
 <summary><strong>setvar</strong> -- Set a client-side variable</summary>
 
 Stores a named variable in the beacon's memory. Variables persist for the lifetime of the process and are expanded in all subsequent commands using `$KEY` or `${KEY}` syntax — just like bash. Variable references in the value are also expanded, so you can compose variables from existing ones.
@@ -387,18 +409,19 @@ Shadow Mesh allows beacons to use **multiple domains simultaneously**. Benefits:
 flowchart TB
     subgraph Victim["Victim Environment"]
         direction TB
-        A[Beacon] -->|DNS TXT| B[Local DNS]
+        A[Beacon] -->|DNS TXT/A| B[Local DNS]
     end
-    
+
     B -->|DNS| C{Root DNS}
     C -->|DNS| D{TLD}
     D --> E & F & G
+    A -.->|HTTP/HTTPS| E & F & G
 
     subgraph Adversary["Adversary Infrastructure"]
         direction TB
-        E[ns1.evilcorp.com] -->|HTTPS| H
-        F[ns1.badguys.net] -->|HTTPS| H
-        G[ns1.adversary.org] -->|HTTPS| H
+        E[Listener 1<br/>ns1.evilcorp.com] -->|HTTPS Relay| H
+        F[Listener 2<br/>ns1.badguys.net] -->|HTTPS Relay| H
+        G[Listener 3<br/>ns1.adversary.org] -->|HTTPS Relay| H
         H[Archon Server]
         I[Operator] ==>|HTTPS| H
     end
@@ -413,9 +436,9 @@ class Adversary adversary
 
 | Component | Language | Role |
 |-----------|----------|------|
-| **Archon** | Go | Central management server. Hosts the WebUI, builder, task queue, and database. Receives reports from all DNS servers. Operators interact exclusively with Archon. |
-| **DNS Server** | Go | Authoritative DNS server deployed on public infrastructure. Decodes beacon queries, relays messages to Archon, caches stager binaries, and delivers tasks via TXT responses. Multiple DNS servers form the Shadow Mesh. |
-| **Client (Beacon)** | Go | Implant running on target. Checks in via DNS TXT queries, executes tasks, and exfiltrates results over DNS. Supports multiple domains with automatic rotation. |
+| **Archon** | Go | Central management server. Hosts the WebUI, builder, profile store, task queue, and database. Assigns profiles and runtime transport changes to listeners and beacons. Operators interact exclusively with Archon. |
+| **Listener** | Go | DNS-capable edge server deployed on public infrastructure. Serves authoritative DNS by default and can terminate profile-driven HTTP/HTTPS on the same process. Decodes beacon traffic and relays it to Archon. Multiple listeners form the Shadow Mesh. |
+| **Client (Beacon)** | Go | Implant running on target. Operates in DNS, HTTP-only, or dual mode. Supports runtime transport/domain changes, listener failover, task deduplication, and chunked result delivery. |
 | **Stager** | C | Minimal first-stage loader. Retrieves the full beacon binary over DNS in chunks and executes it. |
 ### DNS Resolution Flow
 
@@ -436,9 +459,40 @@ flowchart TD
 
 ---
 
+### HTTP/HTTPS Transport Flow
+
+HTTP terminates inside the listener process and enters the same C2 message handler as DNS. This keeps registration, tasking, result assembly, Shadow Mesh delivery, and Archon relay behavior identical across transports.
+
+```mermaid
+sequenceDiagram
+    participant Beacon
+    participant Listener
+    participant Archon
+
+    Beacon->>Listener: Profile-shaped HTTP/HTTPS registration
+    Listener->>Listener: Verify path, headers, HMAC, codec, and SPKI/TLS policy
+    Listener->>Archon: Report beacon through listener API
+    Archon-->>Listener: ACK
+    Listener-->>Beacon: Profile-shaped response
+
+    loop Task polling
+        Beacon->>Listener: HTTP task request
+        Listener->>Archon: Sync pending tasks
+        Archon-->>Listener: Task or ACK
+        Listener-->>Beacon: Encoded task response
+    end
+
+    Beacon->>Listener: RESULT_META -> DATA -> RESULT_COMPLETE
+    Listener->>Archon: Forward chunks and completion
+```
+
+In **dual mode**, the DNS A-record poll is only a side-effect-free readiness signal. The beacon fetches the task and returns results through HTTP, so a DNS poll on one Shadow Mesh node cannot strand a task that is fetched from another.
+
+---
+
 ## Encryption & Encoding
 
-All beacon communications use **AES-256-GCM encryption** with **Base36 encoding** (a-z, 0-9) to ensure DNS-safe characters. Encryption can be disabled at build time for debugging or environments where plaintext DNS is acceptable.
+Beacon protocol messages use **AES-256-GCM encryption**. DNS carries the ciphertext with **Base36 encoding** (a-z, 0-9) for DNS-safe labels. HTTP profiles select their request and response body codecs; the default `aes-gcm-base36` codec carries the same encrypted messages in a configurable JSON field. DNS encryption can be disabled at build time for debugging or environments where plaintext DNS is acceptable.
 
 <table>
 <tr>
@@ -525,11 +579,11 @@ sequenceDiagram
 
 ### Build ID System
 
-At build time, Archon generates a **6-character base36 build ID** (e.g., `k7m2x9`) and embeds it in the beacon binary. The beacon sends this ID in the `BeaconName` field during CHK registration -- zero wire protocol changes. Archon resolves the full build configuration (sleep intervals, jitter, payload format, encryption, etc.) from its database, so the beacon never needs to transmit its config over DNS.
+At build time, Archon generates a **6-character base36 build ID** (e.g., `k7m2x9`) and embeds it in the beacon binary. The beacon sends this ID in the `BeaconName` field during CHK registration -- zero wire protocol changes. Archon resolves the full build configuration (sleep intervals, jitter, payload format, encryption, etc.) from its database, so the beacon never needs to transmit its full build config over the wire.
 
-### Beacon -> DNS Server Messages
+### Beacon -> Listener Messages
 
-All messages are pipe-delimited. A numeric timestamp is appended automatically by the client as the last field for DNS cache busting.
+All transports use the same pipe-delimited control protocol. A five-digit timestamp is appended automatically by the client as the last field; DNS uses it for cache busting and the shared parser uses it to preserve DATA payloads that contain pipe characters.
 
 | Message | Format | Description |
 |---------|--------|-------------|
@@ -537,12 +591,12 @@ All messages are pipe-delimited. A numeric timestamp is appended automatically b
 | **POLL** | `POLL\|beaconID` | Lightweight check-in (all subsequent contacts). Only sends the beacon ID to poll for tasks. |
 | **STATUS** | `STATUS\|beaconID\|status` | Status update. Sent when the beacon enters a new state (e.g., `exfiltrating`, `active`). |
 | **RESULT_META** | `RESULT_META\|beaconID\|taskID\|totalSize\|totalChunks` | Announces an incoming chunked result. Sent before any DATA chunks. |
-| **DATA** | `DATA\|beaconID\|taskID\|chunkIndex\|totalChunks\|chunkData` | A single result chunk (1-indexed). Chunk data may contain pipe characters. In Shadow Mesh, chunks from the same task may arrive at different DNS servers -- Archon reassembles regardless of source. |
+| **DATA** | `DATA\|beaconID\|taskID\|chunkIndex\|totalChunks\|chunkData` | A single result chunk (1-indexed). Chunk data may contain pipe characters. In Shadow Mesh, chunks from the same task may arrive at different listeners -- Archon reassembles regardless of source. |
 | **RESULT_COMPLETE** | `RESULT_COMPLETE\|beaconID\|taskID\|totalChunks` | Signals all chunks have been sent. Archon marks the task complete only after receiving this. |
 
-### DNS Server -> Beacon Responses
+### Listener -> Beacon Responses
 
-Responses are returned in DNS TXT records, encrypted and base36-encoded (matching the beacon's build config).
+DNS returns responses in TXT records, encrypted and base36-encoded to match the beacon's build config. HTTP returns the same plaintext protocol response through the profile's response-body codec and status/header shape.
 
 | Response | Format | Description |
 |----------|--------|-------------|
@@ -550,6 +604,7 @@ Responses are returned in DNS TXT records, encrypted and base36-encoded (matchin
 | **TASK** | `TASK\|taskID\|command` | Deliver a task. The full response (including task ID and command) must fit in ~210 chars after encoding. |
 | **REREG** | `REREG` | Returned in response to a POLL from an unknown beacon ID. Tells the beacon to send a full CHK to re-register. |
 | **update_domains** | `update_domains:["a.com","b.net"]` | Delivered as a task. Replaces the beacon's active domain list for Shadow Mesh rotation. |
+| **update_transport** | `update_transport:{"mode":"http",...}` | Delivered as a fire-and-forget task. Applies a validated DNS, HTTP, or dual transport configuration without restarting the beacon. |
 
 ### Stager Protocol
 
@@ -592,11 +647,11 @@ When a beacon executes a command, the output is returned using a 3-phase chunked
 
 ```
 1. RESULT_META   -- "I have N chunks of X bytes for task T"
-2. DATA (x N)    -- One chunk per DNS query, with jitter between each
+2. DATA (x N)    -- One chunk per transport exchange, with jitter between each
 3. RESULT_COMPLETE -- "All chunks sent for task T"
 ```
 
-In Shadow Mesh mode, chunks from the same task may arrive at **different DNS servers**. Each DNS server forwards chunks to Archon independently. Archon reassembles the full result regardless of which server delivered each chunk. The task is only marked complete when Archon receives the RESULT_COMPLETE signal.
+In Shadow Mesh mode, chunks from the same task may arrive at **different listeners**. Each listener forwards chunks to Archon independently. Archon reassembles the full result regardless of source or carrier. The task is only marked complete when Archon receives the RESULT_COMPLETE signal.
 
 ---
 
@@ -753,11 +808,12 @@ threshold:type both, track by_src, count 10, seconds 60;
 
 
 <p align="center">
-  <strong>Unkn0wnC2</strong> &bull; Version 0.8.0<br>
+  <strong>Unkn0wnC2</strong> &bull; Version 0.9.0<br>
   <em>Licensed under GPL-3.0 &bull; For authorized security testing only</em><br><br>
   <a href="#quick-deployment">Quick Start</a> &bull;
   <a href="#architecture">Architecture</a> &bull;
   <a href="#protocol-reference">Protocol</a> &bull;
+  <a href="docs/http-transport.md">HTTP Profiles</a> &bull;
   <a href="#malleable-payload-format">Payload Format</a> &bull;
   <a href="#malleable-timing">Timing</a>
 </p>
