@@ -61,7 +61,6 @@ const (
 	defaultHTTPEmpty       = 204
 	defaultHTTPMaxBody     = 1048576 // 1 MiB
 	defaultHTTPTLSVersion  = "1.2"
-	defaultHTTPRetryAfter  = 60
 	defaultHTTPTaskURI     = "/api/v1/sync"
 	defaultHTTPRegisterURI = "/api/v1/ping"
 	defaultHTTPResultURI   = "/api/v1/report"
@@ -476,17 +475,6 @@ func validateCodec(label string, c BodyCodec) error {
 // ListenerAddr returns the host:port the listener should bind to.
 func (p *HTTPProfile) ListenerAddr() string {
 	return net.JoinHostPort(p.BindAddr, fmt.Sprintf("%d", p.BindPort))
-}
-
-// AllURIs returns every configured path, used to reject non-matching requests
-// uniformly and to document the surface in the UI.
-func (p *HTTPProfile) AllURIs() []string {
-	var out []string
-	out = append(out, p.URIs.Register...)
-	out = append(out, p.URIs.Task...)
-	out = append(out, p.URIs.Result...)
-	out = append(out, p.URIs.Ack...)
-	return out
 }
 
 // OperationForPath maps a request path and method to a protocol operation

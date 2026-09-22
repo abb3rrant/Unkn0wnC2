@@ -151,11 +151,3 @@ func StopHTTPListeners() {
 	httpRegistry.Shutdown()
 	httpRegistry = nil
 }
-
-// HTTPListenerStatuses reports the live listener state, for the control plane.
-func HTTPListenerStatuses() []HTTPListenerStatus {
-	if httpRegistry == nil {
-		return []HTTPListenerStatus{}
-	}
-	return httpRegistry.Status()
-}

@@ -539,3 +539,58 @@ func TestTransportUpdateVectorIsAccepted(t *testing.T) {
 		t.Fatal("after switching back to DNS the beacon still uses HTTP")
 	}
 }
+
+// TestPickPath_UsesEveryConfiguredURI proves the beacon side of a zero-downtime rotation.
+//
+// An operation may list several paths, and the beacon chooses one per request. That is
+// what lets both the old and the new URI be valid during a rotation, so a listener can be
+// changed without every beacon being rebuilt at the same instant.
+func TestPickPath_UsesEveryConfiguredURI(t *testing.T) {
+	transport, err := newHTTPTransport(HTTPListener{
+		Name:   "rotation",
+		Scheme: "http",
+		Host:   "127.0.0.1:9",
+		URIs: map[string][]string{
+			"task": {"/api/v1/sync", "/v2/sync", "/assets/sync"},
+		},
+	}, testKey())
+	if err != nil {
+		t.Fatalf("newHTTPTransport() error = %v", err)
+	}
+
+	seen := map[string]int{}
+	for i := 0; i < 300; i++ {
+		path, err := transport.pickPath("task")
+		if err != nil {
+			t.Fatalf("pickPath() error = %v", err)
+		}
+		seen[path]++
+	}
+
+	for _, path := range []string{"/api/v1/sync", "/v2/sync", "/assets/sync"} {
+		if seen[path] == 0 {
+			t.Errorf("path %s was never chosen in 300 requests, so it cannot cover a rotation", path)
+		}
+	}
+	if len(seen) != 3 {
+		t.Errorf("chose %d distinct paths, want 3: %v", len(seen), seen)
+	}
+}
+
+// TestPickPath_MissingOperationIsAnError asserts a profile with no URI for an operation
+// reports that rather than sending a request somewhere arbitrary.
+func TestPickPath_MissingOperationIsAnError(t *testing.T) {
+	transport, err := newHTTPTransport(HTTPListener{
+		Name:   "incomplete",
+		Scheme: "http",
+		Host:   "127.0.0.1:9",
+		URIs:   map[string][]string{"task": {"/api/v1/sync"}},
+	}, testKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := transport.pickPath("result"); err == nil {
+		t.Fatal("pickPath() returned no error for an operation with no configured URI")
+	}
+}

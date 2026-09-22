@@ -196,6 +196,88 @@ live, so a bad edit cannot take a listener down.
 Binding address, port and TLS material are read at startup; changing those needs a
 restart.
 
+## How far a profile can be changed
+
+A profile exists on two sides. The listener loads it; a beacon embeds a copy of it at build
+time (and can be given a new one at runtime). That makes each field fall into one of three
+classes, and the difference is not obvious from the field list.
+
+### Listener-only: change whenever you like
+
+These never reach the beacon, so a change cannot break one. Asserted by
+`TestProfileSoloFields_ChangeWithoutTouchingBeacons`.
+
+| Field | Why it is safe |
+| --- | --- |
+| `enabled` | The listener stops or starts; the beacon just fails to connect while it is off. |
+| `jitter` | Applied before the response; invisible to the beacon beyond latency. |
+| `status.empty`, `status.error` | The beacon only distinguishes 2xx from not-2xx. |
+| `status.ok` | Safe **as long as it stays 2xx**; the beacon reads the code, not a specific value. |
+| `auth.max_skew_secs` | The beacon sends its current time, so the window is the listener's business. |
+| `request_body.padding_field`, `pad_min`, `pad_max` | Padding is ignored when the listener decodes; a beacon padding differently is still read. |
+| `max_body_bytes` | The listener's own cap. Raising it is safe; lowering it below what the beacons send will start rejecting them. |
+
+### Listener-only, but the listener must rebind
+
+The reconciler detects these and restarts just that listener. No beacon change is needed
+unless the address it dials moves.
+
+| Field | Note |
+| --- | --- |
+| `bind_addr`, `bind_port` | Where it listens. The beacon's `host` is separate — change both if the beacon's target moves. |
+| `scheme` | `http` to `https` changes how the beacon must connect, so `host`/pin usually change with it. |
+| `tls.cert_file`, `tls.key_file` | Renewing a certificate **with the same keypair keeps the pin valid**, because the pin covers the public key. Re-issuing for a new key changes it and becomes a coordinated change. |
+| `tls.min_version` | Handshake only. |
+
+### Must match the beacon: coordinated changes
+
+The beacon encodes, signs and requests using *its* copy, and the listener decodes, verifies
+and routes using *its own*. A mismatch on any of these breaks the exchange.
+
+| Field | What a mismatch does |
+| --- | --- |
+| `uris.*` | Beacon requests a path the listener no longer routes: the profile's `not_found` status. |
+| `methods.*` | Same, as a method mismatch. |
+| `auth.mode`, `auth.header`, `auth.sig_encoding` | The listener cannot verify the signature and answers exactly as it would to a stranger. |
+| `response_body.encoding` | The listener replies in its own codec; a beacon expecting another cannot read the reply. |
+| `request_body.encoding` | Subtler than it looks — see below. |
+| `beacon_host` / `host` | The beacon dials somewhere that is not listening. |
+| `tls.spki_sha256` | The beacon refuses the handshake, which is the point of the pin. |
+
+On `request_body.encoding`, measured rather than assumed: a listener configured for plain
+base36 still **processes** an AES-bodied request, because the base36 wrapper unwinds to the
+ciphertext and the pipeline decrypts it with the same key. What breaks is the reply, which
+comes back in the listener's codec and is unreadable to the beacon. So the observable
+failure is "the beacon gets a 2xx and cannot read the answer", which is worth recognising
+rather than chasing as a connection problem.
+
+### Rotating the wire-coupled fields
+
+**URIs and methods rotate with no downtime**, because an operation may list several paths
+and the beacon chooses one per request:
+
+1. Add the new path alongside the old in the profile and in the next beacon build/push, so
+   both are valid.
+2. Let every beacon pick up the list (a push, or a rebuild plus its poll cycle).
+3. Remove the old path.
+
+Both halves of that are asserted: `TestProfileCoupling_OverlappingURIsAllowAZeroDowntimeRotation`
+on the listener, and `TestPickPath_UsesEveryConfiguredURI` on the beacon.
+
+**Everything else in the coupled class is a cutover, not a rotation**, because there is no
+overlap value that satisfies both sides. Two ways to do it safely:
+
+- **Push first, then change the listener.** `update_transport` is atomic per beacon, so the
+  beacons move together; change the listener once every beacon has reported the new
+  configuration.
+- **Add a second listener rather than mutating the only one.** A beacon accepts a list of
+  listeners, so a new profile on a new port can be introduced alongside the old, pushed to
+  the beacons, and the old one retired afterwards. This keeps a working path at every
+  moment.
+
+Either way, do it while the beacons are calling back. A beacon moved to a configuration
+that cannot reach a listener is blind until one answers again (see above).
+
 ## What the listener looks like to a scanner
 
 Anything that is not a valid, authenticated request for a configured URI gets the

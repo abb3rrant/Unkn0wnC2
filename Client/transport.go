@@ -117,13 +117,6 @@ func (m *transportManager) Mode() string {
 	return m.mode
 }
 
-// hasHTTP reports whether any HTTP listener is configured.
-func (m *transportManager) hasHTTP() bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return len(m.transports) > 0
-}
-
 // ShouldUseHTTP reports whether the next exchange should go over HTTP.
 //
 // In dual mode this is false while HTTP is considered unhealthy, except once the

@@ -9,8 +9,8 @@ import (
 // guarantee can be tested without a network or a running loop.
 func newTestBeacon(maxSize int) *Beacon {
 	return &Beacon{
-		id:            "test-beacon",
-		executedTasks: make(map[string]bool),
+		id:              "test-beacon",
+		executedTasks:   make(map[string]bool),
 		executedMaxSize: maxSize,
 	}
 }
