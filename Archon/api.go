@@ -3379,7 +3379,10 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	router.HandleFunc("/login", api.handleLoginPage).Methods("GET")
 	router.HandleFunc("/dashboard", api.handleDashboardPage).Methods("GET")
 	router.HandleFunc("/beacon", api.handleBeaconPage).Methods("GET")
-	router.HandleFunc("/dns-servers", api.handleDNSServersPage).Methods("GET")
+	router.HandleFunc("/listeners", api.handleListenersPage).Methods("GET")
+	router.HandleFunc("/listener", api.handleListenerPage).Methods("GET")
+	// Kept as an alias: this route previously served a page file that did not exist.
+	router.HandleFunc("/dns-servers", api.handleListenersPage).Methods("GET")
 	router.HandleFunc("/builder", api.handleBuilderPage).Methods("GET")
 	router.HandleFunc("/profiles", api.handleProfilesPage).Methods("GET")
 	router.HandleFunc("/stager", api.handleStagerPage).Methods("GET")
@@ -3553,8 +3556,15 @@ func (api *APIServer) handleBeaconPage(w http.ResponseWriter, r *http.Request) {
 	serveNoCache(w, r, filepath.Join(api.config.WebRoot, "beacon.html"))
 }
 
-func (api *APIServer) handleDNSServersPage(w http.ResponseWriter, r *http.Request) {
-	serveNoCache(w, r, filepath.Join(api.config.WebRoot, "dns-servers.html"))
+// handleListenersPage serves the listener list. A DNS server is a listener: it answers
+// DNS and serves whatever HTTP profiles are assigned to it.
+func (api *APIServer) handleListenersPage(w http.ResponseWriter, r *http.Request) {
+	serveNoCache(w, r, filepath.Join(api.config.WebRoot, "listeners.html"))
+}
+
+// handleListenerPage serves one listener's management view.
+func (api *APIServer) handleListenerPage(w http.ResponseWriter, r *http.Request) {
+	serveNoCache(w, r, filepath.Join(api.config.WebRoot, "listener.html"))
 }
 
 func (api *APIServer) handleProfilesPage(w http.ResponseWriter, r *http.Request) {

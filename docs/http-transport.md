@@ -130,21 +130,26 @@ healthy while every beacon failed, so this is a startup error rather than a warn
 Rotating a certificate means rotating the pin in the profile **and** in any beacon
 build that pinned the old one.
 
-## Managing profiles in Archon
+## Listeners and profile assignment
 
-Profiles can be stored in Archon (Profiles page, or the API) so they are authored in
-one place, flagged with the validation errors the listener would raise, and selected
-when building a beacon.
+A DNS server is a **listener**: it answers DNS always, and additionally serves the HTTP
+profiles assigned to it. You assign profiles in Archon, and the listener applies them —
+there is no file to copy to a host and no restart.
+
+- **Listeners page** — every registered listener, with its assignments and what it
+  reports it is actually serving.
+- **Listener page** — assign and remove profiles for one listener, and see the reported
+  state of each, including why one is not running.
+- **HTTP Profiles page** — author, validate and store the profiles themselves.
 
 ```bash
-# save or replace a profile
-curl -s -X POST -H "Content-Type: application/json" -d '{"name":"cdn-assets","document":{...}}' \
-  https://<archon>/api/http/profiles
+# what is assigned to a listener
+curl -s https://<archon>/api/listeners/<listener-id>
 
-# list, fetch, delete
-curl -s https://<archon>/api/http/profiles
-curl -s https://<archon>/api/http/profiles/cdn-assets
-curl -s -X DELETE https://<archon>/api/http/profiles/cdn-assets
+# assign / remove
+curl -s -X POST -H "Content-Type: application/json" -d '{"name":"cdn-assets"}' \
+  https://<archon>/api/listeners/<listener-id>/http-profiles
+curl -s -X DELETE https://<archon>/api/listeners/<listener-id>/http-profiles/cdn-assets
 
 # move live beacons between transports
 curl -s -X POST -H "Content-Type: application/json" \
@@ -152,21 +157,40 @@ curl -s -X POST -H "Content-Type: application/json" \
   https://<archon>/api/http/transport
 ```
 
-**Archon is the store, not the enforcement point.** The DNS server still loads
-profiles from its own `http_profile_dir`, so deploying a profile means copying the
-document to that directory on each DNS server (or, in the Docker setup, dropping it
-in `docker/profiles/`, which is mounted there). Archon's copy is what a build embeds
-in a beacon and what a runtime push sends.
+### How it reaches the listener
 
-The build request needs the profile's `beacon_host`: the address beacons dial is
-usually not the address the listener binds, so it is stated explicitly.
+The listener fetches its assignments from an authenticated endpoint every 60 seconds and
+reconciles. Reconciliation means:
+
+| Change | Effect |
+| --- | --- |
+| New assignment | Listener starts |
+| URI, header, status code, jitter, body codec | Applied immediately, no rebind |
+| Bind address, port, scheme, certificate, pin | That listener rebinds |
+| Removed assignment | Listener stops |
+| `enabled: false` | Known, but not serving |
+
+The last known assignment stays in force if Archon is unreachable, so a control-plane
+outage does not tear down working listeners.
+
+An assignment that cannot start — a port already in use, a certificate missing, a pin
+that does not match the certificate — is **reported, not fatal**. The listener keeps
+answering DNS, and the listener page shows the reason. This is the opposite of a profile
+in the server's own profile directory, which is local configuration and does stop
+startup if it is broken.
+
+A profile assigned by Archon wins over a local file of the same name, including on the
+file reload ticker, so editing files cannot shadow what the control plane assigned.
 
 ## Hot reload
 
-Profiles are re-read every 30 seconds. A changed profile takes effect on the next
-request without restarting the listener, so URIs can be rotated under load.
+Local profile files are re-read every 30 seconds, and assigned profiles arrive on the
+60-second control-plane sync. Both take effect without restarting the process.
 
-A profile that fails to parse or validate is rejected and the previous version stays
+Binding address, port and TLS material need the affected listener to rebind, which the
+reconciler does on its own.
+
+A local file that fails to parse or validate is rejected and the previous version stays
 live, so a bad edit cannot take a listener down.
 
 Binding address, port and TLS material are read at startup; changing those needs a
@@ -242,12 +266,16 @@ configuration stays live.
    and its bound address.
 2. Confirm the listener answers: a request to an unmatched path returns the
    configured `not_found` status with an empty body.
-3. Build a `dual` beacon, run it, and confirm registration appears in the Archon
+3. Assign the profile to that listener in Archon. Within a minute the listener page
+   should show it running, with the address it bound.
+4. Build a `dual` beacon, run it, and confirm registration appears in the Archon
    beacon list.
-4. Queue a task and confirm the beacon's A-record poll reports task-ready without
+5. Queue a task and confirm the beacon's A-record poll reports task-ready without
    consuming it, then that the HTTP request delivers it.
-5. Stop the listener mid-run: the beacon should fall back to DNS within
-   `http_fallback_after_failures` and keep working. Start it again and HTTP resumes.
+6. Detach the profile: the listener should stop serving. Re-assign it and it should
+   come back without touching the host.
+7. Stop the HTTP listener's assignment and confirm the beacon falls back to DNS within
+   `http_fallback_after_failures`, then assign it again and confirm HTTP resumes.
 
 ## Testing
 
