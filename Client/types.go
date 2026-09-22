@@ -68,45 +68,47 @@ type Config struct {
 
 // HTTPBodyCodec describes how an HTTP request or response body is encoded.
 type HTTPBodyCodec struct {
-	Encoding   string
-	Field      string
-	PaddingFld string
-	PadMin     int
-	PadMax     int
+	Encoding   string `json:"encoding"`
+	Field      string `json:"field"`
+	PaddingFld string `json:"padding_field"`
+	PadMin     int    `json:"pad_min"`
+	PadMax     int    `json:"pad_max"`
 }
 
 // HTTPHeader is one request header, in the order it should be sent.
 type HTTPHeader struct {
-	Name  string
-	Value string
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 // HTTPAuth describes how requests are authenticated to a listener.
 type HTTPAuth struct {
-	Mode        string // hmac-sha256 (default), shared-header, none
-	Header      string
-	SigEncoding string // hex or base64
+	Mode        string `json:"mode"`         // hmac-sha256 (default), shared-header, none
+	Header      string `json:"header"`       //
+	SigEncoding string `json:"sig_encoding"` // hex or base64
 }
 
 // HTTPListener is one malleable HTTP/HTTPS endpoint.
 type HTTPListener struct {
-	Name       string // Profile name, used in logs
-	Scheme     string // "http" or "https"
-	Host       string // host:port
-	HostHeader string // Host header override (empty = Host field)
+	Name       string `json:"name"`        // Profile name, used in logs
+	Scheme     string `json:"scheme"`      // "http" or "https"
+	Host       string `json:"host"`        // host:port
+	HostHeader string `json:"host_header"` // Host header override (empty = Host field)
+
 	// SPKISHA256 is the base64 SHA-256 of the listener certificate's
 	// SubjectPublicKeyInfo. When set, the beacon pins it and refuses any other
 	// certificate, so a self-signed listener cannot be impersonated.
-	SPKISHA256   string
-	URIs         map[string][]string // operation -> path(s)
-	Methods      map[string]string   // operation -> HTTP method
-	UserAgents   []string
-	Headers      []HTTPHeader
-	RequestBody  HTTPBodyCodec
-	ResponseBody HTTPBodyCodec
-	Auth         HTTPAuth
-	TimeoutSecs  int
-	MaxBodyBytes int64
+	SPKISHA256 string `json:"spki_sha256"`
+
+	URIs         map[string][]string `json:"uris"`           // operation -> path(s)
+	Methods      map[string]string   `json:"methods"`        // operation -> HTTP method
+	UserAgents   []string            `json:"user_agents"`    // rotational pool
+	Headers      []HTTPHeader        `json:"headers"`        // emitted in this order
+	RequestBody  HTTPBodyCodec       `json:"request_body"`   // outbound body encoding
+	ResponseBody HTTPBodyCodec       `json:"response_body"`  // inbound body encoding
+	Auth         HTTPAuth            `json:"auth"`           // request authentication
+	TimeoutSecs  int                 `json:"timeout_secs"`   // per-request timeout
+	MaxBodyBytes int64               `json:"max_body_bytes"` // response size cap
 }
 
 // baseURL returns the scheme://host prefix for this listener.

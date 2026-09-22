@@ -168,6 +168,9 @@ func tryLoadEmbeddedConfig() (Config, bool) {
 		MasterServerID:    "dns1",
 		MasterTLSCACert:   "",
 		MasterTLSInsecure: true,
+		// Rewritten by the builder when HTTP listeners ship with this build. A
+		// missing directory leaves the server DNS-only.
+		HTTPProfileDir: "/opt/unkn0wnc2/profiles",
 	}
 
 	// Check if this is a properly built binary (MasterServer must be set)
