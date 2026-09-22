@@ -109,7 +109,7 @@ jobs:
           mkdir -p /tmp/unkn0wnc2-release
           tar -xzf "dist/Unkn0wnC2-v$(tr -d '[:space:]' < VERSION)-linux-amd64.tar.gz" -C /tmp/unkn0wnc2-release
           test -x "/tmp/unkn0wnc2-release/Unkn0wnC2-v$(tr -d '[:space:]' < VERSION)-linux-amd64/bin/unkn0wnc2"
-          sha256sum -c dist/SHA256SUMS
+          (cd dist && sha256sum -c SHA256SUMS)
 
       - name: Build and smoke-test the production container
         run: |
