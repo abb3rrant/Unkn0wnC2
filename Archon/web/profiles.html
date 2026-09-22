@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/png" href="/static/logo.png">
+    <title>HTTP Profiles - Unkn0wnC2</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=ITC+Benguiat:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .section-title {
+            font-size: 24px;
+            font-weight: 600;
+            color: rgba(255, 51, 51, 0.8);
+            font-family: 'Bebas Neue', 'Arial Narrow', sans-serif;
+            letter-spacing: 2px;
+        }
+
+        .profiles-layout {
+            display: grid;
+            grid-template-columns: minmax(240px, 1fr) minmax(360px, 2fr);
+            gap: 20px;
+            align-items: start;
+        }
+
+        @media (max-width: 900px) {
+            .profiles-layout { grid-template-columns: 1fr; }
+        }
+
+        .panel {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 51, 51, 0.2);
+            border-radius: 6px;
+            padding: 16px;
+        }
+
+        .panel h3 {
+            margin: 0 0 12px 0;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: rgba(255, 51, 51, 0.7);
+        }
+
+        .profile-row {
+            padding: 8px 10px;
+            border-left: 2px solid transparent;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .profile-row:hover { background: rgba(255, 51, 51, 0.06); }
+        .profile-row.selected { border-left-color: rgba(255, 51, 51, 0.8); background: rgba(255, 51, 51, 0.08); }
+        .profile-name { color: #eaeaea; font-size: 13px; font-family: 'Courier New', monospace; }
+        .profile-meta { color: #666; font-size: 11px; }
+        .profile-warn { color: #ff6b6b; font-size: 11px; }
+
+        .editor-textarea {
+            width: 100%;
+            min-height: 320px;
+            background: rgba(0, 0, 0, 0.35);
+            border: 1px solid rgba(255, 51, 51, 0.3);
+            border-radius: 4px;
+            color: #eaeaea;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            line-height: 1.5;
+            padding: 10px;
+            box-sizing: border-box;
+            tab-size: 2;
+        }
+
+        .editor-actions { display: flex; gap: 8px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+
+        .btn-danger { border-left-color: rgba(255, 255, 255, 0.25); color: #999; }
+
+        .hint { color: #666; font-size: 11px; margin-top: 4px; }
+        .status-line { font-size: 12px; margin-top: 10px; min-height: 16px; }
+        .status-ok { color: #4caf50; }
+        .status-err { color: #ff6b6b; }
+
+        .push-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .listener-check { display: block; color: #eaeaea; font-size: 12px; margin-bottom: 6px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-content">
+            <div class="logo">
+                <img src="/static/logo.png" alt="Unkn0wnC2" class="logo-img">
+                <span class="logo-text">Unkn0wnC2</span>
+            </div>
+            <div class="nav">
+                <a href="/dashboard" class="nav-btn">Dashboard</a>
+                <a href="/builder" class="nav-btn">Builder</a>
+                <a href="/profiles" class="nav-btn active">HTTP Profiles</a>
+                <a href="/stager" class="nav-btn">Stager Sessions</a>
+                <a href="/exfils" class="nav-btn">Exfils</a>
+                <a href="/logs" class="nav-btn">Logs</a>
+                <a href="/report" class="nav-btn">Report</a>
+                <a href="/users" class="nav-btn" id="usersNavBtn">Users</a>
+            </div>
+            <div class="user-info">
+                Logged in as <strong id="username">operator</strong>
+                <button class="logout-btn" onclick="logout()">Logout</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <div id="alertContainer"></div>
+
+        <div class="section-title">HTTP Listener Profiles</div>
+        <div class="hint" style="margin-bottom: 16px;">
+            Profiles describe how an HTTP/HTTPS listener looks on the wire. They are stored here
+            and embedded into a beacon that uses HTTP transport. The listener itself loads profiles
+            from its own profile directory, so deploying one means copying it to each DNS server.
+        </div>
+
+        <div class="profiles-layout">
+            <div class="panel">
+                <h3>Stored Profiles</h3>
+                <div id="profileList"><div class="profile-meta">Loading...</div></div>
+            </div>
+
+            <div class="panel">
+                <h3>Editor</h3>
+                <div class="form-group">
+                    <label class="form-label">Name</label>
+                    <input type="text" id="profileName" class="form-input" placeholder="cdn-assets" maxlength="64">
+                    <div class="hint">Letters, digits, dot, dash or underscore. The listener takes a profile name from its filename, so the name in the document is pinned to this.</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Document (JSON)</label>
+                    <textarea id="profileDocument" class="editor-textarea" spellcheck="false"></textarea>
+                    <div class="hint">Needs uris for register, task, result and ack. An https listener needs tls.cert_file, tls.key_file and tls.spki_sha256. Set beacon_host to the address beacons dial, which is usually not the bind address.</div>
+                </div>
+
+                <div class="editor-actions">
+                    <button class="btn" onclick="saveProfile()">Save</button>
+                    <button class="btn" onclick="loadTemplate()">Load Template</button>
+                    <button class="btn" onclick="formatDocument()">Reformat</button>
+                    <button class="btn" onclick="downloadProfile()">Download</button>
+                    <button class="btn btn-danger" onclick="deleteProfile()">Delete</button>
+                    <button class="btn btn-danger" onclick="newProfile()">New</button>
+                </div>
+                <div id="editorStatus" class="status-line"></div>
+            </div>
+        </div>
+
+        <div class="panel" style="margin-top: 20px;">
+            <h3>Push Transport To Live Beacons</h3>
+            <div class="hint" style="margin-bottom: 12px;">
+                Queues an update_transport task, the same fire-and-forget channel domain updates use.
+                The beacon applies it and sends no result, because a reply would travel on whichever
+                transport the update just replaced.
+            </div>
+
+            <div class="push-grid">
+                <div class="form-group">
+                    <label class="form-label">Mode</label>
+                    <select id="pushMode" class="form-select" onchange="onPushModeChange()">
+                        <option value="dual">dual</option>
+                        <option value="http">http</option>
+                        <option value="dns">dns</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Target</label>
+                    <input type="text" id="pushBeaconID" class="form-input" placeholder="beacon id (blank = every beacon)">
+                </div>
+            </div>
+
+            <div class="form-group" id="pushFallbackGroup">
+                <label class="form-label">Fallback</label>
+                <div class="form-row">
+                    <input type="number" id="pushFallbackAfter" class="form-input" value="3" min="1" placeholder="Failures">
+                    <input type="number" id="pushRetryBackoff" class="form-input" value="60" min="1" placeholder="Retry backoff (s)">
+                </div>
+            </div>
+
+            <div class="form-group" id="pushListenersGroup">
+                <label class="form-label">Listeners</label>
+                <div id="pushListeners"><div class="profile-meta">Loading...</div></div>
+            </div>
+
+            <button class="btn" onclick="pushTransport()">Push Transport Update</button>
+            <div id="pushStatus" class="status-line"></div>
+        </div>
+    </div>
+
+    <script src="/static/shared.js"></script>
+    <script>
+        let profiles = [];
+        let selectedName = null;
+
+        const STARTER_DOCUMENT = {
+            name: '',
+            enabled: true,
+            bind_addr: '0.0.0.0',
+            bind_port: 8443,
+            scheme: 'https',
+            host_header: 'cdn.example.com',
+            beacon_host: 'cdn.example.com:8443',
+            tls: {
+                cert_file: '/opt/unkn0wnc2/certs/http-cdn-assets.crt',
+                key_file: '/opt/unkn0wnc2/certs/http-cdn-assets.key',
+                spki_sha256: 'REPLACE_WITH_GENERATED_PIN',
+                min_version: '1.2'
+            },
+            uris: {
+                register: ['/api/v1/ping'],
+                task: ['/api/v1/sync'],
+                result: ['/api/v1/report'],
+                ack: ['/api/v1/ack']
+            },
+            methods: { register: 'POST', task: 'GET', result: 'POST', ack: 'GET' },
+            user_agents: ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'],
+            headers: [
+                { name: 'Accept', value: 'application/json, text/plain, */*' },
+                { name: 'Accept-Language', value: 'en-US,en;q=0.9' }
+            ],
+            request_body: { encoding: 'aes-gcm-base36', field: 'd', padding_field: 'p', pad_min: 0, pad_max: 32 },
+            response_body: { encoding: 'aes-gcm-base36', field: 'd', error_field: 'e' },
+            auth: { mode: 'hmac-sha256', header: 'X-Sig', sig_encoding: 'hex', max_skew_secs: 300 },
+            status: { ok: 200, empty: 204, not_found: 404, error: 500 },
+            jitter: { min_ms: 0, max_ms: 250 },
+            max_body_bytes: 1048576
+        };
+
+        // Parse a stored document, keeping a malformed one visible rather than
+        // silently replacing it with an empty object.
+        function parseDocument(profile) {
+            try {
+                return JSON.parse(profile.document) || {};
+            } catch (error) {
+                return {};
+            }
+        }
+
+        async function loadProfiles() {
+            const list = document.getElementById('profileList');
+            try {
+                const response = await authFetch('/api/http/profiles');
+                if (!response || !response.ok) throw new Error('request failed');
+                const payload = await response.json();
+                profiles = (payload && payload.data && payload.data.profiles) || [];
+            } catch (error) {
+                profiles = [];
+                list.innerHTML = '<div class="status-err">Failed to load profiles.</div>';
+                return;
+            }
+
+            renderProfileList();
+            renderPushListeners();
+        }
+
+        function renderProfileList() {
+            const list = document.getElementById('profileList');
+
+            if (profiles.length === 0) {
+                list.innerHTML = '<div class="profile-meta">No profiles stored yet.</div>';
+                return;
+            }
+
+            list.innerHTML = profiles.map(profile => {
+                const document_ = parseDocument(profile);
+                const host = document_.beacon_host || '';
+                const warn = host ? '' : '<div class="profile-warn">&#9888; no beacon_host, builds cannot use it</div>';
+                const selected = profile.name === selectedName ? ' selected' : '';
+                const scheme = document_.scheme || 'https';
+                const target = host ? `${scheme}://${host}` : 'listener-only';
+
+                return `<div class="profile-row${selected}" onclick="selectProfile('${escapeHtml(profile.name)}')">
+                    <div>
+                        <div class="profile-name">${escapeHtml(profile.name)}</div>
+                        <div class="profile-meta">${escapeHtml(target)}</div>
+                        ${warn}
+                    </div>
+                    <div class="profile-meta">${profile.updated_at ? escapeHtml(formatTimestamp(profile.updated_at)) : ''}</div>
+                </div>`;
+            }).join('');
+        }
+
+        function selectProfile(name) {
+            const profile = profiles.find(candidate => candidate.name === name);
+            if (!profile) return;
+
+            selectedName = name;
+            document.getElementById('profileName').value = name;
+
+            // Show the stored document as written, reformatted only if it parses.
+            const parsed = parseDocument(profile);
+            document.getElementById('profileDocument').value = JSON.stringify(parsed, null, 2);
+
+            setStatus('editorStatus', '', '');
+            renderProfileList();
+        }
+
+        function newProfile() {
+            selectedName = null;
+            document.getElementById('profileName').value = '';
+            document.getElementById('profileDocument').value = JSON.stringify(STARTER_DOCUMENT, null, 2);
+            setStatus('editorStatus', 'New profile: set a name and Save.', '');
+            renderProfileList();
+        }
+
+        function loadTemplate() {
+            document.getElementById('profileDocument').value = JSON.stringify(STARTER_DOCUMENT, null, 2);
+            setStatus('editorStatus', 'Template loaded. Set beacon_host and the pin before saving.', '');
+        }
+
+        function formatDocument() {
+            const textarea = document.getElementById('profileDocument');
+            try {
+                textarea.value = JSON.stringify(JSON.parse(textarea.value), null, 2);
+                setStatus('editorStatus', 'Reformatted.', 'status-ok');
+            } catch (error) {
+                setStatus('editorStatus', `Not valid JSON: ${error.message}`, 'status-err');
+            }
+        }
+
+        async function saveProfile() {
+            const name = document.getElementById('profileName').value.trim();
+            const documentText = document.getElementById('profileDocument').value;
+
+            if (!name) {
+                setStatus('editorStatus', 'A name is required.', 'status-err');
+                return;
+            }
+
+            // Catch malformed JSON here so the operator gets the parse position
+            // rather than a generic rejection.
+            try {
+                JSON.parse(documentText);
+            } catch (error) {
+                setStatus('editorStatus', `Not valid JSON: ${error.message}`, 'status-err');
+                return;
+            }
+
+            try {
+                const response = await authFetch('/api/http/profiles', {
+                    method: 'POST',
+                    body: JSON.stringify({ name: name, document: documentText })
+                });
+                const payload = await response.json();
+
+                if (!response.ok) {
+                    // The API's message names the offending field, so it is shown
+                    // as-is rather than replaced with a generic failure.
+                    setStatus('editorStatus', payload.message || 'Save failed.', 'status-err');
+                    return;
+                }
+
+                setStatus('editorStatus', 'Saved.', 'status-ok');
+                showAlert('Profile saved', 'success');
+                selectedName = name;
+                await loadProfiles();
+                selectProfile(name);
+            } catch (error) {
+                setStatus('editorStatus', `Save failed: ${error.message}`, 'status-err');
+            }
+        }
+
+        async function deleteProfile() {
+            const name = document.getElementById('profileName').value.trim();
+            if (!name) {
+                setStatus('editorStatus', 'Select a profile to delete.', 'status-err');
+                return;
+            }
+            if (!confirm(`Delete profile ${name}? This does not remove it from any DNS server that already has it.`)) {
+                return;
+            }
+
+            try {
+                const response = await authFetch(`/api/http/profiles/${encodeURIComponent(name)}`, { method: 'DELETE' });
+                if (!response || !response.ok) throw new Error('delete failed');
+
+                setStatus('editorStatus', 'Deleted.', 'status-ok');
+                selectedName = null;
+                document.getElementById('profileName').value = '';
+                document.getElementById('profileDocument').value = '';
+                await loadProfiles();
+            } catch (error) {
+                setStatus('editorStatus', `Delete failed: ${error.message}`, 'status-err');
+            }
+        }
+
+        function downloadProfile() {
+            const name = document.getElementById('profileName').value.trim();
+            if (!name) {
+                setStatus('editorStatus', 'Select a profile to download.', 'status-err');
+                return;
+            }
+
+            // The file is what goes on the DNS server's profile directory, so the
+            // name must be the file stem.
+            const blob = new Blob([document.getElementById('profileDocument').value], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `${name}.json`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+        }
+
+        // --- Push panel ---
+
+        function renderPushListeners() {
+            const container = document.getElementById('pushListeners');
+            if (profiles.length === 0) {
+                container.innerHTML = '<div class="profile-meta">No profiles stored.</div>';
+                return;
+            }
+
+            container.innerHTML = profiles.map(profile => {
+                const document_ = parseDocument(profile);
+                const host = document_.beacon_host || '';
+                const warn = host ? '' : ' <span class="profile-warn">(no beacon_host)</span>';
+                return `<label class="listener-check">
+                    <input type="checkbox" class="pushListener" value="${escapeHtml(profile.name)}" style="width:14px; height:14px; margin-right:6px;">
+                    ${escapeHtml(profile.name)}${warn}
+                </label>`;
+            }).join('');
+        }
+
+        function onPushModeChange() {
+            const mode = document.getElementById('pushMode').value;
+            document.getElementById('pushFallbackGroup').style.display = mode === 'dual' ? 'block' : 'none';
+            document.getElementById('pushListenersGroup').style.display = mode === 'dns' ? 'none' : 'block';
+        }
+
+        async function pushTransport() {
+            const mode = document.getElementById('pushMode').value;
+            const beaconID = document.getElementById('pushBeaconID').value.trim();
+
+            const request = { mode: mode };
+
+            if (mode !== 'dns') {
+                const selected = Array.from(document.querySelectorAll('.pushListener:checked')).map(el => el.value);
+                if (selected.length === 0) {
+                    setStatus('pushStatus', 'Select at least one listener.', 'status-err');
+                    return;
+                }
+
+                try {
+                    request.listeners = selected.map(name => {
+                        const document_ = parseDocument(profiles.find(profile => profile.name === name));
+                        const host = document_.beacon_host || '';
+                        if (!host) {
+                            throw new Error(`Profile ${name} has no beacon_host.`);
+                        }
+                        return {
+                            name: name,
+                            scheme: document_.scheme || 'https',
+                            host: host,
+                            host_header: document_.host_header || '',
+                            spki_sha256: (document_.tls && document_.tls.spki_sha256) || '',
+                            uris: document_.uris || {},
+                            methods: document_.methods || {},
+                            user_agents: document_.user_agents || [],
+                            headers: document_.headers || [],
+                            request_body: document_.request_body || {},
+                            response_body: document_.response_body || {},
+                            auth: document_.auth || {},
+                            timeout_secs: document_.timeout_secs || 0,
+                            max_body_bytes: document_.max_body_bytes || 0
+                        };
+                    });
+                } catch (error) {
+                    setStatus('pushStatus', error.message, 'status-err');
+                    return;
+                }
+
+                if (mode === 'dual') {
+                    request.fallback_after_failures = parseInt(document.getElementById('pushFallbackAfter').value, 10) || 3;
+                    request.retry_backoff_secs = parseInt(document.getElementById('pushRetryBackoff').value, 10) || 60;
+                }
+            }
+
+            if (beaconID) {
+                request.beacon_id = beaconID;
+            } else {
+                if (!confirm('Push this transport change to every beacon?')) return;
+                request.all = true;
+            }
+
+            try {
+                const response = await authFetch('/api/http/transport', {
+                    method: 'POST',
+                    body: JSON.stringify(request)
+                });
+                const payload = await response.json();
+
+                if (!response.ok) {
+                    setStatus('pushStatus', payload.message || 'Push failed.', 'status-err');
+                    return;
+                }
+
+                const data = (payload && payload.data) || {};
+                const queued = data.queued || [];
+                const failed = data.failed || 0;
+                setStatus('pushStatus', `Queued for ${queued.length} beacon(s)${failed ? `, ${failed} failed` : ''}.`, failed ? 'status-err' : 'status-ok');
+                showAlert('Transport update queued', failed ? 'error' : 'success');
+            } catch (error) {
+                setStatus('pushStatus', `Push failed: ${error.message}`, 'status-err');
+            }
+        }
+
+        function setStatus(elementID, message, className) {
+            const element = document.getElementById(elementID);
+            if (!element) return;
+            element.textContent = message;
+            element.className = 'status-line ' + (className || '');
+        }
+
+        loadProfiles();
+        onPushModeChange();
+    </script>
+</body>
+</html>

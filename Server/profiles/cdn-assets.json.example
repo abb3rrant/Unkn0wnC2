@@ -5,6 +5,7 @@
   "bind_port": 8443,
   "scheme": "https",
   "host_header": "cdn.example.com",
+  "beacon_host": "cdn.example.com:8443",
   "tls": {
     "cert_file": "/opt/unkn0wnc2/certs/http-cdn-assets.crt",
     "key_file": "/opt/unkn0wnc2/certs/http-cdn-assets.key",

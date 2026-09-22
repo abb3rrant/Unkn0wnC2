@@ -54,6 +54,7 @@ A complete example lives in `Server/profiles/cdn-assets.json.example`.
 | `bind_addr`, `bind_port` | Where the listener binds. Defaults `0.0.0.0`, `8443`. |
 | `scheme` | `http` or `https`. Defaults to `http`. |
 | `host_header` | Host header the beacon sends. Empty uses the connection host. |
+| `beacon_host` | Where beacons connect, `host:port`. The listener ignores this key; it exists so the address beacons dial is stated rather than inferred, since it is usually not the bind address. Build requests read it to fill `host`. |
 | `tls.cert_file`, `tls.key_file` | Required for `https`. |
 | `tls.spki_sha256` | The pin: base64 SHA-256 of the certificate's SubjectPublicKeyInfo. |
 | `tls.min_version` | `1.2` (default) or `1.3`. |
@@ -128,6 +129,37 @@ healthy while every beacon failed, so this is a startup error rather than a warn
 
 Rotating a certificate means rotating the pin in the profile **and** in any beacon
 build that pinned the old one.
+
+## Managing profiles in Archon
+
+Profiles can be stored in Archon (Profiles page, or the API) so they are authored in
+one place, flagged with the validation errors the listener would raise, and selected
+when building a beacon.
+
+```bash
+# save or replace a profile
+curl -s -X POST -H "Content-Type: application/json" -d '{"name":"cdn-assets","document":{...}}' \
+  https://<archon>/api/http/profiles
+
+# list, fetch, delete
+curl -s https://<archon>/api/http/profiles
+curl -s https://<archon>/api/http/profiles/cdn-assets
+curl -s -X DELETE https://<archon>/api/http/profiles/cdn-assets
+
+# move live beacons between transports
+curl -s -X POST -H "Content-Type: application/json" \
+  -d '{"all":true,"mode":"dual","fallback_after_failures":3,"retry_backoff_secs":60,"listeners":[...]}' \
+  https://<archon>/api/http/transport
+```
+
+**Archon is the store, not the enforcement point.** The DNS server still loads
+profiles from its own `http_profile_dir`, so deploying a profile means copying the
+document to that directory on each DNS server (or, in the Docker setup, dropping it
+in `docker/profiles/`, which is mounted there). Archon's copy is what a build embeds
+in a beacon and what a runtime push sends.
+
+The build request needs the profile's `beacon_host`: the address beacons dial is
+usually not the address the listener binds, so it is stated explicitly.
 
 ## Hot reload
 

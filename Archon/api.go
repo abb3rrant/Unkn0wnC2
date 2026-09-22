@@ -3354,6 +3354,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	router.HandleFunc("/beacon", api.handleBeaconPage).Methods("GET")
 	router.HandleFunc("/dns-servers", api.handleDNSServersPage).Methods("GET")
 	router.HandleFunc("/builder", api.handleBuilderPage).Methods("GET")
+	router.HandleFunc("/profiles", api.handleProfilesPage).Methods("GET")
 	router.HandleFunc("/stager", api.handleStagerPage).Methods("GET")
 	router.HandleFunc("/exfils", api.handleExfilsPage).Methods("GET")
 	router.HandleFunc("/users", api.handleUsersPage).Methods("GET")
@@ -3520,6 +3521,10 @@ func (api *APIServer) handleBeaconPage(w http.ResponseWriter, r *http.Request) {
 
 func (api *APIServer) handleDNSServersPage(w http.ResponseWriter, r *http.Request) {
 	serveNoCache(w, r, filepath.Join(api.config.WebRoot, "dns-servers.html"))
+}
+
+func (api *APIServer) handleProfilesPage(w http.ResponseWriter, r *http.Request) {
+	serveNoCache(w, r, filepath.Join(api.config.WebRoot, "profiles.html"))
 }
 
 func (api *APIServer) handleUsersPage(w http.ResponseWriter, r *http.Request) {
