@@ -127,7 +127,7 @@ Exercises: Archon web UI health, Go beacon check-in, task creation with a
 verified completed status and expected command output, and Shadow Mesh
 multi-beacon sync via DNS2.
 
-Expected: **ALL TESTS PASSED (6/6)**.
+Expected: **ALL TESTS PASSED (7/7)**.
 
 ### 4) Run the Extended E2E suite
 
