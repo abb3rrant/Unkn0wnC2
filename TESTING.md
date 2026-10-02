@@ -123,8 +123,9 @@ pin. Expected: **ALL TESTS PASSED (14/14)**.
 $COMPOSE --profile test run --rm --no-deps test
 ```
 
-Exercises: Archon web UI health, Go beacon check-in, task creation + result
-(`whoami` → `root`), and Shadow Mesh multi-beacon sync via DNS2.
+Exercises: Archon web UI health, Go beacon check-in, task creation with a
+verified completed status and expected command output, and Shadow Mesh
+multi-beacon sync via DNS2.
 
 Expected: **ALL TESTS PASSED (6/6)**.
 
@@ -136,10 +137,25 @@ $COMPOSE --profile extended-test run --rm --no-deps extended-test
 
 Exercises: A-record polling, unencrypted (base36) comms, staged registration,
 large-result exfiltration (chunked), rapid consecutive tasks, minimal-output
-edge cases, special characters, and multi-beacon/domain failover.
+edge cases, special characters, and multi-beacon visibility. The visibility
+check does not simulate a listener outage or prove domain failover recovery.
 
 Expected: **ALL TESTS PASSED (14/14)** (some beacons may be reported `SKIP` only if a
 specific variant binary did not build; a failed required test fails the run).
+
+#### Assertion semantics
+
+Result helpers report the verified terminal status via their exit status:
+`completed` tasks pass, `failed` tasks fail with the task's result text, and
+timeouts fail separately. Successfully completed empty output (e.g. `true`)
+remains valid. The rapid-task check requires all three tasks to be created
+before evaluating results.
+
+#### Remaining verification gaps
+
+The suites do not simulate a listener outage, so multi-domain failover
+recovery remains unverified by these scripts. Green summaries assert the
+behaviors listed above; they are not exhaustive functional proof.
 
 ### 5) Teardown
 

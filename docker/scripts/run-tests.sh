@@ -43,7 +43,11 @@ api_post() {
         -X POST "${ARCHON_URL}$1" -d "$2"
 }
 
-# Wait for a task result, return the result string
+# Wait for a task to reach a terminal state and print its result text.
+# Exit status carries the verified outcome:
+#   0 = task completed
+#   2 = task failed
+#   1 = no terminal state before the timeout
 wait_result() {
     local task_id="$1"
     local timeout_iters="${2:-12}"
@@ -53,7 +57,8 @@ wait_result() {
         if [ "$STATUS" = "completed" ] || [ "$STATUS" = "failed" ]; then
             RESULT_DATA=$(api_get "/api/tasks/${task_id}" | jq -r '.result // ""' 2>/dev/null) || true
             echo "$RESULT_DATA"
-            return 0
+            [ "$STATUS" = "completed" ] && return 0
+            return 2
         fi
         sleep 5
     done
@@ -129,11 +134,17 @@ if [ "$BEACON_FOUND" = true ]; then
 
     if [ -n "$TASK_ID" ]; then
         pass "Task created (${TASK_ID})"
-        RESULT_DATA=$(wait_result "$TASK_ID")
-        if [ -n "$RESULT_DATA" ]; then
-            pass "Task result received: $(echo "$RESULT_DATA" | head -1 | tr -d '\n')"
+        OUTCOME=0
+        RESULT_DATA=$(wait_result "$TASK_ID") || OUTCOME=$?
+        case "$OUTCOME" in
+            0) pass "Task completed, result received: $(echo "$RESULT_DATA" | head -1 | tr -d '\n')" ;;
+            2) fail "Task result" "task failed: $(echo "$RESULT_DATA" | head -1 | cut -c1-60 | tr -d '\n')" ;;
+            *) fail "Task result" "no terminal state after 60s" ;;
+        esac
+        if [ "$OUTCOME" -eq 0 ] && [ "$(echo "$RESULT_DATA" | head -1 | tr -d '[:space:]')" = "root" ]; then
+            pass "Task output identity matches the requested command"
         else
-            fail "Task result" "no result after 60s"
+            fail "Task output identity" "expected 'root', got '$(echo "$RESULT_DATA" | head -1 | tr -d '\n')'"
         fi
     else
         fail "Task creation" "$(echo "$TASK_RESP" | jq -r '.error // .message // "unknown"')"

@@ -23,6 +23,8 @@ sha256sum -c dist/SHA256SUMS
 
 The script builds static Linux amd64 and arm64 Archon binaries with read-only modules, `-trimpath`, VCS stamping disabled, and version metadata from `VERSION` and the current commit. Archives are normalized to the commit timestamp, numeric owner/group zero, and sorted paths. Each archive has a CycloneDX JSON SBOM.
 
+Timestamp normalization defaults to the commit time. Setting `SOURCE_DATE_EPOCH` explicitly overrides that input and intentionally produces archives with a different timestamp; reproducibility comparisons must use the same `SOURCE_DATE_EPOCH` value (or none) for both builds.
+
 Artifacts are written to `dist/`:
 
 - `Unkn0wnC2-v<version>-linux-amd64.tar.gz`
@@ -64,7 +66,7 @@ Before tagging or publishing:
 
 1. Confirm CI passed at the exact candidate commit.
 2. Run all module tests, race tests, vet, staticcheck, `govulncheck`, and Gitleaks.
-3. Build the archives twice from clean checkouts and compare archive SHA-256 values.
+3. Build the archives twice from clean checkouts and compare archive SHA-256 values. CI performs this comparison automatically in the release-artifacts job.
 4. Smoke-test the native archive, production container, and remote Docker E2E topology.
 5. Verify `SHA256SUMS` and validate both SBOMs as CycloneDX JSON.
 6. Merge through the normal PR path.

@@ -103,6 +103,26 @@ jobs:
           GOTOOLCHAIN: local
         run: ./scripts/build-release.sh
 
+      - name: Verify archive reproducibility (build twice, compare)
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          ./scripts/build-release.sh dist-repro
+          VERSION=$(tr -d '[:space:]' < VERSION)
+          for target in linux-amd64 linux-arm64; do
+            first="dist/Unkn0wnc2-v${VERSION}-${target}.tar.gz"
+            second="dist-repro/Unkn0wnc2-v${VERSION}-${target}.tar.gz"
+            a=$(sha256sum "$first" | cut -d' ' -f1)
+            b=$(sha256sum "$second" | cut -d' ' -f1)
+            if [ "$a" != "$b" ]; then
+              echo "reproducibility failure for ${target}: ${a} != ${b}"
+              exit 1
+            fi
+            echo "reproducible ${target}: ${a}"
+          done
+          rm -rf dist-repro
+
       - name: Smoke-test the native artifact
         run: |
           set -euo pipefail

@@ -81,7 +81,8 @@ wait_result() {
         status=$(echo "$task" | jq -r '.status // ""')
         if [ "$status" = "completed" ] || [ "$status" = "failed" ]; then
             echo "$task" | jq -r '.result // ""'
-            return 0
+            [ "$status" = "completed" ] && return 0
+            return 2
         fi
         sleep 3
     done
@@ -164,11 +165,14 @@ if [ -n "$HTTP_BEACON_ID" ]; then
     TASK_RESPONSE=$(api_post "/api/beacons/${HTTP_BEACON_ID}/task" "{\"beacon_id\":\"${HTTP_BEACON_ID}\",\"command\":\"printf HTTP_E2E_OK\"}")
     TASK_ID=$(echo "$TASK_RESPONSE" | jq -r '.data.task_id // empty')
     if [ -n "$TASK_ID" ]; then
-        RESULT=$(wait_result "$TASK_ID") || RESULT=""
-        if [ "$RESULT" = "HTTP_E2E_OK" ]; then
+        OUTCOME=0
+        RESULT=$(wait_result "$TASK_ID") || OUTCOME=$?
+        if [ "$OUTCOME" -eq 0 ] && [ "$RESULT" = "HTTP_E2E_OK" ]; then
             pass "HTTP-only task and result completed through Archon"
+        elif [ "$OUTCOME" -eq 2 ]; then
+            fail "HTTP-only task and result" "task failed: ${RESULT:-no result text}"
         else
-            fail "HTTP-only task and result" "expected HTTP_E2E_OK, got ${RESULT:-no result}"
+            fail "HTTP-only task and result" "expected HTTP_E2E_OK, got ${RESULT:-no result} (outcome ${OUTCOME})"
         fi
     else
         fail "HTTP-only task creation" "$(echo "$TASK_RESPONSE" | head -c 200)"
