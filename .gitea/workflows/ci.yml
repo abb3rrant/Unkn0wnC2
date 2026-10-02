@@ -112,7 +112,7 @@ jobs:
           VERSION=$(tr -d '[:space:]' < VERSION)
           for target in linux-amd64 linux-arm64; do
             first="dist/Unkn0wnC2-v${VERSION}-${target}.tar.gz"
-            second="dist-repro/Unkn0wnc2-v${VERSION}-${target}.tar.gz"
+            second="dist-repro/Unkn0wnC2-v${VERSION}-${target}.tar.gz"
             a=$(sha256sum "$first" | cut -d' ' -f1)
             b=$(sha256sum "$second" | cut -d' ' -f1)
             if [ "$a" != "$b" ]; then
