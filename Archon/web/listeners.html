@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/png" href="/static/logo.png">
+    <title>Listeners - Unkn0wnC2</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=ITC+Benguiat:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .section-title {
+            font-size: 24px;
+            font-weight: 600;
+            color: rgba(255, 51, 51, 0.8);
+            font-family: 'Bebas Neue', 'Arial Narrow', sans-serif;
+            letter-spacing: 2px;
+        }
+
+        .panel {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 51, 51, 0.2);
+            border-radius: 6px;
+            padding: 16px;
+            margin-top: 16px;
+        }
+
+        .panel h3 {
+            margin: 0 0 12px 0;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: rgba(255, 51, 51, 0.7);
+        }
+
+        table.listeners {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        table.listeners th {
+            text-align: left;
+            color: rgba(255, 51, 51, 0.7);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            padding: 8px 10px;
+            border-bottom: 1px solid rgba(255, 51, 51, 0.2);
+        }
+
+        table.listeners td {
+            padding: 10px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            color: #eaeaea;
+            vertical-align: top;
+        }
+
+        table.listeners tr.clickable { cursor: pointer; }
+        table.listeners tr.clickable:hover { background: rgba(255, 51, 51, 0.06); }
+
+        .mono { font-family: 'Courier New', monospace; }
+        .muted { color: #666; font-size: 11px; }
+        .ok { color: #4caf50; }
+        .bad { color: #ff6b6b; }
+        .chip {
+            display: inline-block;
+            padding: 1px 7px;
+            margin-right: 4px;
+            border-radius: 3px;
+            font-size: 11px;
+            background: rgba(255, 51, 51, 0.12);
+            color: rgba(255, 51, 51, 0.9);
+            font-family: 'Courier New', monospace;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-content">
+            <div class="logo">
+                <img src="/static/logo.png" alt="Unkn0wnC2" class="logo-img">
+                <span class="logo-text">Unkn0wnC2</span>
+            </div>
+            <div class="nav">
+        <a href="/dashboard" class="nav-btn">Dashboard</a>
+        <a href="/listeners" class="nav-btn active">Listeners</a>
+        <a href="/profiles" class="nav-btn">HTTP Profiles</a>
+        <a href="/builder" class="nav-btn">Builder</a>
+        <a href="/stager" class="nav-btn">Stager Sessions</a>
+        <a href="/exfils" class="nav-btn">Exfils</a>
+        <a href="/logs" class="nav-btn">Logs</a>
+        <a href="/report" class="nav-btn">Report</a>
+        <a href="/users" class="nav-btn" id="usersNavBtn">Users</a>
+    </div>
+            <div class="user-info">
+                Logged in as <strong id="username">operator</strong>
+                <button class="logout-btn" onclick="logout()">Logout</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <div id="alertContainer"></div>
+
+        <div class="section-title">Listeners</div>
+        <div class="muted" style="margin-bottom: 8px;">
+            A listener answers DNS and additionally serves the HTTP profiles assigned to it.
+            Click a listener to manage its profiles.
+        </div>
+
+        <div class="panel">
+            <h3>Registered Listeners</h3>
+            <div id="listenerTable"><div class="muted">Loading...</div></div>
+        </div>
+    </div>
+
+    <script src="/static/shared.js"></script>
+    <script>
+        let listeners = [];
+
+        async function loadListeners() {
+            const container = document.getElementById('listenerTable');
+
+            try {
+                const response = await authFetch('/api/dns-servers');
+                if (!response || !response.ok) throw new Error('request failed');
+                const payload = await response.json();
+
+                // The endpoint returns both the raw servers and an enriched view that
+                // carries assignments and reported state, so this page needs one call.
+                listeners = (payload && (payload.listeners || payload.data && payload.data.listeners)) || [];
+                if (listeners.length === 0 && payload && payload.servers) {
+                    listeners = payload.servers.map(server => ({ server: server }));
+                }
+            } catch (error) {
+                container.innerHTML = `<div class="bad">Failed to load listeners: ${escapeHtml(error.message)}</div>`;
+                return;
+            }
+
+            renderListeners();
+        }
+
+        function renderListeners() {
+            const container = document.getElementById('listenerTable');
+
+            if (listeners.length === 0) {
+                container.innerHTML = '<div class="muted">No listeners registered yet.</div>';
+                return;
+            }
+
+            const rows = listeners.map(entry => {
+                const server = entry.server || entry;
+                const assigned = entry.assigned_profiles || [];
+                const reported = entry.reported_listeners || [];
+
+                const running = reported.filter(status => status.running).length;
+                const failing = reported.filter(status => !status.running && status.enabled && status.error).length;
+
+                const profilesCell = assigned.length === 0
+                    ? '<span class="muted">none</span>'
+                    : assigned.map(name => `<span class="chip">${escapeHtml(name)}</span>`).join('');
+
+                const listenerState = reported.length === 0
+                    ? '<span class="muted">not reported</span>'
+                    : `<span class="${failing ? 'bad' : 'ok'}">${running}/${reported.length} running</span>`
+                      + (failing ? ` <span class="bad">(${failing} failing)</span>` : '');
+
+                const lastCheckin = server.last_checkin
+                    ? escapeHtml(formatTimestamp(server.last_checkin))
+                    : '<span class="muted">never</span>';
+
+                return `<tr class="clickable" onclick="openListener('${escapeHtml(server.id)}')">
+                    <td class="mono">${escapeHtml(server.id)}</td>
+                    <td>${escapeHtml(server.domain || '')}<div class="muted">${escapeHtml(server.address || '')}</div></td>
+                    <td>${escapeHtml(server.status || 'unknown')}<div class="muted">last check-in ${lastCheckin}</div></td>
+                    <td>${profilesCell}</td>
+                    <td>${listenerState}</td>
+                </tr>`;
+            }).join('');
+
+            container.innerHTML = `<table class="listeners">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Domain</th>
+                        <th>Status</th>
+                        <th>HTTP Profiles</th>
+                        <th>HTTP Listeners</th>
+                    </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+            </table>`;
+        }
+
+        function openListener(id) {
+            window.location.href = `/listener?id=${encodeURIComponent(id)}`;
+        }
+
+        loadListeners();
+    </script>
+</body>
+</html>

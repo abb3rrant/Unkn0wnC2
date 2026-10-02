@@ -214,18 +214,6 @@ func (c *DNSClient) markDomainFailed(domain string) {
 	c.mutex.Unlock()
 }
 
-// encodeCommand encrypts and encodes a command string for DNS transmission
-func (c *DNSClient) encodeCommand(command string) (string, error) {
-	if c.config.Encoding == "base36" {
-		return base36EncodeString(command), nil
-	}
-	encoded, err := encryptAndEncode(command, c.aesKey)
-	if err != nil {
-		return "", fmt.Errorf("failed to encrypt and encode command: %v", err)
-	}
-	return encoded, nil
-}
-
 // encodeForPhase encrypts/encodes using the phase-specific encryption setting
 func (c *DNSClient) encodeForPhase(command string, encrypted bool) (string, error) {
 	if !encrypted {
@@ -236,18 +224,6 @@ func (c *DNSClient) encodeForPhase(command string, encrypted bool) (string, erro
 		return "", fmt.Errorf("failed to encrypt and encode command: %v", err)
 	}
 	return encoded, nil
-}
-
-// decodeResponse decodes and decrypts a DNS response back to readable format
-func (c *DNSClient) decodeResponse(encoded string) (string, error) {
-	if c.config.Encoding == "base36" {
-		return base36DecodeString(encoded)
-	}
-	decoded, err := decodeAndDecrypt(encoded, c.aesKey)
-	if err != nil {
-		return "", fmt.Errorf("failed to decode and decrypt response: %v", err)
-	}
-	return decoded, nil
 }
 
 // decodeForPhase decodes using the phase-specific encryption setting
@@ -494,4 +470,3 @@ func (c *DNSClient) sendPhaseCommand(command string, phase PhaseConfig) (string,
 
 	return c.sendPhaseQuery(commandWithTimestamp, taskID, phase)
 }
-

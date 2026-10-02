@@ -1,0 +1,76 @@
+{
+  "name": "cdn-assets",
+  "enabled": true,
+  "bind_addr": "0.0.0.0",
+  "bind_port": 8443,
+  "scheme": "https",
+  "host_header": "cdn.example.com",
+  "beacon_host": "cdn.example.com:8443",
+  "tls": {
+    "cert_file": "/opt/unkn0wnc2/certs/http-cdn-assets.crt",
+    "key_file": "/opt/unkn0wnc2/certs/http-cdn-assets.key",
+    "spki_sha256": "REPLACE_WITH_GENERATED_PIN",
+    "min_version": "1.2"
+  },
+  "uris": {
+    "register": ["/api/v1/ping", "/assets/ping"],
+    "task": ["/api/v1/sync", "/assets/sync"],
+    "result": ["/api/v1/report", "/assets/report"],
+    "ack": ["/api/v1/ack"]
+  },
+  "methods": {
+    "register": "POST",
+    "task": "GET",
+    "result": "POST",
+    "ack": "GET"
+  },
+  "user_agents": [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+  ],
+  "request_headers": [
+    { "name": "Host", "value": "{{host}}" },
+    { "name": "Accept", "value": "application/json, text/plain, */*" },
+    { "name": "Accept-Language", "value": "en-US,en;q=0.9" },
+    { "name": "X-Profile", "value": "cdn-assets" },
+    { "name": "User-Agent", "value": "{{user_agent}}" },
+    { "name": "Content-Type", "value": "application/json", "operations": ["register", "result"] },
+    { "name": "Content-Length", "value": "{{content_length}}", "operations": ["register", "result"] },
+    { "name": "X-Sig", "value": "{{auth}}" },
+    { "name": "Connection", "value": "close" }
+  ],
+  "response_headers": [
+    { "name": "Content-Type", "value": "{{content_type}}" },
+    { "name": "Cache-Control", "value": "private, max-age=0" },
+    { "name": "X-Request-Type", "value": "{{operation}}" }
+  ],
+  "omit_response_headers": ["Date"],
+  "request_body": {
+    "encoding": "aes-gcm-base36",
+    "field": "d",
+    "padding_field": "p",
+    "pad_min": 0,
+    "pad_max": 32
+  },
+  "response_body": {
+    "encoding": "aes-gcm-base36",
+    "field": "d",
+    "error_field": "e"
+  },
+  "auth": {
+    "mode": "hmac-sha256",
+    "header": "X-Sig",
+    "sig_encoding": "hex",
+    "max_skew_secs": 300
+  },
+  "status": {
+    "ok": 200,
+    "empty": 204,
+    "not_found": 404,
+    "error": 500
+  },
+  "jitter": {
+    "min_ms": 0,
+    "max_ms": 250
+  },
+  "max_body_bytes": 1048576
+}

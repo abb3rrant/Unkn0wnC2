@@ -9,25 +9,27 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 )
 
 // Config holds runtime settings for the Master server
 type Config struct {
-	BindAddr         string           `json:"bind_addr"`         // Address to bind HTTPS server (e.g., "0.0.0.0")
-	BindPort         int              `json:"bind_port"`         // HTTPS port (default: 443)
-	TLSCert          string           `json:"tls_cert"`          // Path to TLS certificate
-	TLSKey           string           `json:"tls_key"`           // Path to TLS key
-	DatabasePath     string           `json:"database_path"`     // Path to master SQLite database
-	WebRoot          string           `json:"web_root"`          // Path to web UI files directory
-	SourceDir        string           `json:"source_dir"`        // Path to source code directory for building
-	EncryptionKey    string           `json:"encryption_key"`    // Global encryption key for all C2 communications
-	FallbackDNS      string           `json:"fallback_dns"`      // Fallback DNS server for stagers (default: 8.8.8.8)
-	Debug            bool             `json:"debug"`             // Enable debug logging
-	JWTSecret        string           `json:"jwt_secret"`        // Secret for JWT token signing
-	SessionTimeout   int              `json:"session_timeout"`   // Session timeout in minutes (default: 60)
-	DNSServers       []DNSServerAuth  `json:"dns_servers"`       // Pre-registered DNS servers
-	AdminCredentials AdminCredentials `json:"admin_credentials"` // Initial admin credentials
+	BindAddr          string           `json:"bind_addr"`           // Address to bind HTTPS server (e.g., "0.0.0.0")
+	BindPort          int              `json:"bind_port"`           // HTTPS port (default: 443)
+	TLSCert           string           `json:"tls_cert"`            // Path to TLS certificate
+	TLSKey            string           `json:"tls_key"`             // Path to TLS key
+	DatabasePath      string           `json:"database_path"`       // Path to master SQLite database
+	WebRoot           string           `json:"web_root"`            // Path to web UI files directory
+	SourceDir         string           `json:"source_dir"`          // Path to source code directory for building
+	EncryptionKey     string           `json:"encryption_key"`      // Global encryption key for all C2 communications
+	FallbackDNS       string           `json:"fallback_dns"`        // Fallback DNS server for stagers (default: 8.8.8.8)
+	Debug             bool             `json:"debug"`               // Enable debug logging
+	JWTSecret         string           `json:"jwt_secret"`          // Secret for JWT token signing
+	SessionTimeout    int              `json:"session_timeout"`     // Session timeout in minutes (default: 60)
+	TrustedProxyCIDRs []string         `json:"trusted_proxy_cidrs"` // Proxies allowed to supply forwarding headers
+	DNSServers        []DNSServerAuth  `json:"dns_servers"`         // Pre-registered DNS servers
+	AdminCredentials  AdminCredentials `json:"admin_credentials"`   // Initial admin credentials
 }
 
 // DNSServerAuth holds authentication configuration for DNS servers
@@ -67,12 +69,11 @@ func DefaultConfig() Config {
 	}
 }
 
-// LoadConfig attempts to load configuration from a JSON file or environment
-// Falls back to defaults if file not present
+// LoadConfig attempts to load configuration from a JSON file or environment.
+// A missing file is valid: environment overrides still apply to the defaults.
 func LoadConfig(configPath string) (Config, error) {
 	cfg := DefaultConfig()
 
-	// Use provided path, or check environment, or use default
 	path := configPath
 	if path == "" {
 		path = os.Getenv("MASTER_CONFIG")
@@ -81,72 +82,71 @@ func LoadConfig(configPath string) (Config, error) {
 		}
 	}
 
-	// Try to read config file
 	data, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			// No file present, use defaults
-			return cfg, nil
-		}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return cfg, fmt.Errorf("failed to read config file: %w", err)
 	}
+	if err == nil {
+		var fileCfg Config
+		if err := json.Unmarshal(data, &fileCfg); err != nil {
+			return cfg, fmt.Errorf("failed to parse config JSON: %w", err)
+		}
 
-	// Parse JSON config
-	var fileCfg Config
-	if err := json.Unmarshal(data, &fileCfg); err != nil {
-		return cfg, fmt.Errorf("failed to parse config JSON: %w", err)
+		if fileCfg.BindAddr != "" {
+			cfg.BindAddr = fileCfg.BindAddr
+		}
+		if fileCfg.BindPort != 0 {
+			cfg.BindPort = fileCfg.BindPort
+		}
+		if fileCfg.TLSCert != "" {
+			cfg.TLSCert = fileCfg.TLSCert
+		}
+		if fileCfg.TLSKey != "" {
+			cfg.TLSKey = fileCfg.TLSKey
+		}
+		if fileCfg.DatabasePath != "" {
+			cfg.DatabasePath = fileCfg.DatabasePath
+		}
+		if fileCfg.WebRoot != "" {
+			cfg.WebRoot = fileCfg.WebRoot
+		}
+		if fileCfg.SourceDir != "" {
+			cfg.SourceDir = fileCfg.SourceDir
+		}
+		if fileCfg.EncryptionKey != "" {
+			cfg.EncryptionKey = fileCfg.EncryptionKey
+		}
+		if fileCfg.FallbackDNS != "" {
+			cfg.FallbackDNS = fileCfg.FallbackDNS
+		}
+		if fileCfg.JWTSecret != "" {
+			cfg.JWTSecret = fileCfg.JWTSecret
+		}
+		if fileCfg.SessionTimeout != 0 {
+			cfg.SessionTimeout = fileCfg.SessionTimeout
+		}
+		if fileCfg.Debug {
+			cfg.Debug = true
+		}
+		if len(fileCfg.TrustedProxyCIDRs) > 0 {
+			cfg.TrustedProxyCIDRs = append([]string(nil), fileCfg.TrustedProxyCIDRs...)
+		}
+		if len(fileCfg.DNSServers) > 0 {
+			cfg.DNSServers = fileCfg.DNSServers
+		}
+		if fileCfg.AdminCredentials.Username != "" {
+			cfg.AdminCredentials = fileCfg.AdminCredentials
+		}
 	}
 
-	// Merge: only overwrite defaults if provided in file
-	if fileCfg.BindAddr != "" {
-		cfg.BindAddr = fileCfg.BindAddr
-	}
-	if fileCfg.BindPort != 0 {
-		cfg.BindPort = fileCfg.BindPort
-	}
-	if fileCfg.TLSCert != "" {
-		cfg.TLSCert = fileCfg.TLSCert
-	}
-	if fileCfg.TLSKey != "" {
-		cfg.TLSKey = fileCfg.TLSKey
-	}
-	if fileCfg.DatabasePath != "" {
-		cfg.DatabasePath = fileCfg.DatabasePath
-	}
-	if fileCfg.WebRoot != "" {
-		cfg.WebRoot = fileCfg.WebRoot
-	}
-	if fileCfg.SourceDir != "" {
-		cfg.SourceDir = fileCfg.SourceDir
-	}
-	if fileCfg.EncryptionKey != "" {
-		cfg.EncryptionKey = fileCfg.EncryptionKey
-	}
-	if fileCfg.FallbackDNS != "" {
-		cfg.FallbackDNS = fileCfg.FallbackDNS
-	}
-	if fileCfg.JWTSecret != "" {
-		cfg.JWTSecret = fileCfg.JWTSecret
-	}
-	if fileCfg.SessionTimeout != 0 {
-		cfg.SessionTimeout = fileCfg.SessionTimeout
-	}
-	if fileCfg.Debug {
-		cfg.Debug = true
-	}
-	if len(fileCfg.DNSServers) > 0 {
-		cfg.DNSServers = fileCfg.DNSServers
-	}
-	if fileCfg.AdminCredentials.Username != "" {
-		cfg.AdminCredentials = fileCfg.AdminCredentials
-	}
-
-	// Environment variable overrides
 	if jwtSecret := os.Getenv("MASTER_JWT_SECRET"); jwtSecret != "" {
 		cfg.JWTSecret = jwtSecret
 	}
 	if adminPass := os.Getenv("MASTER_ADMIN_PASSWORD"); adminPass != "" {
 		cfg.AdminCredentials.Password = adminPass
+	}
+	if encryptionKey := os.Getenv("MASTER_ENCRYPTION_KEY"); encryptionKey != "" {
+		cfg.EncryptionKey = encryptionKey
 	}
 
 	return cfg, nil
@@ -165,7 +165,15 @@ func ValidateConfig(cfg Config) error {
 	}
 
 	// Check for example JWT secrets from the example config
-	weakSecrets := []string{"CHANGE_THIS_SECRET_IN_PRODUCTION", "!QAZ78fobh$*NC", "your-secret-key", "changeme", "secret", "password"}
+	weakSecrets := []string{
+		"CHANGE_THIS_SECRET_IN_PRODUCTION",
+		"!QAZ78fobh$*NC",
+		"your-secret-key",
+		"changeme",
+		"secret",
+		"password",
+		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", //gitleaks:allow -- known rejected sentinel
+	}
 	for _, weak := range weakSecrets {
 		if cfg.JWTSecret == weak {
 			return fmt.Errorf("SECURITY ERROR: Using example/weak JWT secret! Generate a secure secret with: openssl rand -base64 32")
@@ -178,7 +186,15 @@ func ValidateConfig(cfg Config) error {
 	}
 
 	// Check for weak admin passwords
-	weakPasswords := []string{"Unkn0wnC2@2025", "admin", "password", "changeme", "12345678"}
+	weakPasswords := []string{
+		"Unkn0wnC2@2025",
+		"CHANGE_ME_ON_FIRST_LOGIN",
+		"admin",
+		"password",
+		"changeme",
+		"12345678",
+		"TestAdmin2026!",
+	}
 	for _, weak := range weakPasswords {
 		if cfg.AdminCredentials.Password == weak {
 			return fmt.Errorf("SECURITY ERROR: Using example/weak admin password! Use a strong unique password")
@@ -205,6 +221,11 @@ func ValidateConfig(cfg Config) error {
 	if len(cfg.EncryptionKey) < 32 {
 		return fmt.Errorf("SECURITY ERROR: Encryption key too short (%d chars). Minimum 32 hex characters required for AES-256", len(cfg.EncryptionKey))
 	}
+	if cfg.EncryptionKey == "CHANGE_ME_GENERATED_WITH_OPENSSL_RAND_HEX_16" ||
+		cfg.EncryptionKey == "CHANGE_ME_GENERATED_AT_BUILD_TIME" ||
+		cfg.EncryptionKey == "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6" { //gitleaks:allow -- known rejected sentinel
+		return errors.New("SECURITY ERROR: Using example/weak encryption key! Generate a unique key with: openssl rand -hex 16")
+	}
 
 	// Validate TLS certificate paths exist
 	if _, err := os.Stat(cfg.TLSCert); os.IsNotExist(err) {
@@ -217,6 +238,12 @@ func ValidateConfig(cfg Config) error {
 	// Validate port
 	if cfg.BindPort < 1 || cfg.BindPort > 65535 {
 		return fmt.Errorf("invalid bind port: %d (must be 1-65535)", cfg.BindPort)
+	}
+
+	for _, cidr := range cfg.TrustedProxyCIDRs {
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			return fmt.Errorf("invalid trusted proxy CIDR %q: %w", cidr, err)
+		}
 	}
 
 	return nil

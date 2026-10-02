@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/png" href="/static/logo.png">
+    <title>Listener - Unkn0wnC2</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=ITC+Benguiat:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .section-title {
+            font-size: 24px;
+            font-weight: 600;
+            color: rgba(255, 51, 51, 0.8);
+            font-family: 'Bebas Neue', 'Arial Narrow', sans-serif;
+            letter-spacing: 2px;
+        }
+
+        .panel {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 51, 51, 0.2);
+            border-radius: 6px;
+            padding: 16px;
+            margin-top: 16px;
+        }
+
+        .panel h3 {
+            margin: 0 0 12px 0;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: rgba(255, 51, 51, 0.7);
+        }
+
+        table.detail {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        table.detail th {
+            text-align: left;
+            color: rgba(255, 51, 51, 0.7);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            padding: 8px 10px;
+            border-bottom: 1px solid rgba(255, 51, 51, 0.2);
+        }
+
+        table.detail td {
+            padding: 9px 10px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            color: #eaeaea;
+            vertical-align: top;
+        }
+
+        .mono { font-family: 'Courier New', monospace; }
+        .muted { color: #666; font-size: 11px; }
+        .ok { color: #4caf50; }
+        .bad { color: #ff6b6b; }
+
+        .assignment-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 10px;
+            border-left: 2px solid rgba(255, 51, 51, 0.5);
+            background: rgba(255, 51, 51, 0.05);
+            margin-bottom: 6px;
+        }
+
+        .attach-row { display: flex; gap: 8px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+        .hint { color: #666; font-size: 11px; margin-top: 6px; }
+        .status-line { font-size: 12px; margin-top: 10px; min-height: 16px; }
+        .status-ok { color: #4caf50; }
+        .status-err { color: #ff6b6b; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-content">
+            <div class="logo">
+                <img src="/static/logo.png" alt="Unkn0wnC2" class="logo-img">
+                <span class="logo-text">Unkn0wnC2</span>
+            </div>
+            <div class="nav">
+        <a href="/dashboard" class="nav-btn">Dashboard</a>
+        <a href="/listeners" class="nav-btn active">Listeners</a>
+        <a href="/profiles" class="nav-btn">HTTP Profiles</a>
+        <a href="/builder" class="nav-btn">Builder</a>
+        <a href="/stager" class="nav-btn">Stager Sessions</a>
+        <a href="/exfils" class="nav-btn">Exfils</a>
+        <a href="/logs" class="nav-btn">Logs</a>
+        <a href="/report" class="nav-btn">Report</a>
+        <a href="/users" class="nav-btn" id="usersNavBtn">Users</a>
+    </div>
+            <div class="user-info">
+                Logged in as <strong id="username">operator</strong>
+                <button class="logout-btn" onclick="logout()">Logout</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <div id="alertContainer"></div>
+
+        <div class="section-title" id="listenerTitle">Listener</div>
+        <div class="muted" id="listenerSubtitle" style="margin-bottom: 8px;"></div>
+
+        <div class="panel">
+            <h3>Transport</h3>
+            <div id="transportInfo" class="muted">Loading...</div>
+        </div>
+
+        <div class="panel">
+            <h3>HTTP Listeners On This Host</h3>
+            <div class="muted" style="margin-bottom: 10px;">
+                What the server reports it is actually serving. A listener with a problem
+                shows why, rather than only disappearing.
+            </div>
+            <div id="reportedListeners"><div class="muted">Nothing reported yet. The server reports on its next check-in.</div></div>
+        </div>
+
+        <div class="panel">
+            <h3>Assigned HTTP Profiles</h3>
+            <div class="muted" style="margin-bottom: 10px;">
+                Assigned profiles are delivered to this listener on its next sync and applied
+                without a restart. URI, header and status changes take effect immediately;
+                a change to the bind address, scheme or certificate rebinds that listener.
+            </div>
+            <div id="assignments"><div class="muted">Loading...</div></div>
+
+            <div class="attach-row">
+                <select id="profileToAttach" class="form-select" style="max-width: 260px;">
+                    <option value="">Select a profile...</option>
+                </select>
+                <button class="btn" onclick="attachProfile()">Assign</button>
+                <a class="btn" href="/profiles" style="text-decoration: none;">Manage Profiles</a>
+            </div>
+            <div id="assignStatus" class="status-line"></div>
+        </div>
+    </div>
+
+    <script src="/static/shared.js"></script>
+    <script>
+        let listenerID = '';
+        let assigned = [];
+        let available = [];
+
+        function queryParam(name) {
+            return new URLSearchParams(window.location.search).get(name) || '';
+        }
+
+        async function loadListener() {
+            listenerID = queryParam('id');
+            if (!listenerID) {
+                document.getElementById('listenerSubtitle').innerHTML = '<span class="bad">No listener id in the URL.</span>';
+                return;
+            }
+
+            try {
+                const response = await authFetch(`/api/listeners/${encodeURIComponent(listenerID)}`);
+                if (!response || !response.ok) throw new Error('request failed');
+                const payload = await response.json();
+                const data = (payload && payload.data) || {};
+
+                renderHeader(data.listener || {});
+                renderTransport(data.listener || {});
+                renderReported(data.reported_listeners || []);
+
+                assigned = data.assigned_profiles || [];
+                available = data.available_profiles || [];
+
+                renderAssignments();
+                renderAttachPicker();
+            } catch (error) {
+                document.getElementById('listenerSubtitle').innerHTML =
+                    `<span class="bad">Failed to load listener: ${escapeHtml(error.message)}</span>`;
+            }
+        }
+
+        function renderHeader(server) {
+            document.getElementById('listenerTitle').textContent = server.id || listenerID;
+
+            const bits = [];
+            if (server.domain) bits.push(`DNS domain ${escapeHtml(server.domain)}`);
+            if (server.address) bits.push(`address ${escapeHtml(server.address)}`);
+            if (server.status) bits.push(`status ${escapeHtml(server.status)}`);
+            if (server.last_checkin) bits.push(`last check-in ${escapeHtml(formatTimestamp(server.last_checkin))}`);
+            document.getElementById('listenerSubtitle').innerHTML = bits.join(' &bull; ');
+        }
+
+        function renderTransport(server) {
+            const container = document.getElementById('transportInfo');
+            const dnsLine = `<div><span class="ok">DNS</span> — authoritative for ${escapeHtml(server.domain || 'its domain')}</div>`;
+
+            if (assigned.length === 0) {
+                container.innerHTML = dnsLine + '<div class="muted" style="margin-top:6px;">HTTP — no profiles assigned, so this listener serves DNS only.</div>';
+                return;
+            }
+            container.innerHTML = dnsLine +
+                `<div style="margin-top:6px;"><span class="ok">HTTP</span> — ${assigned.length} assigned profile(s)</div>`;
+        }
+
+        function renderReported(reported) {
+            const container = document.getElementById('reportedListeners');
+            if (reported.length === 0) {
+                container.innerHTML = '<div class="muted">Nothing reported yet. The server reports on its next check-in.</div>';
+                return;
+            }
+
+            const rows = reported.map(status => {
+                const state = status.running
+                    ? '<span class="ok">running</span>'
+                    : (status.enabled ? '<span class="bad">not running</span>' : '<span class="muted">disabled</span>');
+                const error = status.error ? `<div class="bad">${escapeHtml(status.error)}</div>` : '';
+                return `<tr>
+                    <td class="mono">${escapeHtml(status.name || '')}</td>
+                    <td class="mono">${escapeHtml(status.addr || '')}</td>
+                    <td>${escapeHtml(status.scheme || '')}<div class="muted">${escapeHtml(status.source || '')}</div></td>
+                    <td>${state}${error}</td>
+                </tr>`;
+            }).join('');
+
+            container.innerHTML = `<table class="detail">
+                <thead><tr><th>Profile</th><th>Address</th><th>Scheme</th><th>State</th></tr></thead>
+                <tbody>${rows}</tbody>
+            </table>`;
+        }
+
+        function renderAssignments() {
+            const container = document.getElementById('assignments');
+            if (assigned.length === 0) {
+                container.innerHTML = '<div class="muted">No profiles assigned.</div>';
+                return;
+            }
+
+            container.innerHTML = assigned.map(name => `
+                <div class="assignment-row">
+                    <span class="mono">${escapeHtml(name)}</span>
+                    <button class="btn" onclick="detachProfile('${escapeHtml(name)}')">Remove</button>
+                </div>
+            `).join('');
+        }
+
+        function renderAttachPicker() {
+            const select = document.getElementById('profileToAttach');
+            const candidates = available.filter(name => !assigned.includes(name));
+
+            if (candidates.length === 0) {
+                select.innerHTML = '<option value="">No unassigned profiles</option>';
+                return;
+            }
+            select.innerHTML = '<option value="">Select a profile...</option>' +
+                candidates.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+        }
+
+        async function attachProfile() {
+            const select = document.getElementById('profileToAttach');
+            const name = select.value;
+            if (!name) {
+                setStatus('assignStatus', 'Select a profile first.', 'status-err');
+                return;
+            }
+
+            try {
+                const response = await authFetch(`/api/listeners/${encodeURIComponent(listenerID)}/http-profiles`, {
+                    method: 'POST',
+                    body: JSON.stringify({ name: name })
+                });
+                const payload = await response.json();
+
+                if (!response.ok) {
+                    setStatus('assignStatus', payload.message || 'Assign failed.', 'status-err');
+                    return;
+                }
+
+                setStatus('assignStatus', 'Assigned. The listener applies it on its next sync.', 'status-ok');
+                showAlert('Profile assigned', 'success');
+                await loadListener();
+            } catch (error) {
+                setStatus('assignStatus', `Assign failed: ${error.message}`, 'status-err');
+            }
+        }
+
+        async function detachProfile(name) {
+            if (!confirm(`Remove profile ${name} from this listener?`)) return;
+
+            try {
+                const response = await authFetch(
+                    `/api/listeners/${encodeURIComponent(listenerID)}/http-profiles/${encodeURIComponent(name)}`,
+                    { method: 'DELETE' }
+                );
+                if (!response || !response.ok) throw new Error('request failed');
+
+                setStatus('assignStatus', 'Removed. Its listener stops on the next sync.', 'status-ok');
+                await loadListener();
+            } catch (error) {
+                setStatus('assignStatus', `Remove failed: ${error.message}`, 'status-err');
+            }
+        }
+
+        function setStatus(elementID, message, className) {
+            const element = document.getElementById(elementID);
+            if (!element) return;
+            element.textContent = message;
+            element.className = 'status-line ' + (className || '');
+        }
+
+        loadListener();
+    </script>
+</body>
+</html>

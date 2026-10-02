@@ -15,7 +15,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VERSION=$(cat "${SCRIPT_DIR}/VERSION" | tr -d '[:space:]')
+VERSION=$(tr -d '[:space:]' < "${SCRIPT_DIR}/VERSION")
 BUILD_DATE=$(date -u '+%Y-%m-%d')
 GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
@@ -78,8 +78,7 @@ LDFLAGS="-s -w -X main.version=${VERSION} -X main.buildDate=${BUILD_DATE} -X mai
 BUILDFLAGS="-trimpath"
 
 cd "${SCRIPT_DIR}/Archon"
-go build ${BUILDFLAGS} -ldflags="${LDFLAGS}" -o unkn0wnc2 .
-if [ $? -ne 0 ]; then
+if ! go build ${BUILDFLAGS} -ldflags="${LDFLAGS}" -o unkn0wnc2 .; then
   echo -e "${RED}Failed to build Archon server${NC}"
   if [ "$SERVICE_WAS_RUNNING" = true ]; then
     echo -e "${YELLOW}Attempting to restart service with old binary...${NC}"

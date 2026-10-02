@@ -28,8 +28,8 @@ func TestConfigValidate_BindPortOutOfRange(t *testing.T) {
 		if err == nil {
 			t.Fatalf("BindPort %d should be invalid, got nil error", port)
 		}
-		if !strings.Contains(err.Error(), "BindPort") {
-			t.Errorf("BindPort %d error should mention BindPort, got: %v", port, err)
+		if !strings.Contains(err.Error(), "bind_port") {
+			t.Errorf("BindPort %d error should mention bind_port, got: %v", port, err)
 		}
 	}
 }
@@ -41,8 +41,8 @@ func TestConfigValidate_EmptyDomain(t *testing.T) {
 	if err == nil {
 		t.Fatal("empty Domain should be invalid, got nil error")
 	}
-	if !strings.Contains(err.Error(), "Domain") {
-		t.Errorf("empty Domain error should mention Domain, got: %v", err)
+	if !strings.Contains(err.Error(), "domain") {
+		t.Errorf("empty Domain error should mention domain, got: %v", err)
 	}
 }
 
@@ -53,8 +53,8 @@ func TestConfigValidate_EmptyNS1(t *testing.T) {
 	if err == nil {
 		t.Fatal("empty NS1 should be invalid, got nil error")
 	}
-	if !strings.Contains(err.Error(), "NS1") {
-		t.Errorf("empty NS1 error should mention NS1, got: %v", err)
+	if !strings.Contains(err.Error(), "ns1") {
+		t.Errorf("empty NS1 error should mention ns1, got: %v", err)
 	}
 }
 
@@ -65,8 +65,8 @@ func TestConfigValidate_EmptyNS2(t *testing.T) {
 	if err == nil {
 		t.Fatal("empty NS2 should be invalid, got nil error")
 	}
-	if !strings.Contains(err.Error(), "NS2") {
-		t.Errorf("empty NS2 error should mention NS2, got: %v", err)
+	if !strings.Contains(err.Error(), "ns2") {
+		t.Errorf("empty NS2 error should mention ns2, got: %v", err)
 	}
 }
 
@@ -77,8 +77,8 @@ func TestConfigValidate_EmptyEncryptionKey(t *testing.T) {
 	if err == nil {
 		t.Fatal("empty EncryptionKey should be invalid, got nil error")
 	}
-	if !strings.Contains(err.Error(), "EncryptionKey") {
-		t.Errorf("empty EncryptionKey error should mention EncryptionKey, got: %v", err)
+	if !strings.Contains(err.Error(), "encryption_key") {
+		t.Errorf("empty EncryptionKey error should mention encryption_key, got: %v", err)
 	}
 }
 
@@ -89,7 +89,7 @@ func TestConfigValidate_EmptyMasterServer(t *testing.T) {
 	if err == nil {
 		t.Fatal("empty MasterServer should be invalid, got nil error")
 	}
-	if !strings.Contains(err.Error(), "MasterServer") {
-		t.Errorf("empty MasterServer error should mention MasterServer, got: %v", err)
+	if !strings.Contains(err.Error(), "master_server") {
+		t.Errorf("empty MasterServer error should mention master_server, got: %v", err)
 	}
 }

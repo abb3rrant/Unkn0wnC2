@@ -15,7 +15,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-VERSION=$(cat "${SCRIPT_DIR}/VERSION" | tr -d '[:space:]')
+VERSION=$(tr -d '[:space:]' < "${SCRIPT_DIR}/VERSION")
 BUILD_DATE=$(date -u '+%Y-%m-%d')
 GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
@@ -50,15 +50,13 @@ fi
 # Check for required commands
 MISSING_DEPS=()
 
-# Go compiler (requires 1.24+)
+# Go compiler (requires security-supported Go 1.25.14+)
 if ! command -v go &>/dev/null; then
-  MISSING_DEPS+=("go (Go compiler 1.24+)")
+  MISSING_DEPS+=("go (Go compiler 1.25.14+)")
 else
-  GO_VER=$(go version | grep -oP 'go\K[0-9]+\.[0-9]+')
-  GO_MAJOR=$(echo "$GO_VER" | cut -d. -f1)
-  GO_MINOR=$(echo "$GO_VER" | cut -d. -f2)
-  if [ "$GO_MAJOR" -lt 1 ] || ([ "$GO_MAJOR" -eq 1 ] && [ "$GO_MINOR" -lt 24 ]); then
-    echo -e "${RED}ERROR: Go 1.24+ required, found go${GO_VER}${NC}"
+  GO_VER=$(go env GOVERSION)
+  if ! printf '%s\n%s\n' 'go1.25.14' "$GO_VER" | sort -V -C; then
+    echo -e "${RED}ERROR: Go 1.25.14+ required, found ${GO_VER}${NC}"
     exit 1
   fi
 fi
@@ -141,7 +139,7 @@ if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
       esac
     done
 
-    echo -e "${GREEN}  ${INSTALL_CMD} ${PACKAGES[@]}${NC}"
+    printf '%b  %s %s%b\n' "${GREEN}" "${INSTALL_CMD}" "${PACKAGES[*]}" "${NC}"
 
   elif command -v yum &>/dev/null; then
     echo -e "${GREEN}  sudo yum install -y golang gcc gcc-c++ mingw64-gcc mingw32-gcc gcc-arm-linux-gnu gcc-aarch64-linux-gnu openssl zlib-devel${NC}"
@@ -179,8 +177,7 @@ BUILDFLAGS="-trimpath"
 
 echo -e "${YELLOW}[1/7] Building Archon Server...${NC}"
 cd Archon
-go build ${BUILDFLAGS} -ldflags="${LDFLAGS}" -o unkn0wnc2 .
-if [ $? -ne 0 ]; then
+if ! go build ${BUILDFLAGS} -ldflags="${LDFLAGS}" -o unkn0wnc2 .; then
   echo -e "${RED}Failed to build Archon server${NC}"
   exit 1
 fi

@@ -109,6 +109,13 @@ const (
 	// MaxTaskChunkPayload is the max command bytes per chunk (must match Archon/db.go)
 	MaxTaskChunkPayload = 150
 
+	// MaxResultChunks bounds the chunk count accepted from RESULT_META and DATA
+	// messages. The value arrives from the wire and is used to size an
+	// allocation, so without a bound a single malformed message can exhaust the
+	// process. 100000 chunks is far more than a legitimate command result needs
+	// while keeping the allocation at roughly 1.6 MB.
+	MaxResultChunks = 100000
+
 	// ChunkedTaskStateTTL is how long chunked task state is kept for TASKGET requests
 	ChunkedTaskStateTTL = 5 * time.Minute
 )

@@ -6,7 +6,7 @@ set -e
 # rapid tasks, and domain failover for the Go beacon.
 
 ARCHON_URL="${ARCHON_URL:-https://172.20.0.10:8443}"
-ADMIN_PASS="${ADMIN_PASSWORD:-TestAdmin2026!}"
+ADMIN_PASS="${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}"
 COOKIE_JAR="/tmp/ext-test-cookies.txt"
 BUILDS_DIR="/opt/unkn0wnc2/builds"
 PIDS=()
@@ -23,6 +23,8 @@ pass() { PASSED=$((PASSED + 1)); TOTAL=$((TOTAL + 1)); green "  PASS: $1"; }
 fail() { FAILED=$((FAILED + 1)); TOTAL=$((TOTAL + 1)); red   "  FAIL: $1 — $2"; }
 skip() { SKIPPED=$((SKIPPED + 1)); TOTAL=$((TOTAL + 1)); yellow "  SKIP: $1"; }
 
+# ShellCheck cannot follow a function invoked only through an EXIT trap.
+# shellcheck disable=SC2317
 cleanup() {
     for pid in "${PIDS[@]}"; do
         kill "$pid" 2>/dev/null || true
@@ -31,7 +33,7 @@ cleanup() {
 trap cleanup EXIT
 
 login() {
-    for attempt in $(seq 1 20); do
+    for _ in $(seq 1 20); do
         HTTP_CODE=$(curl -ks -c "$COOKIE_JAR" \
             -X POST "${ARCHON_URL}/api/auth/login" \
             -H "Content-Type: application/json" \
@@ -89,7 +91,8 @@ wait_result() {
         if [ "$STATUS" = "completed" ] || [ "$STATUS" = "failed" ]; then
             RESULT_DATA=$(api_get "/api/tasks/${task_id}" | jq -r '.result // ""' 2>/dev/null) || true
             echo "$RESULT_DATA"
-            return 0
+            [ "$STATUS" = "completed" ] && return 0
+            return 2
         fi
         sleep 5
     done
@@ -153,11 +156,18 @@ run_task_test() {
         return 0
     fi
 
-    # wait_result returns 0 once the task reaches a terminal state; it may
-    # legitimately return an empty result (e.g. zero-output commands like
-    # "true" or bare "echo"), so detect timeout via the exit code, not output.
-    if ! RESULT=$(wait_result "$TASK_ID" "$timeout"); then
-        fail "${label}" "no result after timeout"
+    # wait_result exit status: 0 = completed, 2 = failed, other = timeout.
+    # A completed task may legitimately return an empty result (zero-output
+    # commands like "true" or bare "echo"), so the exit code — not the output —
+    # distinguishes success from failure.
+    OUTCOME=0
+    RESULT=$(wait_result "$TASK_ID" "$timeout") || OUTCOME=$?
+    if [ "$OUTCOME" -ne 0 ]; then
+        if [ "$OUTCOME" -eq 2 ]; then
+            fail "${label}" "task failed: $(echo "$RESULT" | head -1 | cut -c1-60 | tr -d '\n')"
+        else
+            fail "${label}" "no terminal state after timeout"
+        fi
         return 0
     fi
 
@@ -327,20 +337,27 @@ if [ -n "$GO_BASE_ID" ]; then
         fi
     done
 
-    echo "  Queued ${#RAPID_TASKS[@]} rapid tasks, waiting for results..."
-    for tid in "${RAPID_TASKS[@]}"; do
-        RES=$(wait_result "$tid" 18)
-        if [ -n "$RES" ] && echo "$RES" | grep -q "rapid-"; then
-            RAPID_OK=$((RAPID_OK + 1))
-        else
-            RAPID_FAIL=$((RAPID_FAIL + 1))
-        fi
-    done
-
-    if [ "$RAPID_FAIL" -eq 0 ]; then
-        pass "Go rapid tasks: ${RAPID_OK}/${#RAPID_TASKS[@]} completed"
+    # All three tasks must have been created; otherwise a total creation
+    # failure would look like a passing 0/0.
+    if [ "${#RAPID_TASKS[@]}" -lt 3 ]; then
+        fail "Go rapid tasks" "only ${#RAPID_TASKS[@]}/3 tasks were created"
     else
-        fail "Go rapid tasks" "${RAPID_FAIL}/${#RAPID_TASKS[@]} failed"
+        echo "  Queued ${#RAPID_TASKS[@]} rapid tasks, waiting for results..."
+        for tid in "${RAPID_TASKS[@]}"; do
+            RAPID_OUTCOME=0
+            RES=$(wait_result "$tid" 18) || RAPID_OUTCOME=$?
+            if [ "$RAPID_OUTCOME" -eq 0 ] && echo "$RES" | grep -q "rapid-"; then
+                RAPID_OK=$((RAPID_OK + 1))
+            else
+                RAPID_FAIL=$((RAPID_FAIL + 1))
+            fi
+        done
+
+        if [ "$RAPID_FAIL" -eq 0 ]; then
+            pass "Go rapid tasks: ${RAPID_OK}/${#RAPID_TASKS[@]} completed"
+        else
+            fail "Go rapid tasks" "${RAPID_FAIL}/${#RAPID_TASKS[@]} failed"
+        fi
     fi
 else
     skip "Go rapid tasks: no baseline Go beacon"

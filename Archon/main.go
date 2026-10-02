@@ -128,13 +128,7 @@ func main() {
 
 	// Create HTTPS server
 	addr := fmt.Sprintf("%s:%d", cfg.BindAddr, cfg.BindPort)
-	srv := &http.Server{
-		Addr:         addr,
-		Handler:      router,
-		ReadTimeout:  30 * time.Second,  // Increased from 15s
-		WriteTimeout: 60 * time.Second,  // Increased from 15s for large transfers
-		IdleTimeout:  120 * time.Second, // Increased from 60s
-	}
+	srv := newArchonHTTPServer(addr, router)
 
 	// Start server in a goroutine
 	go func() {
@@ -251,6 +245,18 @@ func main() {
 	}
 
 	LogInfo("Archon Server stopped gracefully")
+}
+
+func newArchonHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
 }
 
 // initializeAdmin creates the initial admin account if it doesn't exist

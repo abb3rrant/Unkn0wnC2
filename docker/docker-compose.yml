@@ -11,9 +11,9 @@ services:
       - builds:/opt/unkn0wnc2/builds
       - archon-data:/opt/unkn0wnc2/data
     environment:
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6}
-      - JWT_SECRET=${JWT_SECRET:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-TestAdmin2026!}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
     networks:
       c2net:
         ipv4_address: 172.20.0.10
@@ -33,6 +33,13 @@ services:
       - SERVER_BINARY=dns-server-1
     volumes:
       - builds:/opt/unkn0wnc2/builds:ro
+      # Setup opts the generated profile into the E2E topology while retaining
+      # its per-build SPKI pin and authoritative custom-header template.
+      - http-profiles:/opt/unkn0wnc2/profiles
+    ports:
+      # HTTP/HTTPS listener. The host port avoids archon's own 8443; the container
+      # port must match an enabled profile's bind_port.
+      - "8445:8443"
     cap_add:
       - NET_BIND_SERVICE
     depends_on:
@@ -52,6 +59,10 @@ services:
       - SERVER_BINARY=dns-server-2
     volumes:
       - builds:/opt/unkn0wnc2/builds:ro
+      - http-profiles:/opt/unkn0wnc2/profiles
+    ports:
+      # Offset on the host so both DNS servers, and archon, can each publish one.
+      - "8446:8443"
     cap_add:
       - NET_BIND_SERVICE
     depends_on:
@@ -76,6 +87,23 @@ services:
       c2net:
         ipv4_address: 172.20.0.20
 
+  http-client:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: http-client
+    entrypoint: ["/scripts/client-entrypoint.sh"]
+    environment:
+      - CLIENT_BINARY=/opt/unkn0wnc2/builds/beacon-http
+    volumes:
+      - builds:/opt/unkn0wnc2/builds:ro
+    depends_on:
+      dns1:
+        condition: service_started
+    networks:
+      c2net:
+        ipv4_address: 172.20.0.21
+
   setup:
     build:
       context: ..
@@ -83,16 +111,38 @@ services:
     container_name: setup
     entrypoint: ["/scripts/setup.sh"]
     environment:
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-TestAdmin2026!}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
       - ARCHON_URL=https://172.20.0.10:8443
     volumes:
       - builds:/opt/unkn0wnc2/builds
+      - http-profiles:/opt/unkn0wnc2/profiles
     depends_on:
       archon:
         condition: service_healthy
     networks:
       c2net:
         ipv4_address: 172.20.0.100
+
+  http-test:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: http-test-runner
+    entrypoint: ["/scripts/run-http-transport-tests.sh"]
+    environment:
+      - ARCHON_URL=https://172.20.0.10:8443
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
+      - LISTENER_URL=https://172.20.0.11:8443
+    depends_on:
+      dns1:
+        condition: service_started
+      http-client:
+        condition: service_started
+    networks:
+      c2net:
+        ipv4_address: 172.20.0.202
+    profiles:
+      - http-test
 
   test:
     build:
@@ -102,7 +152,7 @@ services:
     entrypoint: ["/scripts/run-tests.sh"]
     environment:
       - ARCHON_URL=https://172.20.0.10:8443
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-TestAdmin2026!}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
     volumes:
       - builds:/opt/unkn0wnc2/builds:ro
     depends_on:
@@ -111,6 +161,8 @@ services:
       dns2:
         condition: service_started
       client:
+        condition: service_started
+      http-client:
         condition: service_started
     networks:
       c2net:
@@ -126,7 +178,7 @@ services:
     entrypoint: ["/scripts/run-extended-tests.sh"]
     environment:
       - ARCHON_URL=https://172.20.0.10:8443
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-TestAdmin2026!}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
     volumes:
       - builds:/opt/unkn0wnc2/builds
     depends_on:
@@ -135,6 +187,8 @@ services:
       dns2:
         condition: service_started
       client:
+        condition: service_started
+      http-client:
         condition: service_started
     networks:
       c2net:
@@ -145,6 +199,7 @@ services:
 volumes:
   builds:
   archon-data:
+  http-profiles:
 
 networks:
   c2net:

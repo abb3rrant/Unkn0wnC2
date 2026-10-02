@@ -362,6 +362,14 @@ func TestGetAllBeaconsPaginated(t *testing.T) {
 	if len(beacons2) != 2 {
 		t.Errorf("Expected 2 beacons (offset=3), got %d", len(beacons2))
 	}
+
+	beacons3, err := db.GetAllBeaconsPaginated(0, 2)
+	if err != nil {
+		t.Fatalf("GetAllBeaconsPaginated offset without limit failed: %v", err)
+	}
+	if len(beacons3) != 3 {
+		t.Errorf("Expected 3 beacons (offset=2, unlimited), got %d", len(beacons3))
+	}
 }
 
 func TestGetOperatorReturnsTypedStruct(t *testing.T) {

@@ -1,0 +1,62 @@
+# Production Archon image for linux/amd64.
+# The base is pinned to the amd64 manifest for golang:1.25.14-bookworm.
+FROM --platform=linux/amd64 golang:1.25.14-bookworm@sha256:c268a04d59aea0b180ed9946a658cfab9e7b3391dc90eed6e4969ccff98c851f AS builder
+
+ARG VERSION
+ARG GIT_COMMIT
+ARG BUILD_DATE
+RUN test -n "$VERSION" && test -n "$GIT_COMMIT" && test -n "$BUILD_DATE"
+
+WORKDIR /src
+COPY Archon/go.mod Archon/go.sum ./Archon/
+RUN cd Archon && go mod download && go mod verify
+COPY Archon/ ./Archon/
+RUN cd Archon && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -mod=readonly -trimpath -buildvcs=false \
+    -ldflags="-s -w -X main.version=${VERSION} -X main.buildDate=${BUILD_DATE} -X main.gitCommit=${GIT_COMMIT}" \
+    -o /out/unkn0wnc2 .
+
+# Archon is also a listener/beacon builder, so its runtime intentionally retains
+# the pinned Go toolchain plus cross-compilers. Debian packages are resolved from
+# the Bookworm repository represented by this immutable base manifest; the final
+# image digest and package inventory are release evidence.
+FROM --platform=linux/amd64 golang:1.25.14-bookworm@sha256:c268a04d59aea0b180ed9946a658cfab9e7b3391dc90eed6e4969ccff98c851f
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      curl \
+      gcc \
+      gcc-aarch64-linux-gnu \
+      gcc-arm-linux-gnueabihf \
+      gcc-mingw-w64-i686 \
+      gcc-mingw-w64-x86-64 \
+      zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 archon \
+    && useradd --uid 10001 --gid archon --home-dir /opt/unkn0wnc2 --shell /usr/sbin/nologin archon
+
+WORKDIR /opt/unkn0wnc2
+COPY --from=builder /out/unkn0wnc2 ./unkn0wnc2
+COPY --chown=root:root Archon/web/ ./web/
+COPY --chown=root:root Server/ ./src/Server/
+COPY --chown=root:root Client/ ./src/Client/
+COPY --chown=root:root Stager/ ./src/Stager/
+COPY --chown=root:root docs/http-transport.md ./docs/http-transport.md
+
+RUN mkdir -p builds/dns-server builds/client builds/stager data logs profiles cache/go-build cache/go-mod \
+    && chown -R archon:archon builds data logs profiles cache \
+    && chmod -R go-w web src docs \
+    && chmod 0755 unkn0wnc2
+
+ENV HOME=/opt/unkn0wnc2 \
+    GOCACHE=/opt/unkn0wnc2/cache/go-build \
+    GOMODCACHE=/opt/unkn0wnc2/cache/go-mod \
+    GOTOOLCHAIN=local
+
+USER 10001:10001
+EXPOSE 8443
+VOLUME ["/opt/unkn0wnc2/data", "/opt/unkn0wnc2/builds", "/opt/unkn0wnc2/profiles"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD curl --fail --silent --show-error --insecure https://127.0.0.1:8443/login >/dev/null || exit 1
+ENTRYPOINT ["/opt/unkn0wnc2/unkn0wnc2"]
+CMD ["-config", "/config/master_config.json"]
