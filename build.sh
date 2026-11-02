@@ -50,13 +50,13 @@ fi
 # Check for required commands
 MISSING_DEPS=()
 
-# Go compiler (requires security-supported Go 1.25.14+)
+# Go compiler (requires security-supported Go 1.26.10+)
 if ! command -v go &>/dev/null; then
-  MISSING_DEPS+=("go (Go compiler 1.25.14+)")
+  MISSING_DEPS+=("go (Go compiler 1.26.10+)")
 else
   GO_VER=$(go env GOVERSION)
-  if ! printf '%s\n%s\n' 'go1.25.14' "$GO_VER" | sort -V -C; then
-    echo -e "${RED}ERROR: Go 1.25.14+ required, found ${GO_VER}${NC}"
+  if ! printf '%s\n%s\n' 'go1.26.10' "$GO_VER" | sort -V -C; then
+    echo -e "${RED}ERROR: Go 1.26.10+ required, found ${GO_VER}${NC}"
     exit 1
   fi
 fi

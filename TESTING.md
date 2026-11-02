@@ -10,7 +10,7 @@ Four tiers of testing:
 
 | Tier | Scope | Where it runs | Gate |
 |------|-------|---------------|------|
-| Unit | Go tests per component (`Archon/`, `Client/`, `Server/`) | Go 1.25.14 toolchain | `go test` |
+| Unit | Go tests per component (`Archon/`, `Client/`, `Server/`) | Go 1.26.10 toolchain | `go test` |
 | HTTP transport E2E (Docker) | HTTPS listener, custom profiles, HTTP-only beacon, task/result, runtime push | `docker-wk` | `run-http-transport-tests.sh` |
 | Integration (Docker) | Live C2 stack: beacon check-in, task exec, Shadow Mesh | `docker-wk` | `run-tests.sh` |
 | Extended E2E (Docker) | DNS comms malleability, edge cases, all phase configs | `docker-wk` | `run-extended-tests.sh` |
@@ -27,7 +27,7 @@ both transports.
   `docker-wk.thebitcrypt.net` (Docker 20.10, Compose v2).
 - Source tree with the `docker/` directory (the Compose file and Dockerfile
   build from the repo root as context).
-- ~2 GB free disk. Compose images use a digest-pinned Go 1.25.14 base and pull Go module
+- ~2 GB free disk. Compose images use a digest-pinned Go 1.26.10 base and pull Go module
   deps on first build (subsequent builds are cached).
 - `jq`, `curl`, `sqlite3` — present inside the containers, no host install needed.
 
@@ -44,7 +44,7 @@ cd Server && go test ./...        # listener, DNS/HTTP, chunking, mesh behavior
 cd tools/builder && go test ./... # standalone builder utility
 ```
 
-All modules build and test from a clean checkout with Go 1.25.14+. `Client/` ships
+All modules build and test from a clean checkout with Go 1.26.10+. `Client/` ships
 an inert `config_default.go` solely for compilation and tests. Archon writes
 `config.go` and builds with the `generated` tag for every deployable beacon, so
 the development configuration can never be included in an operator build.
