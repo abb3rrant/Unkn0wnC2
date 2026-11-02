@@ -77,13 +77,19 @@
     </style>
 </head>
 <body>
-    <div class="header">
-        <div class="header-content">
-            <div class="logo">
-                <img src="/static/logo.png" alt="Unkn0wnC2" class="logo-img">
-                <span class="logo-text">Unkn0wnC2</span>
+    <nav class="navbar">
+        <div class="navbar-brand">Unkn0wnC2</div>
+        <div class="navbar-right">
+            <div class="ws-status" id="wsStatus">
+                <div class="ws-status-dot"></div>
+                <span class="ws-status-text">Connecting...</span>
             </div>
-            <div class="nav">
+            <div class="user-info">Logged in as <strong id="username">operator</strong></div>
+            <button class="btn-logout" onclick="logout()">Logout</button>
+        </div>
+    </nav>
+
+    <div class="nav-menu">
         <a href="/dashboard" class="nav-btn">Dashboard</a>
         <a href="/listeners" class="nav-btn active">Listeners</a>
         <a href="/profiles" class="nav-btn">HTTP Profiles</a>
@@ -93,12 +99,6 @@
         <a href="/logs" class="nav-btn">Logs</a>
         <a href="/report" class="nav-btn">Report</a>
         <a href="/users" class="nav-btn" id="usersNavBtn">Users</a>
-    </div>
-            <div class="user-info">
-                Logged in as <strong id="username">operator</strong>
-                <button class="logout-btn" onclick="logout()">Logout</button>
-            </div>
-        </div>
     </div>
 
     <div class="container">
