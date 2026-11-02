@@ -377,6 +377,37 @@ func TestBuildTransportUpdatePayload(t *testing.T) {
 		}
 	})
 
+	// The push is fire-and-forget: the beacon applies it and cannot report that it
+	// now has nowhere to call home. So a spec that could never connect has to be
+	// refused before it is queued, or the push silently blinds the beacon.
+	t.Run("a listener the beacon could not reach is refused", func(t *testing.T) {
+		broken := map[string]func(*HTTPListenerSpec){
+			"no host":         func(spec *HTTPListenerSpec) { spec.Host = "" },
+			"host with CRLF":  func(spec *HTTPListenerSpec) { spec.Host = "cdn.example:443\r\nX-Evil: 1" },
+			"no scheme":       func(spec *HTTPListenerSpec) { spec.Scheme = "" },
+			"unknown scheme":  func(spec *HTTPListenerSpec) { spec.Scheme = "ftp" },
+			"no register URI": func(spec *HTTPListenerSpec) { delete(spec.URIs, "register") },
+			"relative URI":    func(spec *HTTPListenerSpec) { spec.URIs["task"] = []string{"api/v1/sync"} },
+		}
+
+		for name, mutate := range broken {
+			t.Run(name, func(t *testing.T) {
+				spec := listener
+				spec.URIs = map[string][]string{
+					"register": {"/api/v1/ping"},
+					"task":     {"/api/v1/sync"},
+					"result":   {"/api/v1/report"},
+					"ack":      {"/api/v1/ack"},
+				}
+				mutate(&spec)
+
+				if _, err := buildTransportUpdatePayload("dual", []HTTPListenerSpec{spec}, 3, 60); err == nil {
+					t.Fatalf("buildTransportUpdatePayload() accepted a listener with %s", name)
+				}
+			})
+		}
+	})
+
 	t.Run("mode is case-insensitive", func(t *testing.T) {
 		payload, err := buildTransportUpdatePayload("DUAL", []HTTPListenerSpec{listener}, 0, 0)
 		if err != nil {
@@ -402,9 +433,15 @@ func TestQueueTransportUpdate_CreatesFireAndForgetTask(t *testing.T) {
 	api := &APIServer{db: db}
 
 	payload, err := buildTransportUpdatePayload("dual", []HTTPListenerSpec{{
-		Name: "cdn-assets",
-		Host: "cdn.example.com:8443",
-		URIs: map[string][]string{"task": {"/api/v1/sync"}},
+		Name:   "cdn-assets",
+		Scheme: "http",
+		Host:   "cdn.example.com:8444",
+		URIs: map[string][]string{
+			"register": {"/api/v1/ping"},
+			"task":     {"/api/v1/sync"},
+			"result":   {"/api/v1/report"},
+			"ack":      {"/api/v1/ack"},
+		},
 	}}, 3, 60)
 	if err != nil {
 		t.Fatal(err)

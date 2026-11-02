@@ -111,6 +111,14 @@ func main() {
 		// Don't exit - this is not critical
 	}
 
+	// Seed the shipped HTTP profile when none exists, so a fresh install can assign
+	// a working listener instead of starting from an empty profile list.
+	if seeded, err := db.EnsureDefaultHTTPProfile(); err != nil {
+		LogWarn("Failed to seed the default HTTP profile: %v", err)
+	} else if seeded {
+		LogInfo("Seeded the default HTTP profile (bind %s:%d)", "0.0.0.0", defaultHTTPProfileBindPort)
+	}
+
 	// Create API server
 	apiServer := NewAPIServer(db, cfg)
 

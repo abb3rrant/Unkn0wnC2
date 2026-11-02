@@ -45,6 +45,35 @@ entirely — DNS-only, as before.
 
 A complete example lives in `Server/profiles/cdn-assets.json.example`.
 
+### The shipped default profile
+
+Archon seeds a profile named `default` the first time it starts against an empty
+profile table, so a fresh install has something to assign instead of a blank
+editor. The same document is served at `GET /api/http/profile-template`, which is
+what the Profiles page's **New** button loads — one definition, so the editor and
+the seeded record cannot disagree.
+
+What it is, and why:
+
+| Choice | Reason |
+| --- | --- |
+| `scheme: http` | An HTTPS default would have to ship a pin, and a pin belongs to the certificate on a specific listener host. A shipped pin would be wrong everywhere except the machine it was generated on, and the listener treats a pin mismatch as a startup error. HTTPS profiles are generated per deployment (see the Docker image, which writes one with a real pin). |
+| `bind_port: 8445` | Clear of Archon's own 8443, and the port the Docker compose stack publishes for its first listener. |
+| `beacon_host: 127.0.0.1:8445` | The one field that cannot be right for every deployment: it is where beacons dial, not where the listener binds. It ships pointing at loopback so the profile is usable immediately in a local or container test. |
+| Full `request_headers` template | The default must look like a real client on the wire, not like an unconfigured one: ordered headers, a user-agent pool, HMAC auth, AES-GCM bodies. |
+
+Repoint `beacon_host` (and `bind_port`, if your listener uses another port) before
+assigning it for real. Everything else works as shipped.
+
+```sh
+# what a build or an editor would get
+curl -s https://<archon>/api/http/profile-template | jq -r '.data.document'
+```
+
+The default is only seeded into an **empty** profile table: deleting it on purpose
+does not resurrect it on the next restart, and an existing hand-authored profile
+list is never touched.
+
 ### Profile reference
 
 | Field | Meaning |

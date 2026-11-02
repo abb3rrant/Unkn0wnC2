@@ -104,6 +104,25 @@ services:
       c2net:
         ipv4_address: 172.20.0.21
 
+  # Plain-HTTP beacon built from the profile Archon seeds by default. It reaches
+  # dns2 on 8444, which is the default profile's bind port offset for this stack.
+  http-client-default:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: http-client-default
+    entrypoint: ["/scripts/client-entrypoint.sh"]
+    environment:
+      - CLIENT_BINARY=/opt/unkn0wnc2/builds/beacon-default
+    volumes:
+      - builds:/opt/unkn0wnc2/builds:ro
+    depends_on:
+      dns2:
+        condition: service_started
+    networks:
+      c2net:
+        ipv4_address: 172.20.0.22
+
   setup:
     build:
       context: ..
@@ -133,11 +152,18 @@ services:
       - ARCHON_URL=https://172.20.0.10:8443
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
       - LISTENER_URL=https://172.20.0.11:8443
+      - DEFAULT_LISTENER_URL=http://172.20.0.12:8444
     depends_on:
       dns1:
         condition: service_started
       http-client:
         condition: service_started
+      http-client-default:
+        condition: service_started
+    volumes:
+      # The transport-push check projects a listener spec from the profile the
+      # listener is actually serving, so it cannot invent an unreachable one.
+      - http-profiles:/opt/unkn0wnc2/profiles:ro
     networks:
       c2net:
         ipv4_address: 172.20.0.202

@@ -218,6 +218,69 @@ chmod +x "${BUILDS_DIR}/beacon-http"
 echo "[Setup] HTTP-only client built: ${HTTP_CLIENT_FILE} (BuildID: ${HTTP_BUILD_ID})"
 
 # --------------------------------------------------------
+# Build a plain-HTTP client from the shipped default profile
+# --------------------------------------------------------
+# The document is fetched from Archon rather than written out again here, so this
+# exercises the profile an operator actually gets. Port 8444 keeps it clear of the
+# HTTPS profile on 8443; both bind inside dns2's own network namespace.
+echo "[Setup] Building plain-HTTP client from the shipped default profile..."
+DEFAULT_TEMPLATE=$(api_get "/api/http/profile-template")
+if [ "$(echo "$DEFAULT_TEMPLATE" | jq -r '.success // false')" != "true" ]; then
+    echo "[Setup] ERROR: could not fetch the default profile template"
+    echo "$DEFAULT_TEMPLATE" | jq .
+    exit 1
+fi
+
+echo "$DEFAULT_TEMPLATE" | jq -r '.data.document' \
+    | jq '.bind_port = 8444 | .beacon_host = "172.20.0.12:8444"' \
+    > /opt/unkn0wnc2/profiles/default.json
+
+DEFAULT_LISTENER=$(jq '{
+    name,
+    scheme,
+    host: .beacon_host,
+    host_header,
+    spki_sha256: (.tls.spki_sha256 // ""),
+    uris,
+    methods,
+    user_agents,
+    headers,
+    request_headers,
+    request_body,
+    response_body,
+    auth,
+    timeout_secs: 15,
+    max_body_bytes
+}' /opt/unkn0wnc2/profiles/default.json)
+
+DEFAULT_BUILD_REQUEST=$(jq -n \
+    --arg arch "$GOARCH" \
+    --argjson listener "$DEFAULT_LISTENER" \
+    '{
+        dns_domains: [],
+        platform: "linux",
+        architecture: $arch,
+        sleep_min: 2,
+        sleep_max: 3,
+        beacon_name: "default-profile-beacon",
+        staged_registration: false,
+        static_link: true,
+        transport: "http",
+        http_listeners: [$listener]
+    }')
+DEFAULT_CLIENT_RESP=$(api_post "/api/builder/client" "$DEFAULT_BUILD_REQUEST")
+DEFAULT_CLIENT_FILE=$(echo "$DEFAULT_CLIENT_RESP" | jq -r '.data.filename // empty')
+DEFAULT_BUILD_ID=$(echo "$DEFAULT_CLIENT_RESP" | jq -r '.data.build_id // empty')
+if [ -z "$DEFAULT_CLIENT_FILE" ]; then
+    echo "[Setup] ERROR: default-profile client build failed"
+    echo "$DEFAULT_CLIENT_RESP" | jq .
+    exit 1
+fi
+cp "${BUILDS_DIR}/client/${DEFAULT_CLIENT_FILE}" "${BUILDS_DIR}/beacon-default"
+chmod +x "${BUILDS_DIR}/beacon-default"
+echo "[Setup] Default-profile client built: ${DEFAULT_CLIENT_FILE} (BuildID: ${DEFAULT_BUILD_ID})"
+
+# --------------------------------------------------------
 # Build second client for multi-DNS test (uses both resolvers via system DNS)
 # --------------------------------------------------------
 echo "[Setup] Building multi-DNS client (Shadow Mesh test)..."

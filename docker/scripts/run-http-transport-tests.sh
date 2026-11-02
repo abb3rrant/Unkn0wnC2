@@ -10,6 +10,7 @@
 ARCHON_URL="${ARCHON_URL:-https://172.20.0.10:8443}"
 ADMIN_PASS="${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}"
 LISTENER_URL="${LISTENER_URL:-https://172.20.0.11:8443}"
+DEFAULT_LISTENER_URL="${DEFAULT_LISTENER_URL:-http://172.20.0.12:8444}"
 COOKIE_JAR="/tmp/http-transport-cookies.txt"
 PASSED=0
 FAILED=0
@@ -245,7 +246,36 @@ fi
 echo ""
 echo "[Transport push]"
 
-PUSH=$(api_post "/api/http/transport" '{"all":true,"mode":"dual","fallback_after_failures":3,"retry_backoff_secs":60,"listeners":[{"name":"e2e","scheme":"http","host":"172.20.0.11:8443","uris":{"register":["/api/v1/ping"],"task":["/api/v1/sync"],"result":["/api/v1/report"],"ack":["/api/v1/ack"]}}]}')
+# The push is applied to live beacons, so it has to describe a listener that can
+# actually serve them. A made-up spec (an http:// address for an HTTPS listener,
+# for instance) moves every beacon onto a transport that cannot answer, and an
+# HTTP-only beacon with no DNS domains has no way back. The spec is projected from
+# the profile the listener is actually serving.
+PUSH_PROFILE_FILE="/opt/unkn0wnc2/profiles/cdn-assets.json"
+if [ -r "$PUSH_PROFILE_FILE" ]; then
+    PUSH_LISTENER=$(jq '{
+        name,
+        scheme,
+        host: .beacon_host,
+        host_header,
+        spki_sha256: (.tls.spki_sha256 // ""),
+        uris,
+        methods,
+        user_agents,
+        headers,
+        request_headers,
+        request_body,
+        response_body,
+        auth,
+        timeout_secs: 15,
+        max_body_bytes
+    }' "$PUSH_PROFILE_FILE")
+else
+    PUSH_LISTENER='{}'
+    fail "transport push uses a servable listener" "profile unavailable at ${PUSH_PROFILE_FILE}"
+fi
+
+PUSH=$(api_post "/api/http/transport" "{\"all\":true,\"mode\":\"dual\",\"fallback_after_failures\":3,\"retry_backoff_secs\":60,\"listeners\":[${PUSH_LISTENER}]}")
 if echo "$PUSH" | jq -e '.data.mode == "dual"' >/dev/null 2>&1; then
     pass "transport push is accepted"
 else
@@ -257,6 +287,28 @@ if [ "${QUEUED:-0}" -ge 1 ]; then
     pass "transport push queues a task per beacon (${QUEUED})"
 else
     fail "transport push queues a task per beacon" "queued ${QUEUED:-none} (is a beacon running?)"
+fi
+
+# A beacon that accepted the push must still task afterwards: the point of a
+# runtime transport change is that it leaves the beacon reachable, not merely that
+# the request was accepted.
+if [ -n "$HTTP_BEACON_ID" ]; then
+    sleep 10
+    TASK_RESPONSE=$(api_post "/api/beacons/${HTTP_BEACON_ID}/task" "{\"beacon_id\":\"${HTTP_BEACON_ID}\",\"command\":\"printf PUSH_OK\"}")
+    TASK_ID=$(echo "$TASK_RESPONSE" | jq -r '.data.task_id // empty')
+    OUTCOME=1
+    RESULT=""
+    if [ -n "$TASK_ID" ]; then
+        OUTCOME=0
+        RESULT=$(wait_result "$TASK_ID") || OUTCOME=$?
+    fi
+    if [ "$OUTCOME" -eq 0 ] && [ "$RESULT" = "PUSH_OK" ]; then
+        pass "a beacon still tasks after the transport push"
+    else
+        fail "a beacon still tasks after the transport push" "expected PUSH_OK, got ${RESULT:-no result} (outcome ${OUTCOME})"
+    fi
+else
+    fail "a beacon still tasks after the transport push" "skipped: no HTTP beacon"
 fi
 
 # An unknown mode must be refused before anything is queued, so a typo cannot reach
@@ -271,6 +323,109 @@ if [ "$REJECTED" = "400" ]; then
     pass "an unknown transport mode is refused"
 else
     fail "an unknown transport mode is refused" "got ${REJECTED}"
+fi
+
+# A listener that could never connect must be refused before it is queued. The
+# beacon applies a transport update without sending a result, so an accepted but
+# unreachable spec leaves it with nowhere to call home and no way to say so.
+BAD_PUSH=$(curl -ks -b "$COOKIE_JAR" \
+    -H "Content-Type: application/json" \
+    -H "X-CSRF-Token: ${CSRF_TOKEN}" \
+    -X POST "${ARCHON_URL}/api/http/transport" \
+    -d '{"all":true,"mode":"dual","listeners":[{}]}' \
+    -o /tmp/badpush.json -w "%{http_code}")
+if [ "$BAD_PUSH" = "400" ] && grep -q "host is required" /tmp/badpush.json; then
+    pass "a transport push to a listener with no host is refused"
+else
+    fail "a transport push to a listener with no host is refused" "got ${BAD_PUSH} $(head -c 160 /tmp/badpush.json)"
+fi
+
+# ---------------------------------------------------------------------------
+# Shipped default profile over plain HTTP
+# ---------------------------------------------------------------------------
+echo ""
+echo "[Default profile]"
+
+TEMPLATE=$(api_get "/api/http/profile-template")
+if echo "$TEMPLATE" | jq -e '.data.document | length > 0' >/dev/null 2>&1; then
+    pass "the shipped default profile template is served"
+else
+    fail "the shipped default profile template is served" "$(echo "$TEMPLATE" | head -c 200)"
+fi
+
+# Archon seeds this on an empty profile table, so a fresh install has something to
+# assign. Its document must be the same one the editor loads.
+SEEDED=$(api_get "/api/http/profiles/default" | jq -r '.data.document // empty' 2>/dev/null)
+TEMPLATE_DOC=$(echo "$TEMPLATE" | jq -r '.data.document // empty')
+if [ -n "$SEEDED" ] && [ "$(echo "$SEEDED" | jq -S .)" = "$(echo "$TEMPLATE_DOC" | jq -S .)" ]; then
+    pass "the seeded default profile matches the served template"
+else
+    fail "the seeded default profile matches the served template" "seeded=${SEEDED:0:80}"
+fi
+
+# The same document must pass the save path an operator uses, or the default is
+# not actually storable. The name is pinned to the document (the listener takes a
+# profile name from its filename), so a copy is saved under its own name rather
+# than overwriting the seeded record.
+SAVE_DOC=$(echo "$TEMPLATE_DOC" | jq '.name = "default-check"')
+SAVE_DEFAULT=$(api_post "/api/http/profiles" "{\"name\":\"default-check\",\"document\":$(echo "$SAVE_DOC" | jq -Rs .)}")
+if echo "$SAVE_DEFAULT" | jq -e '.data.name == "default-check"' >/dev/null 2>&1; then
+    pass "the default profile passes the save path unchanged"
+else
+    fail "the default profile passes the save path unchanged" "$(echo "$SAVE_DEFAULT" | head -c 200)"
+fi
+curl -ks -b "$COOKIE_JAR" -H "X-CSRF-Token: ${CSRF_TOKEN}" \
+    -X DELETE "${ARCHON_URL}/api/http/profiles/default-check" -o /dev/null
+
+# A plain-HTTP listener on 8444 serves the same default document.
+DEFAULT_READY=0
+for _ in $(seq 1 30); do
+    CODE=$(curl -s --connect-timeout 2 --max-time 3 -o /dev/null -w "%{http_code}" \
+        "${DEFAULT_LISTENER_URL}/not/a/route" || true)
+    if [ "$CODE" != "000" ]; then
+        DEFAULT_READY=1
+        break
+    fi
+    sleep 2
+done
+if [ "$DEFAULT_READY" -eq 1 ] && [ "$CODE" = "404" ]; then
+    pass "the default profile's plain-HTTP listener answers a probe with its not-found status"
+else
+    fail "the default profile's plain-HTTP listener answers a probe" "code=${CODE:-none}"
+fi
+
+DEFAULT_BEACON_ID=""
+for _ in $(seq 1 30); do
+    BEACONS=$(api_get "/api/beacons")
+    DEFAULT_BEACON_ID=$(echo "$BEACONS" | jq -r 'first(.beacons[]? | select(.beacon_name == "default-profile-beacon") | .id) // ""')
+    if [ -n "$DEFAULT_BEACON_ID" ]; then
+        break
+    fi
+    sleep 3
+done
+
+if [ -n "$DEFAULT_BEACON_ID" ]; then
+    pass "a beacon built from the default profile checked in over plain HTTP"
+else
+    fail "a beacon built from the default profile checked in over plain HTTP" "default-profile-beacon did not appear"
+fi
+
+if [ -n "$DEFAULT_BEACON_ID" ]; then
+    TASK_RESPONSE=$(api_post "/api/beacons/${DEFAULT_BEACON_ID}/task" "{\"beacon_id\":\"${DEFAULT_BEACON_ID}\",\"command\":\"printf DEFAULT_E2E_OK\"}")
+    TASK_ID=$(echo "$TASK_RESPONSE" | jq -r '.data.task_id // empty')
+    if [ -n "$TASK_ID" ]; then
+        OUTCOME=0
+        RESULT=$(wait_result "$TASK_ID") || OUTCOME=$?
+        if [ "$OUTCOME" -eq 0 ] && [ "$RESULT" = "DEFAULT_E2E_OK" ]; then
+            pass "task and result completed over plain HTTP with the default profile"
+        else
+            fail "task and result over plain HTTP with the default profile" "expected DEFAULT_E2E_OK, got ${RESULT:-no result} (outcome ${OUTCOME})"
+        fi
+    else
+        fail "task creation on the default-profile beacon" "$(echo "$TASK_RESPONSE" | head -c 200)"
+    fi
+else
+    fail "task and result over plain HTTP with the default profile" "skipped because the beacon did not check in"
 fi
 
 # ---------------------------------------------------------------------------

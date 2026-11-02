@@ -11,7 +11,7 @@ Four tiers of testing:
 | Tier | Scope | Where it runs | Gate |
 |------|-------|---------------|------|
 | Unit | Go tests per component (`Archon/`, `Client/`, `Server/`) | Go 1.26.10 toolchain | `go test` |
-| HTTP transport E2E (Docker) | HTTPS listener, custom profiles, HTTP-only beacon, task/result, runtime push | `docker-wk` | `run-http-transport-tests.sh` |
+| HTTP transport E2E (Docker) | HTTPS listener, custom profiles, HTTP-only beacon, task/result, runtime push, shipped default profile over plain HTTP | `docker-wk` | `run-http-transport-tests.sh` |
 | Integration (Docker) | Live C2 stack: beacon check-in, task exec, Shadow Mesh | `docker-wk` | `run-tests.sh` |
 | Extended E2E (Docker) | DNS comms malleability, edge cases, all phase configs | `docker-wk` | `run-extended-tests.sh` |
 
@@ -59,6 +59,12 @@ the development configuration can never be included in an operator build.
 > pass `--no-deps` — and a re-run `setup` fails with `Text file busy` because
 > the running DNS containers hold the rebuilt binaries open. **Always bring the
 > stack up once, then run tests with `--no-deps`.**
+
+> **Also critical:** the test runners live behind Compose profiles (`http-test`,
+> `test`, `extended-test`). A plain `docker compose build` skips them, so
+> `compose run` keeps executing the *previous* image and can report a stale pass
+> for a script you just edited. Build the runner explicitly when its script
+> changed: `docker compose --profile http-test build http-test`.
 
 ### 1) Bring up the core stack (this runs `setup` exactly once)
 
