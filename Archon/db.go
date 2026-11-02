@@ -19,7 +19,7 @@ import (
 
 const (
 	// MasterDatabaseSchemaVersion tracks the current schema version
-	MasterDatabaseSchemaVersion = 20
+	MasterDatabaseSchemaVersion = 21
 
 	// MaxTaskCommandLength is the maximum length for task commands.
 	// DNS TXT responses are limited to ~512 bytes UDP. After encryption (AES-GCM adds 28 bytes)
@@ -298,6 +298,13 @@ func (d *MasterDatabase) applyMigrations(fromVersion int) error {
 	if fromVersion < 20 {
 		if err := d.migration20AddHTTPProfileAssignments(); err != nil {
 			return fmt.Errorf("migration 20 failed: %w", err)
+		}
+	}
+
+	// Migration 21: Per-beacon HTTP listener selection and transport
+	if fromVersion < 21 {
+		if err := d.migration21AddBeaconHTTPListeners(); err != nil {
+			return fmt.Errorf("migration 21 failed: %w", err)
 		}
 	}
 

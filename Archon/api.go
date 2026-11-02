@@ -3558,6 +3558,10 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	operatorRouter.HandleFunc("/beacons/{id}/domains", api.handleGetBeaconDomains).Methods("GET")
 	operatorRouter.Handle("/beacons/{id}/domains", operatorWrite(http.HandlerFunc(api.handleUpdateBeaconDomain))).Methods("PUT")
 	operatorRouter.Handle("/beacons/{id}/domains", operatorWrite(http.HandlerFunc(api.handleAddBeaconDomain))).Methods("POST")
+	// BOF execution and per-beacon HTTP listener management (beacon dashboard).
+	operatorRouter.Handle("/beacons/{id}/bof", operatorWrite(http.HandlerFunc(api.handleRunBOF))).Methods("POST")
+	operatorRouter.HandleFunc("/beacons/{id}/http-listeners", api.handleListBeaconHTTPListeners).Methods("GET")
+	operatorRouter.Handle("/beacons/{id}/http-listeners", operatorWrite(http.HandlerFunc(api.handleSetBeaconHTTPListeners))).Methods("POST")
 	operatorRouter.Handle("/beacons/{id}", operatorWrite(http.HandlerFunc(api.handleDeleteBeacon))).Methods("DELETE")
 	operatorRouter.Handle("/beacons/{id}/task", operatorWrite(http.HandlerFunc(api.handleCreateTask))).Methods("POST")
 	operatorRouter.HandleFunc("/tasks", api.handleListTasks).Methods("GET")

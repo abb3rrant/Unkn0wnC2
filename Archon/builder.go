@@ -509,6 +509,11 @@ func (api *APIServer) handleBuildClient(w http.ResponseWriter, r *http.Request) 
 	exfilQT, exfilEnc, exfilMaxPayload, exfilPayloadFmt, exfilACKIP := resolvePhaseConfigReq(req.DataExfilPhase, encrypted)
 
 	buildConfigMap := map[string]interface{}{
+		// Transport and the listener names a beacon was built for. The beacon
+		// dashboard reads them to decide whether a BOF can run and which HTTP
+		// listeners are already applied.
+		"transport":              normalizeTransportMode(req.Transport),
+		"http_listener_names":    httpListenerNames(req.HTTPListeners),
 		"sleep_min":              req.SleepMin,
 		"sleep_max":              req.SleepMax,
 		"exfil_jitter_min_ms":    req.ExfilJitterMinMs,

