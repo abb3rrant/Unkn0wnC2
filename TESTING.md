@@ -60,6 +60,12 @@ the development configuration can never be included in an operator build.
 > the running DNS containers hold the rebuilt binaries open. **Always bring the
 > stack up once, then run tests with `--no-deps`.**
 
+> **Also critical:** the test runners live behind Compose profiles (`http-test`,
+> `test`, `extended-test`). A plain `docker compose build` skips them, so
+> `compose run` keeps executing the *previous* image and can report a stale pass
+> for a script you just edited. Build the runner explicitly when its script
+> changed: `docker compose --profile http-test build http-test`.
+
 ### 1) Bring up the core stack (this runs `setup` exactly once)
 
 ```bash
