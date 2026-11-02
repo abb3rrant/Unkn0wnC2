@@ -325,6 +325,21 @@ else
     fail "an unknown transport mode is refused" "got ${REJECTED}"
 fi
 
+# A listener that could never connect must be refused before it is queued. The
+# beacon applies a transport update without sending a result, so an accepted but
+# unreachable spec leaves it with nowhere to call home and no way to say so.
+BAD_PUSH=$(curl -ks -b "$COOKIE_JAR" \
+    -H "Content-Type: application/json" \
+    -H "X-CSRF-Token: ${CSRF_TOKEN}" \
+    -X POST "${ARCHON_URL}/api/http/transport" \
+    -d '{"all":true,"mode":"dual","listeners":[{}]}' \
+    -o /tmp/badpush.json -w "%{http_code}")
+if [ "$BAD_PUSH" = "400" ] && grep -q "host is required" /tmp/badpush.json; then
+    pass "a transport push to a listener with no host is refused"
+else
+    fail "a transport push to a listener with no host is refused" "got ${BAD_PUSH} $(head -c 160 /tmp/badpush.json)"
+fi
+
 # ---------------------------------------------------------------------------
 # Shipped default profile over plain HTTP
 # ---------------------------------------------------------------------------

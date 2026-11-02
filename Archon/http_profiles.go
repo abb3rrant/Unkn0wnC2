@@ -391,6 +391,19 @@ func buildTransportUpdatePayload(mode string, listeners []HTTPListenerSpec, fall
 		return "", fmt.Errorf("mode %q needs at least one listener", normalized)
 	}
 
+	// The push goes to live beacons and is fire-and-forget: the beacon applies it,
+	// replaces its transport, and cannot report that it now has nowhere to call
+	// home. A listener that cannot work therefore does not fail loudly - it just
+	// blinds the beacon. An HTTP-only beacon with no DNS domains has no in-band
+	// way back, so the spec is validated here rather than trusted.
+	if normalized != "dns" {
+		for i, listener := range listeners {
+			if err := validateTransportListener(listener); err != nil {
+				return "", fmt.Errorf("listeners[%d]: %w", i, err)
+			}
+		}
+	}
+
 	payload, err := json.Marshal(map[string]interface{}{
 		"mode":                    normalized,
 		"listeners":               listeners,
@@ -401,6 +414,44 @@ func buildTransportUpdatePayload(mode string, listeners []HTTPListenerSpec, fall
 		return "", fmt.Errorf("failed to serialise transport update: %w", err)
 	}
 	return string(payload), nil
+}
+
+// validateTransportListener rejects a listener a beacon could not reach. It mirrors
+// the checks the profile validator applies, because a runtime update bypasses the
+// profile store entirely and is applied by the beacon as written.
+func validateTransportListener(listener HTTPListenerSpec) error {
+	if strings.TrimSpace(listener.Host) == "" {
+		return fmt.Errorf("host is required: it is the address the beacon dials")
+	}
+	if strings.ContainsAny(listener.Host, "\r\n") {
+		return fmt.Errorf("host contains a line break")
+	}
+
+	scheme := strings.ToLower(strings.TrimSpace(listener.Scheme))
+	switch scheme {
+	case "http", "https":
+	default:
+		return fmt.Errorf("scheme must be \"http\" or \"https\", got %q", listener.Scheme)
+	}
+
+	// A missing pin is not rejected here: the beacon treats an empty spki_sha256 as
+	// unpinned TLS, which is a supported (if weaker) choice a profile can make, and
+	// it still leaves the beacon able to call back. A missing host or operation is
+	// different - that beacon would never reach anything.
+
+	for _, operation := range []string{"register", "task", "result", "ack"} {
+		paths := listener.URIs[operation]
+		if len(paths) == 0 {
+			return fmt.Errorf("uris.%s needs at least one path", operation)
+		}
+		for _, path := range paths {
+			if !strings.HasPrefix(path, "/") {
+				return fmt.Errorf("uris.%s path %q must start with \"/\"", operation, path)
+			}
+		}
+	}
+
+	return nil
 }
 
 // queueTransportUpdate creates an update_transport task for one beacon.
