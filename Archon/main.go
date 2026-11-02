@@ -261,9 +261,14 @@ func newArchonHTTPServer(addr string, handler http.Handler) *http.Server {
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      60 * time.Second,
-		IdleTimeout:       120 * time.Second,
-		MaxHeaderBytes:    1 << 20,
+		// Builder requests compile a Go binary for the caller and answer when the
+		// build finishes. On a small host (1 vCPU) that is minutes, not seconds, so
+		// a 60s write timeout cuts the connection mid-build and the caller sees a
+		// stream error instead of a build result. The read side is still bounded,
+		// which is what slow-request protection actually needs.
+		WriteTimeout:   15 * time.Minute,
+		IdleTimeout:    120 * time.Second,
+		MaxHeaderBytes: 1 << 20,
 	}
 }
 
