@@ -14,7 +14,7 @@ fail() {
 command -v git >/dev/null 2>&1 || fail "git is required"
 command -v tar >/dev/null 2>&1 || fail "GNU tar is required"
 command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is required"
-command -v "${GO_BIN}" >/dev/null 2>&1 || fail "Go 1.25.14 or newer is required"
+command -v "${GO_BIN}" >/dev/null 2>&1 || fail "Go 1.26.10 or newer is required"
 command -v "${SYFT_BIN}" >/dev/null 2>&1 || fail "syft is required to generate the CycloneDX SBOM"
 
 cd "${ROOT}"
@@ -30,9 +30,9 @@ SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(git show -s --format=%ct "${COMMIT}")}
 BUILD_DATE=$(date -u -d "@${SOURCE_DATE_EPOCH}" '+%Y-%m-%d')
 
 GO_VERSION=$(${GO_BIN} env GOVERSION)
-MIN_GO_VERSION=go1.25.14
+MIN_GO_VERSION=go1.26.10
 if ! printf '%s\n%s\n' "${MIN_GO_VERSION}" "${GO_VERSION}" | sort -V -C; then
-  fail "Go 1.25.14 or newer is required, found ${GO_VERSION}"
+  fail "Go 1.26.10 or newer is required, found ${GO_VERSION}"
 fi
 
 for module in Archon Client Server tools/builder; do

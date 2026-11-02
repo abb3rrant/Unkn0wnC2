@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 golang:1.25.14-bookworm@sha256:c268a04d59aea0b180ed9946a658cfab9e7b3391dc90eed6e4969ccff98c851f
+FROM --platform=linux/amd64 golang:1.26.10-bookworm@sha256:2bba1f6b063d0e09c5297fbd0a7b9664c4931afc4476a779d7c9a3062704f949
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \

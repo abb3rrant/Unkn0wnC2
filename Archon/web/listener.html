@@ -62,6 +62,46 @@
         .ok { color: #4caf50; }
         .bad { color: #ff6b6b; }
 
+        .btn {
+            padding: 8px 16px;
+            padding-left: 22px;
+            background: rgba(255, 51, 51, 0.05);
+            border: none;
+            border-left: 3px solid rgba(255, 51, 51, 0.5);
+            border-radius: 0;
+            color: rgba(255, 51, 51, 0.8);
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            clip-path: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 0 100%);
+        }
+
+        .btn:hover {
+            background: rgba(255, 51, 51, 0.15);
+            color: #ff3333;
+        }
+
+        .form-select {
+            width: 100%;
+            padding: 10px;
+            padding-left: 15px;
+            background: rgba(0, 0, 0, 0.5);
+            border: none;
+            border-left: 3px solid rgba(255, 51, 51, 0.5);
+            border-bottom: 1px solid rgba(255, 51, 51, 0.15);
+            border-radius: 0;
+            color: #fff;
+            font-size: 13px;
+        }
+
+        .form-select:focus {
+            outline: none;
+            border-left-color: rgba(255, 51, 51, 0.8);
+            border-bottom-color: rgba(255, 51, 51, 0.8);
+        }
+
         .assignment-row {
             display: flex;
             justify-content: space-between;
@@ -81,13 +121,19 @@
     </style>
 </head>
 <body>
-    <div class="header">
-        <div class="header-content">
-            <div class="logo">
-                <img src="/static/logo.png" alt="Unkn0wnC2" class="logo-img">
-                <span class="logo-text">Unkn0wnC2</span>
+    <nav class="navbar">
+        <div class="navbar-brand">Unkn0wnC2</div>
+        <div class="navbar-right">
+            <div class="ws-status" id="wsStatus">
+                <div class="ws-status-dot"></div>
+                <span class="ws-status-text">Connecting...</span>
             </div>
-            <div class="nav">
+            <div class="user-info">Logged in as <strong id="username">operator</strong></div>
+            <button class="btn-logout" onclick="logout()">Logout</button>
+        </div>
+    </nav>
+
+    <div class="nav-menu">
         <a href="/dashboard" class="nav-btn">Dashboard</a>
         <a href="/listeners" class="nav-btn active">Listeners</a>
         <a href="/profiles" class="nav-btn">HTTP Profiles</a>
@@ -97,12 +143,6 @@
         <a href="/logs" class="nav-btn">Logs</a>
         <a href="/report" class="nav-btn">Report</a>
         <a href="/users" class="nav-btn" id="usersNavBtn">Users</a>
-    </div>
-            <div class="user-info">
-                Logged in as <strong id="username">operator</strong>
-                <button class="logout-btn" onclick="logout()">Logout</button>
-            </div>
-        </div>
     </div>
 
     <div class="container">
@@ -168,12 +208,15 @@
                 const payload = await response.json();
                 const data = (payload && payload.data) || {};
 
+                // The transport summary is derived from the assignments, so they
+                // must be current before it renders or the panel shows the state
+                // from the previous load.
+                assigned = data.assigned_profiles || [];
+                available = data.available_profiles || [];
+
                 renderHeader(data.listener || {});
                 renderTransport(data.listener || {});
                 renderReported(data.reported_listeners || []);
-
-                assigned = data.assigned_profiles || [];
-                available = data.available_profiles || [];
 
                 renderAssignments();
                 renderAttachPicker();

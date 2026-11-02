@@ -110,6 +110,11 @@ body {
     color: #555;
 }
 
+.ws-status-text {
+    color: #555;
+    font-size: 11px;
+}
+
 .ws-status-dot {
     width: 8px;
     height: 8px;
