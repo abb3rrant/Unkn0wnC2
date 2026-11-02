@@ -3583,6 +3583,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 
 	// Malleable HTTP listener profiles
 	operatorRouter.HandleFunc("/http/profiles", api.handleListHTTPProfiles).Methods("GET")
+	operatorRouter.HandleFunc("/http/profile-template", api.handleHTTPProfileTemplate).Methods("GET")
 	operatorRouter.Handle("/http/profiles", operatorWrite(http.HandlerFunc(api.handleSaveHTTPProfile))).Methods("POST")
 	operatorRouter.HandleFunc("/http/profiles/{name}", api.handleGetHTTPProfile).Methods("GET")
 	operatorRouter.Handle("/http/profiles/{name}", operatorWrite(http.HandlerFunc(api.handleDeleteHTTPProfile))).Methods("DELETE")

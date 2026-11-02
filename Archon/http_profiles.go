@@ -444,6 +444,16 @@ func (api *APIServer) handleListHTTPProfiles(w http.ResponseWriter, r *http.Requ
 	})
 }
 
+// handleHTTPProfileTemplate returns the shipped default profile so the WebUI's
+// "New" action and the seeded record are the same document. Two copies of a
+// template drift; this one cannot.
+func (api *APIServer) handleHTTPProfileTemplate(w http.ResponseWriter, r *http.Request) {
+	api.sendSuccess(w, "http profile template", map[string]interface{}{
+		"name":     defaultHTTPProfileName,
+		"document": defaultHTTPProfileDocument(),
+	})
+}
+
 // handleGetHTTPProfile returns one profile by name.
 func (api *APIServer) handleGetHTTPProfile(w http.ResponseWriter, r *http.Request) {
 	name := httpProfileNameFromRequest(r)

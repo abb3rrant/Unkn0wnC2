@@ -200,53 +200,22 @@
     <script>
         let profiles = [];
         let selectedName = null;
+        let templateDocument = null;
 
-        const STARTER_DOCUMENT = {
-            name: '',
-            enabled: true,
-            bind_addr: '0.0.0.0',
-            bind_port: 8443,
-            scheme: 'https',
-            host_header: 'cdn.example.com',
-            beacon_host: 'cdn.example.com:8443',
-            tls: {
-                cert_file: '/opt/unkn0wnc2/certs/http-cdn-assets.crt',
-                key_file: '/opt/unkn0wnc2/certs/http-cdn-assets.key',
-                spki_sha256: 'REPLACE_WITH_GENERATED_PIN',
-                min_version: '1.2'
-            },
-            uris: {
-                register: ['/api/v1/ping'],
-                task: ['/api/v1/sync'],
-                result: ['/api/v1/report'],
-                ack: ['/api/v1/ack']
-            },
-            methods: { register: 'POST', task: 'GET', result: 'POST', ack: 'GET' },
-            user_agents: ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'],
-            request_headers: [
-                { name: 'Host', value: '{{host}}' },
-                { name: 'Accept', value: 'application/json, text/plain, */*' },
-                { name: 'Accept-Language', value: 'en-US,en;q=0.9' },
-                { name: 'X-Profile', value: 'cdn-assets' },
-                { name: 'User-Agent', value: '{{user_agent}}' },
-                { name: 'Content-Type', value: 'application/json', operations: ['register', 'result'] },
-                { name: 'Content-Length', value: '{{content_length}}', operations: ['register', 'result'] },
-                { name: 'X-Sig', value: '{{auth}}' },
-                { name: 'Connection', value: 'close' }
-            ],
-            response_headers: [
-                { name: 'Content-Type', value: '{{content_type}}' },
-                { name: 'Cache-Control', value: 'private, max-age=0' },
-                { name: 'X-Request-Type', value: '{{operation}}' }
-            ],
-            omit_response_headers: ['Date'],
-            request_body: { encoding: 'aes-gcm-base36', field: 'd', padding_field: 'p', pad_min: 0, pad_max: 32 },
-            response_body: { encoding: 'aes-gcm-base36', field: 'd', error_field: 'e' },
-            auth: { mode: 'hmac-sha256', header: 'X-Sig', sig_encoding: 'hex', max_skew_secs: 300 },
-            status: { ok: 200, empty: 204, not_found: 404, error: 500 },
-            jitter: { min_ms: 0, max_ms: 250 },
-            max_body_bytes: 1048576
-        };
+        // The default profile is served by Archon rather than kept here: the same
+        // function seeds the stored profile, so the editor and the server cannot
+        // disagree about what "default" means.
+        async function defaultProfileDocument() {
+            if (templateDocument) return templateDocument;
+
+            const response = await authFetch('/api/http/profile-template');
+            if (!response || !response.ok) throw new Error('request failed');
+
+            const payload = await response.json();
+            templateDocument = (payload && payload.data && payload.data.document) || '';
+            if (!templateDocument) throw new Error('Archon returned an empty template');
+            return templateDocument;
+        }
 
         // Parse a stored document, keeping a malformed one visible rather than
         // silently replacing it with an empty object.
@@ -317,17 +286,31 @@
             renderProfileList();
         }
 
-        function newProfile() {
+        async function newProfile() {
             selectedName = null;
-            document.getElementById('profileName').value = '';
-            document.getElementById('profileDocument').value = JSON.stringify(STARTER_DOCUMENT, null, 2);
-            setStatus('editorStatus', 'New profile: set a name and Save.', '');
+            document.getElementById('profileName').value = 'default';
+
+            try {
+                document.getElementById('profileDocument').value = await defaultProfileDocument();
+                setStatus('editorStatus',
+                    'Default profile loaded. Set beacon_host to the address your beacons dial, then Save.',
+                    '');
+            } catch (error) {
+                setStatus('editorStatus', `Could not load the default profile: ${error.message}`, 'status-err');
+            }
+
             renderProfileList();
         }
 
-        function loadTemplate() {
-            document.getElementById('profileDocument').value = JSON.stringify(STARTER_DOCUMENT, null, 2);
-            setStatus('editorStatus', 'Template loaded. Set beacon_host and the pin before saving.', '');
+        async function loadTemplate() {
+            try {
+                document.getElementById('profileDocument').value = await defaultProfileDocument();
+                setStatus('editorStatus',
+                    'Default profile loaded. Set beacon_host to the address your beacons dial, then Save.',
+                    '');
+            } catch (error) {
+                setStatus('editorStatus', `Could not load the default profile: ${error.message}`, 'status-err');
+            }
         }
 
         function formatDocument() {

@@ -11,7 +11,7 @@ Four tiers of testing:
 | Tier | Scope | Where it runs | Gate |
 |------|-------|---------------|------|
 | Unit | Go tests per component (`Archon/`, `Client/`, `Server/`) | Go 1.26.10 toolchain | `go test` |
-| HTTP transport E2E (Docker) | HTTPS listener, custom profiles, HTTP-only beacon, task/result, runtime push | `docker-wk` | `run-http-transport-tests.sh` |
+| HTTP transport E2E (Docker) | HTTPS listener, custom profiles, HTTP-only beacon, task/result, runtime push, shipped default profile over plain HTTP | `docker-wk` | `run-http-transport-tests.sh` |
 | Integration (Docker) | Live C2 stack: beacon check-in, task exec, Shadow Mesh | `docker-wk` | `run-tests.sh` |
 | Extended E2E (Docker) | DNS comms malleability, edge cases, all phase configs | `docker-wk` | `run-extended-tests.sh` |
 
