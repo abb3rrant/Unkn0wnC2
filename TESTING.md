@@ -194,19 +194,29 @@ Treat skipped/timed-out/unavailable stages as **incomplete**, not passing.
 
 ## Troubleshooting
 
-- **`Text file busy` during `setup`:** you ran a test service without
-  `--no-deps` (or re-ran `setup` while dns containers were up), so `setup`
-  tried to overwrite a DNS-server binary that the running `dns1`/`dns2`
-  containers had open. This is a **known pitfall** — always run the suites with
-  `--no-deps`, and if it happens, tear down fully (`down --volumes`) and bring
-  the stack up fresh once. A half-run `setup` also rotates dns1's credentials,
-  causing `401 invalid credentials` in dns1 logs and a failed beacon check-in.
+- **`setup` on an existing deployment:** `setup` is idempotent — if the four
+  runtime binaries are already in the `builds` volume it prints
+  `Binaries already present` and exits `0` instead of rebuilding on top of live
+  containers. Set `FORCE_REBUILD=1` when you actually want to rebuild; binaries
+  are installed with copy-then-rename, so a running `dns1`/`dns2` keeps its own
+  inode and `Text file busy` no longer happens. (Before this, a `setup` re-run
+  half-completed, rotated dns1's credentials, and left `401 invalid credentials`
+  in dns1 plus a failed beacon check-in.)
+- **Binding addresses:** `archon` publishes on `${ARCHON_BIND_ADDR:-127.0.0.1}`
+  and the listeners on `${LISTENER_BIND_ADDR:-0.0.0.0}`. The dashboard defaults
+  to loopback on purpose: a control plane on `0.0.0.0` is reachable from the
+  internet as soon as the host has a public interface. Set both to a private or
+  tailnet address when you need remote access, e.g.
+  `ARCHON_BIND_ADDR=100.x.y.z LISTENER_BIND_ADDR=100.x.y.z`. Do not try to do
+  this with a `docker-compose.override.yml` listing `ports:` — compose merges
+  list fields by appending, so the base mapping wins and the service still binds
+  `0.0.0.0`.
 - **Beacon check-in fails (0 beacons):** usually the `Text file busy` half-run
   above left dns1 with stale/rotated credentials. Full teardown + fresh up.
 - **`setup` "Login failed":** Archon wasn't healthy yet; the stack healthcheck
   handles this, but ensure `archon` shows `(healthy)` before running tests.
-- **Port 8443 in use on host:** `archon` binds `8443:8443`; stop the conflicting
-  service or change the port mapping in `docker-compose.yml`.
+- **Port 8443 in use on host:** override the published port in
+  `docker-compose.yml`; the container port must stay `8443`.
 - **Zero-output task misreported as timeout:** fixed in `run-tests.sh` /
   `run-extended-tests.sh` — `wait_result` now gates on the task's terminal
   `status` (via exit code) rather than non-empty `.result`, so `true` / bare
