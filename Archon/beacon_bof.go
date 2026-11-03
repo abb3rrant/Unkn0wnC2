@@ -100,6 +100,9 @@ func (api *APIServer) handleRunBOF(w http.ResponseWriter, r *http.Request) {
 		api.sendError(w, http.StatusNotFound, fmt.Sprintf("no beacon with id %q", beaconID))
 		return
 	}
+	if !api.requireLiveBeacon(w, beaconID, "a BOF") {
+		return
+	}
 
 	// Only HTTP-carrying beacons may receive an object file. A DNS-only beacon
 	// would have to pull it through subdomain labels, which is both slow and
@@ -266,6 +269,13 @@ func (api *APIServer) handleSetBeaconHTTPListeners(w http.ResponseWriter, r *htt
 	}
 	if beacon.ID == "" {
 		api.sendError(w, http.StatusNotFound, fmt.Sprintf("no beacon with id %q", beaconID))
+		return
+	}
+
+	// A transport change queued to a dead beacon is indistinguishable from a
+	// successful one; refuse it instead of recording a pending change that can
+	// never be confirmed.
+	if !api.requireLiveBeacon(w, beaconID, "a transport change") {
 		return
 	}
 

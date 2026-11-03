@@ -1811,6 +1811,12 @@ func (api *APIServer) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A dead beacon's record stays behind; queueing to it succeeds and then sits
+	// pending forever, which reads like a slow beacon rather than a missing one.
+	if !api.requireLiveBeacon(w, req.BeaconID, "a task") {
+		return
+	}
+
 	operatorID := r.Header.Get("X-Operator-ID")
 	username := r.Header.Get("X-Operator-Username")
 
