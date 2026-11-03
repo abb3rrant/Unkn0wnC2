@@ -12,7 +12,10 @@
 # without hiding its output, then assert no project volume survives.
 set -euo pipefail
 
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
+# scripts/deploy-fresh.sh -> docker/ -> project root. Two levels, not one: one
+# level lands in docker/ and the compose path below then resolves to
+# docker/docker/docker-compose.yml.
+cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 COMPOSE=${COMPOSE:-"docker compose -f docker/docker-compose.yml"}
 PROJECT_PREFIX=${PROJECT_PREFIX:-docker_}
 
