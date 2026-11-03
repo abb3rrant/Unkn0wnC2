@@ -30,7 +30,7 @@ func main() {
 	// Parse command line flags
 	debugFlag := flag.Bool("debug", false, "Enable debug mode")
 	generateConfig := flag.Bool("generate-config", false, "Generate example configuration file")
-	configPath := flag.String("config", "/opt/unkn0wnc2/master_config.json", "Path to configuration file")
+	configPath := flag.String("config", "", "Path to configuration file (default: $MASTER_CONFIG, then /opt/unkn0wnc2/master_config.json)")
 	bindAddr := flag.String("bind-addr", "", "Override bind address (e.g., 0.0.0.0 or 192.168.1.100)")
 	bindPort := flag.Int("bind-port", 0, "Override bind port (e.g., 8443)")
 	flag.Parse()
@@ -71,8 +71,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Initialize logger - always log to file, also to stdout if debug mode
+	// Initialize logger - always log to file, also to stdout if debug mode.
+	// The container layout lives under /opt/unkn0wnc2; a local run as an ordinary
+	// user cannot create that, so fall back to ./logs rather than refusing to start.
 	logDir := "/opt/unkn0wnc2/logs"
+	if err := os.MkdirAll("/opt/unkn0wnc2", 0o700); err != nil {
+		logDir = "./logs"
+	}
 	if err := InitLogger(logDir, cfg.Debug); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
 		os.Exit(1)

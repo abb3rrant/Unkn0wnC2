@@ -74,10 +74,17 @@ func DefaultConfig() Config {
 func LoadConfig(configPath string) (Config, error) {
 	cfg := DefaultConfig()
 
+	// Explicit flag wins, then MASTER_CONFIG, then the container default, then
+	// the working directory. The flag used to carry the container default itself,
+	// which made MASTER_CONFIG unreachable.
 	path := configPath
 	if path == "" {
 		path = os.Getenv("MASTER_CONFIG")
-		if path == "" {
+	}
+	if path == "" {
+		if _, statErr := os.Stat("/opt/unkn0wnc2/master_config.json"); statErr == nil {
+			path = "/opt/unkn0wnc2/master_config.json"
+		} else {
 			path = "master_config.json"
 		}
 	}
