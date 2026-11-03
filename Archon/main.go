@@ -110,6 +110,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Work queued for a beacon that has died would otherwise sit "pending" for the
+	// life of the database. The sweep closes those out with a reason.
+	StartAbandonedTaskSweeper(db)
+
 	// Register pre-configured DNS servers
 	if err := registerConfiguredDNSServers(db, cfg); err != nil {
 		LogWarn("Failed to register DNS servers: %v", err)
