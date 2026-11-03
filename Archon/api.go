@@ -290,7 +290,12 @@ type DNSServerCheckinRequest struct {
 type BeaconReportRequest struct {
 	DNSServerID string `json:"dns_server_id"`
 	APIKey      string `json:"api_key"`
-	Beacon      struct {
+	// Transport is how the beacon reached the listener: empty or "dns" when the
+	// listener does not say, "http"/"dual" when it came in over HTTP. ListenerName
+	// is the malleable profile that served it.
+	Transport    string `json:"transport,omitempty"`
+	ListenerName string `json:"listener_name,omitempty"`
+	Beacon       struct {
 		ID                string    `json:"id"`
 		Hostname          string    `json:"hostname"`
 		Username          string    `json:"username"`
@@ -1340,14 +1345,41 @@ func (api *APIServer) handleBeaconReport(w http.ResponseWriter, r *http.Request)
 	// Get the DNS domain for this server (cached to avoid N+1 DB queries)
 	dnsDomain := api.getDNSServerDomain(dnsServerID)
 
-	// Track beacon DNS contact (async, don't fail the response if this errors)
-	go func(beaconID, serverID, domain string) {
-		if err := api.db.RecordBeaconDNSContact(beaconID, serverID, domain); err != nil {
-			if api.config.Debug {
-				fmt.Printf("[API] Warning: Failed to record beacon DNS contact: %v\n", err)
-			}
+	// Record the contact against the transport it actually arrived on. A beacon
+	// that reached this listener over HTTP is not a DNS contact, and a dual beacon
+	// is both: writing one row either way is what made the dashboard show a
+	// transport the beacon was not using.
+	transport := strings.ToLower(strings.TrimSpace(req.Transport))
+	if transport == "" {
+		// Older listeners do not send the transport. Fall back to what the
+		// dashboard recorded for this beacon (a transport push or a build), so an
+		// HTTP beacon's contact is not filed as a DNS one.
+		transport = api.db.GetBeaconTransport(req.Beacon.ID)
+		if transport == "" {
+			transport = "dns"
 		}
-	}(req.Beacon.ID, dnsServerID, dnsDomain)
+	}
+
+	// Track beacon DNS contact (async, don't fail the response if this errors)
+	if transport != "http" {
+		go func(beaconID, serverID, domain string) {
+			if err := api.db.RecordBeaconDNSContact(beaconID, serverID, domain); err != nil {
+				if api.config.Debug {
+					fmt.Printf("[API] Warning: Failed to record beacon DNS contact: %v\n", err)
+				}
+			}
+		}(req.Beacon.ID, dnsServerID, dnsDomain)
+	}
+
+	if transport == "http" || transport == "dual" {
+		go func(beaconID, serverID, listener string) {
+			if err := api.db.RecordBeaconHTTPContact(beaconID, serverID, listener); err != nil {
+				if api.config.Debug {
+					fmt.Printf("[API] Warning: Failed to record beacon HTTP contact: %v\n", err)
+				}
+			}
+		}(req.Beacon.ID, dnsServerID, req.ListenerName)
+	}
 
 	if api.config.Debug {
 		fmt.Printf("[API] Beacon %s stored successfully from DNS server %s\n",
@@ -1595,6 +1627,17 @@ func (api *APIServer) handleGetBeaconBuildConfig(w http.ResponseWriter, r *http.
 	}
 
 	api.sendJSON(w, buildConfig)
+}
+
+// handleGetBeaconHTTPContacts returns the HTTP listeners a beacon has contacted.
+func (api *APIServer) handleGetBeaconHTTPContacts(w http.ResponseWriter, r *http.Request) {
+	beaconID := mux.Vars(r)["id"]
+	contacts, err := api.db.GetBeaconHTTPContacts(beaconID)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve HTTP contacts")
+		return
+	}
+	api.sendJSON(w, contacts)
 }
 
 // handleGetBeaconDNSContacts returns DNS contact history for a beacon
@@ -3555,6 +3598,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	operatorRouter.HandleFunc("/beacons/{id}", api.handleGetBeacon).Methods("GET")
 	operatorRouter.HandleFunc("/beacons/{id}/build-config", api.handleGetBeaconBuildConfig).Methods("GET")
 	operatorRouter.HandleFunc("/beacons/{id}/dns-contacts", api.handleGetBeaconDNSContacts).Methods("GET")
+	operatorRouter.HandleFunc("/beacons/{id}/http-contacts", api.handleGetBeaconHTTPContacts).Methods("GET")
 	operatorRouter.HandleFunc("/beacons/{id}/domains", api.handleGetBeaconDomains).Methods("GET")
 	operatorRouter.Handle("/beacons/{id}/domains", operatorWrite(http.HandlerFunc(api.handleUpdateBeaconDomain))).Methods("PUT")
 	operatorRouter.Handle("/beacons/{id}/domains", operatorWrite(http.HandlerFunc(api.handleAddBeaconDomain))).Methods("POST")
