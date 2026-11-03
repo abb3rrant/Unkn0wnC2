@@ -306,21 +306,24 @@ func (api *APIServer) handleSetBeaconHTTPListeners(w http.ResponseWriter, r *htt
 	// Only a build that understands the short form may receive it: an older beacon
 	// treats any unknown task as a shell command and would run the task string.
 	delivered := ""
-	shortFormOK := mode != "dns" && len(listeners) > 0 && api.beaconSupportsHTTPBootstrap(beaconID)
-	if shortFormOK {
-		// The bootstrap URL is only meaningful if a listener actually serves this
-		// profile: a stored profile nobody assigned answers 404, and the beacon would
-		// spend its token on nothing.
+	// A profile is only usable if a listener actually serves it. Without this the
+	// update is queued, the beacon points at an address where nothing answers, and
+	// the failure surfaces as silence rather than as a rejected change. Applies to
+	// both delivery forms: the inline payload names the same unreachable host.
+	if mode != "dns" && len(listeners) > 0 {
 		if _, ok := api.db.ServerServingHTTPProfile(listeners[0].Name); !ok {
 			api.sendError(w, http.StatusConflict,
 				"profile "+listeners[0].Name+" is not assigned to any listener; assign it on the HTTP Listeners page first")
 			return
-		} else if listeners[0].Host == "" {
+		}
+		if strings.TrimSpace(listeners[0].Host) == "" {
 			api.sendError(w, http.StatusConflict,
-				"profile "+listeners[0].Name+" has no beacon_host set; the beacon has no address to fetch it from")
+				"profile "+listeners[0].Name+" has no beacon_host set; the beacon has no address to reach it at")
 			return
 		}
 	}
+
+	shortFormOK := mode != "dns" && len(listeners) > 0 && api.beaconSupportsHTTPBootstrap(beaconID)
 	if shortFormOK {
 		bootstrapURL := api.bootstrapURLForListener(listeners[0])
 		if bootstrapURL == "" {

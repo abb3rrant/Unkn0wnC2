@@ -227,6 +227,11 @@ func TestSetBeaconHTTPListeners_QueuesTransportUpdate(t *testing.T) {
 	if _, err := db.EnsureDefaultHTTPProfile(); err != nil {
 		t.Fatalf("seed profile: %v", err)
 	}
+	// The update is only usable if some listener serves the profile; the guard that
+	// enforces that is covered by its own test.
+	if err := db.AssignHTTPProfile("dns-server-A", "default"); err != nil {
+		t.Fatalf("assign profile: %v", err)
+	}
 	api := NewAPIServer(db, Config{})
 
 	body := `{"names":["default"],"mode":"http"}`
