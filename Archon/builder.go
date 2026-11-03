@@ -268,7 +268,14 @@ func (api *APIServer) handleBuildDNSServer(w http.ResponseWriter, r *http.Reques
 	apiKey := hex.EncodeToString(apiKeyBytes)
 
 	// NOTE: Don't register in DB until build succeeds - see below
+	// Rebuilding an existing domain must keep its server ID: the ID is a primary key
+	// referenced by beacon contacts, tasks and exfil sessions, and SQLite refuses to
+	// rewrite it (FOREIGN KEY constraint failed). Reusing it also keeps the built
+	// binary consistent with the record it will register against.
 	serverID := fmt.Sprintf("dns-%d", time.Now().Unix())
+	if existingID, ok := api.db.ServerIDForDomain(req.Domain); ok {
+		serverID = existingID
+	}
 
 	// Get master server URL from config
 	// If BindAddr is 0.0.0.0, we need the actual hostname/IP

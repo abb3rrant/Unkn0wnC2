@@ -1308,14 +1308,16 @@ func (d *MasterDatabase) RegisterDNSServer(id, domain, address, apiKey string) e
 		if err != nil {
 			// Check if it's a domain conflict
 			if strings.Contains(err.Error(), "UNIQUE constraint failed: dns_servers.domain") {
-				// Domain already exists with different ID - this shouldn't happen in normal operation
-				// but could occur if DNS server was rebuilt with new ID
-				// Update the existing record with the new ID
+				// The domain is already registered. Rotate its credentials and address,
+				// but keep the existing primary key: beacon contacts, tasks and exfil
+				// sessions reference it, and rewriting it fails with a foreign-key
+				// violation. Callers that need the surviving ID should ask
+				// ServerIDForDomain before building.
 				_, err = d.db.Exec(`
-					UPDATE dns_servers 
-					SET id = ?, address = ?, api_key_hash = ?, updated_at = ?
+					UPDATE dns_servers
+					SET address = ?, api_key_hash = ?, updated_at = ?
 					WHERE domain = ?
-				`, id, address, string(apiKeyHash), now, domain)
+				`, address, string(apiKeyHash), now, domain)
 			}
 		}
 
@@ -5214,4 +5216,16 @@ func (d *MasterDatabase) DetectPartialResults(sentHours int) (int, error) {
 
 	rows, err := result.RowsAffected()
 	return int(rows), err
+}
+
+// ServerIDForDomain returns the registered server ID for a domain, if any.
+//
+// The builder asks before generating a new ID so a rebuild keeps the identity the
+// rest of the schema already points at.
+func (d *MasterDatabase) ServerIDForDomain(domain string) (string, bool) {
+	var id string
+	if err := d.db.QueryRow(`SELECT id FROM dns_servers WHERE domain = ?`, domain).Scan(&id); err != nil {
+		return "", false
+	}
+	return id, true
 }

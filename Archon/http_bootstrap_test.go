@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestBootstrapTokenIsSingleUse covers the core guarantee: a token hands out its
@@ -133,5 +134,39 @@ func TestBeaconTransportPendingUntilConfirmed(t *testing.T) {
 	}
 	if db.BeaconTransportPending("beacon-pending") {
 		t.Fatal("pending marker survived a matching report")
+	}
+}
+
+// TestRegisterDNSServerKeepsIDOnRebuild covers the re-run path: rebuilding a
+// domain used to rewrite the server's primary key, which SQLite refuses once
+// anything references it (beacon contacts, tasks, exfil sessions).
+func TestRegisterDNSServerKeepsIDOnRebuild(t *testing.T) {
+	db := newTestProfileDB(t)
+
+	if err := db.RegisterDNSServer("dns-original", "alpha.test", "10.0.0.10", "key-one"); err != nil {
+		t.Fatalf("first register: %v", err)
+	}
+	// Something that references the server, so a PK rewrite would violate an FK.
+	now := time.Now()
+	if err := db.UpsertBeacon("beacon-1", "host", "user", "linux", "amd64", "10.0.0.5",
+		"dns-original", now, now, "", "", "", "", nil); err != nil {
+		t.Fatalf("seed beacon: %v", err)
+	}
+	if err := db.RecordBeaconDNSContact("beacon-1", "dns-original", "alpha.test"); err != nil {
+		t.Fatalf("seed contact: %v", err)
+	}
+
+	// A rebuild generates a new candidate ID for the same domain.
+	if err := db.RegisterDNSServer("dns-rebuilt", "alpha.test", "10.0.0.11", "key-two"); err != nil {
+		t.Fatalf("rebuild register: %v", err)
+	}
+
+	id, ok := db.ServerIDForDomain("alpha.test")
+	if !ok || id != "dns-original" {
+		t.Fatalf("server id = %q (ok=%v), want the original id to survive a rebuild", id, ok)
+	}
+	// The rotated key must be the one that authenticates now.
+	if valid, err := db.VerifyDNSServerAPIKey("dns-original", "key-two"); err != nil || !valid {
+		t.Fatalf("rotated key does not authenticate: valid=%v err=%v", valid, err)
 	}
 }
