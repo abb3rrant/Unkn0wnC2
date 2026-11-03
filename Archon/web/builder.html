@@ -337,14 +337,14 @@
     <!-- Navigation Menu -->
     <div class="nav-menu">
         <a href="/dashboard" class="nav-btn">Dashboard</a>
-        <a href="/listeners" class="nav-btn">Listeners</a>
-        <a href="/profiles" class="nav-btn">HTTP Profiles</a>
         <a href="/builder" class="nav-btn active">Builder</a>
+        <a href="/listeners" class="nav-btn">HTTP Listeners</a>
         <a href="/stager" class="nav-btn">Stager Sessions</a>
         <a href="/exfils" class="nav-btn">Exfils</a>
         <a href="/logs" class="nav-btn">Logs</a>
         <a href="/report" class="nav-btn">Report</a>
         <a href="/users" class="nav-btn" id="usersNavBtn">Users</a>
+
     </div>
 
     <div class="container">
@@ -492,12 +492,12 @@
                 <div class="form-group" id="clientHTTPChunkGroup" style="display:none;">
                     <label class="form-label">HTTP Output Chunking</label>
                     <div class="form-row">
-                        <input type="number" id="httpMaxPayload" class="form-input" placeholder="Bytes per chunk (0 = default)" value="0" min="0">
-                        <input type="number" id="httpMaxBodyBytes" class="form-input" placeholder="Listener body limit" value="0" min="0">
+                        <input type="number" id="httpMaxPayload" class="form-input" placeholder="HTTP bytes per result chunk" value="0" min="0">
+                        <input type="number" id="httpMaxBodyBytes" class="form-input" placeholder="Listener body limit (0 = from profile)" value="0" min="0">
                     </div>
                     <div class="form-row">
-                        <input type="number" id="httpChunksPerBurst" class="form-input" placeholder="Chunks per burst" value="0" min="0">
-                        <input type="number" id="httpBurstPauseMs" class="form-input" placeholder="Pause between bursts (ms)" value="0" min="0">
+                        <input type="number" id="httpChunksPerBurst" class="form-input" placeholder="HTTP chunks per burst" value="0" min="0">
+                        <input type="number" id="httpBurstPauseMs" class="form-input" placeholder="HTTP burst pause (ms)" value="0" min="0">
                     </div>
                     <div class="help-text">How much result data one HTTP request carries. Leave at 0 to inherit the listener's body limit (a 1 MiB profile yields ~650 KiB per request). DNS sizing is unaffected: this only applies to http and dual builds.</div>
                 </div>
@@ -1119,7 +1119,7 @@
             if (!container) return;
 
             if (savedHTTPProfiles.length === 0) {
-                container.innerHTML = 'No profiles saved. Create one on the Profiles page first.';
+                container.innerHTML = 'No profiles saved. Create one on the HTTP Listeners page.';
                 return;
             }
 

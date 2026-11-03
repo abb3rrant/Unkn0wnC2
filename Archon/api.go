@@ -3551,7 +3551,11 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	// Kept as an alias: this route previously served a page file that did not exist.
 	router.HandleFunc("/dns-servers", api.handleListenersPage).Methods("GET")
 	router.HandleFunc("/builder", api.handleBuilderPage).Methods("GET")
-	router.HandleFunc("/profiles", api.handleProfilesPage).Methods("GET")
+	// HTTP profiles live on the listeners page: a profile only exists to be served
+	// by a listener, so they belong in one view. Kept as a redirect for bookmarks.
+	router.HandleFunc("/profiles", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/listeners#profiles", http.StatusFound)
+	}).Methods("GET")
 	router.HandleFunc("/stager", api.handleStagerPage).Methods("GET")
 	router.HandleFunc("/exfils", api.handleExfilsPage).Methods("GET")
 	router.HandleFunc("/users", api.handleUsersPage).Methods("GET")
@@ -3739,10 +3743,6 @@ func (api *APIServer) handleListenersPage(w http.ResponseWriter, r *http.Request
 // handleListenerPage serves one listener's management view.
 func (api *APIServer) handleListenerPage(w http.ResponseWriter, r *http.Request) {
 	serveNoCache(w, r, filepath.Join(api.config.WebRoot, "listener.html"))
-}
-
-func (api *APIServer) handleProfilesPage(w http.ResponseWriter, r *http.Request) {
-	serveNoCache(w, r, filepath.Join(api.config.WebRoot, "profiles.html"))
 }
 
 func (api *APIServer) handleUsersPage(w http.ResponseWriter, r *http.Request) {
