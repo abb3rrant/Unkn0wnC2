@@ -3881,13 +3881,15 @@ func (d *MasterDatabase) GetTaskWithResult(taskID string) (Task, error) {
 		task.CompletedAt = time.Unix(completedAt.Int64, 0).Format(time.RFC3339)
 	}
 
-	// Get result if task is completed
-	if status == "completed" {
+	// Load the result for terminal states. A failed task carries the reason it
+	// failed, and hiding it leaves the operator staring at "failed" with no
+	// explanation.
+	if status == "completed" || status == "failed" {
 		result, isComplete, err := d.GetTaskResult(taskID)
 		if err == nil && isComplete {
 			task.Result = result
 			task.ResultSize = len(result)
-		} else if !isComplete {
+		} else if status == "completed" && !isComplete {
 			// Task is marked completed but no assembled result row exists yet — the
 			// chunk-arrival path assembles asynchronously, so a read can land in that
 			// window. If every chunk is already stored, assemble synchronously here
