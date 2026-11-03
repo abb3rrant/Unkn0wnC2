@@ -13,6 +13,11 @@ services:
     volumes:
       - builds:/opt/unkn0wnc2/builds
       - archon-data:/opt/unkn0wnc2/data
+      # The TLS identity has to outlive the container. Listeners pin this
+      # certificate's SPKI at build time, so a recreated archon that regenerates
+      # it silently breaks every listener ("master SPKI pin mismatch") until they
+      # are rebuilt too.
+      - archon-certs:/opt/unkn0wnc2/certs
     environment:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
@@ -234,6 +239,7 @@ services:
       - extended-test
 
 volumes:
+  archon-certs:
   builds:
   archon-data:
   http-profiles:
