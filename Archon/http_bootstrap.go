@@ -113,3 +113,13 @@ func (d *MasterDatabase) PurgeHTTPProfileTokens() error {
 	_, err := d.db.Exec(`DELETE FROM http_profile_tokens WHERE expires_at <= ? OR uses >= ?`, now, HTTPProfileTokenUses)
 	return err
 }
+
+// migration24AddTokenUses adds the redemption counter to databases created by
+// migration 23 before the counter existed.
+//
+// Without this the consume query fails with "no such column: uses" on every
+// already-deployed instance, which surfaces as a 404 bootstrap and a transport
+// update that never lands.
+func (d *MasterDatabase) migration24AddTokenUses() error {
+	return d.addColumnIfMissing("http_profile_tokens", "uses", "INTEGER NOT NULL DEFAULT 0")
+}
