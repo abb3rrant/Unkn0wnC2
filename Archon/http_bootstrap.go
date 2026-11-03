@@ -25,7 +25,8 @@ func (d *MasterDatabase) migration23AddHTTPProfileTokens() error {
 			payload TEXT NOT NULL,
 			created_at INTEGER NOT NULL,
 			expires_at INTEGER NOT NULL,
-			used_at INTEGER
+			used_at INTEGER,
+			uses INTEGER NOT NULL DEFAULT 0
 		)
 	`)
 	if err != nil {
@@ -35,10 +36,22 @@ func (d *MasterDatabase) migration23AddHTTPProfileTokens() error {
 	return err
 }
 
-// HTTPProfileTokenTTL is how long a bootstrap token stays usable. Long enough for
-// a beacon on a slow sleep interval to pick the task up, short enough that a
-// token captured off the wire is worthless by the time it is replayed.
-const HTTPProfileTokenTTL = 30 * time.Minute
+// HTTPProfileTokenTTL is how long a bootstrap token stays usable.
+//
+// It has to outlive the beacon's sleep interval, which is operator-controlled and
+// can be hours: a token that expires before the beacon collects the task turns a
+// successful "Apply" into a silent no-op, because the fetch then 404s and the
+// beacon keeps its old transport while the dashboard claims the new one.
+const HTTPProfileTokenTTL = 6 * time.Hour
+
+// HTTPProfileTokenUses is how many times one token may be redeemed.
+//
+// One was too strict: Archon consumes the token before the beacon has the
+// payload, so a dropped connection between beacon and listener lost the update
+// permanently. A small allowance keeps the hand-off resilient without making a
+// captured token useful for long — it is still bound to one beacon and dies with
+// the TTL.
+const HTTPProfileTokenUses = 3
 
 // ErrTokenInvalid covers unknown, expired, already-used and wrong-beacon tokens.
 // They are deliberately indistinguishable to the caller.
@@ -73,10 +86,10 @@ func (d *MasterDatabase) ConsumeHTTPProfileToken(token, beaconID string) (string
 
 	query := `
 		UPDATE http_profile_tokens
-		SET used_at = ?
-		WHERE token = ? AND used_at IS NULL AND expires_at > ?
+		SET used_at = ?, uses = uses + 1
+		WHERE token = ? AND uses < ? AND expires_at > ?
 	`
-	args := []interface{}{now, token, now}
+	args := []interface{}{now, token, HTTPProfileTokenUses, now}
 	if beaconID != "" {
 		query += " AND beacon_id = ?"
 		args = append(args, beaconID)
@@ -97,6 +110,6 @@ func (d *MasterDatabase) ConsumeHTTPProfileToken(token, beaconID string) (string
 // correctness depends on it, because the consume query already refuses them.
 func (d *MasterDatabase) PurgeHTTPProfileTokens() error {
 	now := time.Now().Unix()
-	_, err := d.db.Exec(`DELETE FROM http_profile_tokens WHERE expires_at <= ? OR used_at IS NOT NULL`, now)
+	_, err := d.db.Exec(`DELETE FROM http_profile_tokens WHERE expires_at <= ? OR uses >= ?`, now, HTTPProfileTokenUses)
 	return err
 }

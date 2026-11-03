@@ -361,3 +361,18 @@ func (api *APIServer) listHTTPProfileNames() []string {
 	sort.Strings(names)
 	return names
 }
+
+// ServerServingHTTPProfile returns the first listener that has this profile
+// assigned. A profile is only reachable if some listener serves it, which is the
+// difference between "stored" and "usable".
+func (d *MasterDatabase) ServerServingHTTPProfile(profileName string) (string, bool) {
+	var serverID string
+	err := d.db.QueryRow(
+		`SELECT dns_server_id FROM http_profile_assignments WHERE profile_name = ? ORDER BY dns_server_id LIMIT 1`,
+		profileName,
+	).Scan(&serverID)
+	if err != nil || serverID == "" {
+		return "", false
+	}
+	return serverID, true
+}

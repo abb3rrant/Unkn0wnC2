@@ -27,8 +27,15 @@ func TestBootstrapTokenIsSingleUse(t *testing.T) {
 		t.Fatalf("payload = %q, want %q", got, payload)
 	}
 
+	// A few redemptions are allowed so a dropped response does not lose the update,
+	// but the allowance is finite.
+	for i := 2; i <= HTTPProfileTokenUses; i++ {
+		if _, err := db.ConsumeHTTPProfileToken(token, "beacon-1"); err != nil {
+			t.Fatalf("redemption %d failed: %v", i, err)
+		}
+	}
 	if _, err := db.ConsumeHTTPProfileToken(token, "beacon-1"); err == nil {
-		t.Fatal("second consume succeeded; the token is reusable")
+		t.Fatalf("token survived %d redemptions; the allowance is not enforced", HTTPProfileTokenUses)
 	}
 }
 
@@ -64,5 +71,23 @@ func TestBootstrapTaskShape(t *testing.T) {
 	parts := strings.Split(strings.TrimPrefix(task, "http_profile:"), "|")
 	if len(parts) != 3 || parts[2] != "PINVALUE" {
 		t.Fatalf("task = %q, want <url>|<token>|<pin>", task)
+	}
+}
+
+// TestServerServingHTTPProfile covers the guard that keeps an operator from
+// applying a profile no listener serves: the bootstrap URL would 404 and the
+// beacon would spend its token on nothing.
+func TestServerServingHTTPProfile(t *testing.T) {
+	db := newTestProfileDB(t)
+
+	if _, ok := db.ServerServingHTTPProfile("default"); ok {
+		t.Fatal("unassigned profile reported as served")
+	}
+	if err := db.AssignHTTPProfile("dns-server-A", "default"); err != nil {
+		t.Fatalf("assign: %v", err)
+	}
+	serverID, ok := db.ServerServingHTTPProfile("default")
+	if !ok || serverID != "dns-server-A" {
+		t.Fatalf("ServerServingHTTPProfile = (%q,%v), want (dns-server-A,true)", serverID, ok)
 	}
 }

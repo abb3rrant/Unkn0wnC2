@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gorilla/mux"
 )
@@ -245,23 +246,51 @@ func TestSetBeaconHTTPListeners_QueuesTransportUpdate(t *testing.T) {
 	}
 	var command string
 	for _, task := range tasks {
-		if strings.HasPrefix(task.Command, "http_profile:") {
+		if strings.HasPrefix(task.Command, "update_transport:") {
 			command = task.Command
 		}
 	}
 	if command == "" {
-		t.Fatal("no http_profile task was queued")
+		t.Fatal("no update_transport task was queued")
 	}
-	// The task carries a URL and a token, not the profile: the profile is fetched
-	// over HTTP so it never has to fit through DNS label chunking.
-	if strings.Contains(command, `"listeners"`) || strings.Contains(command, `"mode"`) {
-		t.Errorf("task carries the profile document: %s", truncate(command, 120))
+	// This beacon has no build record, so it predates the bootstrap hand-off and
+	// must receive the payload it already understands. Sending it the short form
+	// would make it execute the task string as a shell command.
+	if !strings.Contains(command, `"mode":"http"`) {
+		t.Errorf("task does not carry the requested mode: %s", truncate(command, 80))
 	}
-	if !strings.Contains(command, "/_p|") {
-		t.Errorf("task does not point at the listener's bootstrap path: %s", truncate(command, 120))
+	if !strings.Contains(command, `"host":"127.0.0.1:8445"`) {
+		t.Errorf("task does not carry the profile's beacon host: %s", truncate(command, 120))
 	}
-	if len(command) > 200 {
-		t.Errorf("short task is %d bytes; it must stay small enough for one or two DNS queries", len(command))
+}
+
+// TestBeaconSupportsHTTPBootstrap covers the capability gate: only a build that
+// advertises the flag may be sent the short form.
+func TestBeaconSupportsHTTPBootstrap(t *testing.T) {
+	db := newTestProfileDB(t)
+	if err := createTestBeacon(db, "beacon-old"); err != nil {
+		t.Fatalf("seed beacon: %v", err)
+	}
+	api := NewAPIServer(db, Config{})
+
+	if api.beaconSupportsHTTPBootstrap("beacon-old") {
+		t.Fatal("a beacon with no build record claims bootstrap support")
+	}
+
+	// Record a build that advertises the capability and point the beacon at it.
+	now := time.Now().Unix()
+	if _, err := db.db.Exec(`
+		INSERT INTO client_binaries (id, filename, os, arch, original_size, compressed_size, base64_size, total_chunks, base64_data, dns_domains, created_at, build_id, build_config)
+		VALUES ('bin-1', 'beacon', 'linux', 'amd64', 1, 1, 1, 1, '', '', ?, 'build-new', '{"http_bootstrap":true}')
+	`, now); err != nil {
+		t.Fatalf("seed build: %v", err)
+	}
+	if _, err := db.db.Exec(`UPDATE beacons SET build_id = ? WHERE id = ?`, "build-new", "beacon-old"); err != nil {
+		t.Fatalf("set build id: %v", err)
+	}
+
+	if !api.beaconSupportsHTTPBootstrap("beacon-old") {
+		t.Fatal("a build advertising http_bootstrap was not recognised")
 	}
 }
 
@@ -289,4 +318,40 @@ func truncate(value string, limit int) string {
 		return value
 	}
 	return value[:limit] + "..."
+}
+
+// TestSetBeaconHTTPListeners_RefusesDNSModeWithoutDomains covers the stranding
+// case: a beacon with no active DNS domain that is told to stop using HTTP has no
+// transport left, and only the operator would notice — later, as silence.
+func TestSetBeaconHTTPListeners_RefusesDNSModeWithoutDomains(t *testing.T) {
+	db := newTestProfileDB(t)
+	if err := createTestBeacon(db, "beacon-no-domains"); err != nil {
+		t.Fatalf("seed beacon: %v", err)
+	}
+	api := NewAPIServer(db, Config{})
+
+	request := httptest.NewRequest(http.MethodPost, "/api/beacons/beacon-no-domains/http-listeners",
+		strings.NewReader(`{"names":[],"mode":"dns"}`))
+	request = mux.SetURLVars(request, map[string]string{"id": "beacon-no-domains"})
+
+	recorder := httptest.NewRecorder()
+	api.handleSetBeaconHTTPListeners(recorder, request)
+
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body %s)", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "unreachable") {
+		t.Errorf("body does not explain the risk: %s", recorder.Body.String())
+	}
+
+	// Nothing may be queued when the change is refused.
+	tasks, err := db.GetTasksForDNSServer("dns-server-A")
+	if err != nil {
+		t.Fatalf("read tasks: %v", err)
+	}
+	for _, task := range tasks {
+		if strings.Contains(task.Command, "update_transport") || strings.Contains(task.Command, "http_profile:") {
+			t.Fatalf("refused change queued a task: %s", truncate(task.Command, 80))
+		}
+	}
 }

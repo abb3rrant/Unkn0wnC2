@@ -540,8 +540,13 @@ func (api *APIServer) handleBuildClient(w http.ResponseWriter, r *http.Request) 
 		// Transport and the listener names a beacon was built for. The beacon
 		// dashboard reads them to decide whether a BOF can run and which HTTP
 		// listeners are already applied.
-		"transport":              normalizeTransportMode(req.Transport),
-		"http_listener_names":    httpListenerNames(req.HTTPListeners),
+		"transport":           normalizeTransportMode(req.Transport),
+		"http_listener_names": httpListenerNames(req.HTTPListeners),
+		// Capability flag: a beacon built before this could only take a transport
+		// update as a full payload. Sending it a short http_profile: task makes it
+		// execute the task string as a shell command, so the control plane has to
+		// know which form a given build understands.
+		"http_bootstrap":         true,
 		"sleep_min":              req.SleepMin,
 		"sleep_max":              req.SleepMax,
 		"exfil_jitter_min_ms":    req.ExfilJitterMinMs,
