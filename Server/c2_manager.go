@@ -63,6 +63,7 @@ type Beacon struct {
 	PayloadFormat     string             `json:"payload_format,omitempty"`
 	Encoding          string             `json:"encoding,omitempty"` // "aes-gcm-base36" (default) or "base36"
 	RegistrationStage *int               `json:"registration_stage,omitempty"`
+	Transport         string             `json:"transport,omitempty"` // "dns" or "http": how the beacon reached us
 	PhaseConfig       *BeaconPhaseConfig `json:"-"`
 	TaskQueue         []Task             `json:"-"`
 	CurrentTask       string             `json:"-"`
@@ -2213,7 +2214,7 @@ func (c2 *C2Manager) authorizeBeaconControl(parts []string, encrypted bool) bool
 // queryType is the DNS record type (1=A, 16=TXT) to enable A-record peek mode.
 // Returns (response, isC2, encrypted) — encrypted=false means respond with plain base36.
 // If info is non-nil, it is populated with the beacon ID and message type for the caller.
-func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string, info *C2QueryInfo, queryType ...uint16) (string, bool, bool) {
+func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string, info *C2QueryInfo, transport string, queryType ...uint16) (string, bool, bool) {
 	dnsQueryType := uint16(16) // default TXT
 	if len(queryType) > 0 {
 		dnsQueryType = queryType[0]
@@ -2616,6 +2617,7 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string, info *C2Q
 
 			if masterClient != nil {
 				snap := *beacon
+				snap.Transport = transport
 				go masterClient.ReportBeacon(&snap)
 			}
 		} else {
@@ -2664,6 +2666,7 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string, info *C2Q
 
 			if masterClient != nil {
 				snap := *beacon
+				snap.Transport = transport
 				go masterClient.ReportBeacon(&snap)
 			}
 		}
@@ -2725,6 +2728,7 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string, info *C2Q
 		}
 
 		if masterClient != nil {
+			snap.Transport = transport
 			go masterClient.ReportBeacon(&snap)
 		}
 
@@ -2768,6 +2772,7 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string, info *C2Q
 
 		if masterClient != nil {
 			snap := *beacon
+			snap.Transport = transport
 			go masterClient.ReportBeacon(&snap)
 		}
 

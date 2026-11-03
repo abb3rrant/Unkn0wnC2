@@ -140,6 +140,7 @@ type StagerCacheTask struct {
 type BeaconReportRequest struct {
 	DNSServerID string     `json:"dns_server_id"`
 	APIKey      string     `json:"api_key"`
+	Transport   string     `json:"transport,omitempty"`
 	Beacon      BeaconData `json:"beacon"`
 }
 
@@ -435,6 +436,7 @@ func (mc *MasterClient) ReportBeacon(beacon *Beacon) error {
 	}
 
 	req := BeaconReportRequest{
+		Transport:   transportOf(beacon),
 		DNSServerID: mc.serverID,
 		APIKey:      mc.apiKey,
 		Beacon:      beaconData,
@@ -1366,4 +1368,13 @@ func (mc *MasterClient) FetchHTTPProfiles() ([]*HTTPProfile, error) {
 	}
 
 	return profiles, nil
+}
+
+// transportOf names the transport a beacon last spoke, defaulting to DNS for
+// beacons reported before the transport was tracked.
+func transportOf(beacon *Beacon) string {
+	if beacon != nil && beacon.Transport != "" {
+		return beacon.Transport
+	}
+	return "dns"
 }

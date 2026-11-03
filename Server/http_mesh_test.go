@@ -17,7 +17,7 @@ func registerMeshBeacon(t *testing.T, c2 *C2Manager, beaconID string) {
 		t.Fatal(err)
 	}
 
-	if _, isC2, _ := c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil); !isC2 {
+	if _, isC2, _ := c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil, "dns"); !isC2 {
 		t.Fatalf("registration for %s was not recognised as C2 traffic", beaconID)
 	}
 
@@ -47,7 +47,7 @@ func dnsPoll(t *testing.T, c2 *C2Manager, beaconID string, queryType uint16) str
 		t.Fatal(err)
 	}
 
-	response, isC2, _ := c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil, queryType)
+	response, isC2, _ := c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil, "dns", queryType)
 	if !isC2 {
 		t.Fatal("poll was not recognised as C2 traffic")
 	}
