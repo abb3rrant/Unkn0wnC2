@@ -26,21 +26,6 @@ func buildHTTPProfileTask(bootstrapURL, token, pin string) string {
 	return task
 }
 
-// parseHTTPProfileTask splits the task back into its parts. It returns ok=false
-// for anything malformed, so a bad task never produces a half-applied transport.
-func parseHTTPProfileTask(task string) (bootstrapURL, token string, ok bool) {
-	const prefix = "http_profile:"
-	if !strings.HasPrefix(task, prefix) {
-		return "", "", false
-	}
-	rest := task[len(prefix):]
-	sep := strings.LastIndex(rest, "|")
-	if sep <= 0 || sep == len(rest)-1 {
-		return "", "", false
-	}
-	return rest[:sep], rest[sep+1:], true
-}
-
 // bootstrapPathForSpec returns the path a beacon should call on this listener. A
 // profile can move it (some deployments front the listener with something that
 // rewrites paths); otherwise the default applies.
