@@ -1638,7 +1638,7 @@ func (d *MasterDatabase) GetActiveBeaconsPaginated(minutesThreshold, limit, offs
 			COALESCE(build_id, '') as build_id
 		FROM beacons
 		WHERE last_seen >= ? AND status = 'active'
-		ORDER BY last_seen DESC
+		ORDER BY first_seen ASC, id ASC
 	`
 
 	query, paginationArgs := appendPagination(query, limit, offset)
@@ -1694,7 +1694,11 @@ func appendPagination(query string, limit, offset int) (string, []interface{}) {
 }
 
 // GetAllBeaconsPaginated retrieves all beacons with pagination support (no time filter)
-// This preserves history - beacons are shown regardless of when they last checked in
+// This preserves history - beacons are shown regardless of when they last checked in.
+//
+// Ordering is by registration (first_seen), not by last_seen. Sorting by last
+// activity made the dashboard reshuffle every poll interval, so rows moved under
+// the operator's cursor while they were reading or selecting them.
 func (d *MasterDatabase) GetAllBeaconsPaginated(limit, offset int) ([]Beacon, error) {
 
 	query := `
@@ -1705,7 +1709,7 @@ func (d *MasterDatabase) GetAllBeaconsPaginated(limit, offset int) ([]Beacon, er
 			COALESCE(build_id, '') as build_id,
 			registration_stage
 		FROM beacons
-		ORDER BY last_seen DESC
+		ORDER BY first_seen ASC, id ASC
 	`
 
 	query, args := appendPagination(query, limit, offset)
