@@ -36,11 +36,13 @@ func (d *MasterDatabase) migration22AddBeaconHTTPContacts() error {
 
 // HTTPContact is one HTTP listener a beacon has been seen talking to.
 type HTTPContact struct {
-	ListenerID    string `json:"listener_id"`
-	ListenerName  string `json:"listener_name"`
-	ListenerAddr  string `json:"listener_address,omitempty"`
-	FirstContact  int64  `json:"first_contact"`
-	LastContact   int64  `json:"last_contact"`
+	ListenerID   string `json:"listener_id"`
+	ListenerName string `json:"listener_name"`
+	ListenerAddr string `json:"listener_address,omitempty"`
+	// Formatted the same way as DNSContact so the dashboard can use one time
+	// formatter for both histories.
+	FirstContact  string `json:"first_contact"`
+	LastContact   string `json:"last_contact"`
 	ContactCount  int64  `json:"contact_count"`
 	Status        string `json:"status"`
 	TransportMode string `json:"transport,omitempty"`
@@ -96,7 +98,8 @@ func (d *MasterDatabase) GetBeaconHTTPContacts(beaconID string) ([]HTTPContact, 
 		if err := rows.Scan(&c.ListenerID, &c.ListenerName, &c.ListenerAddr, &first, &last, &c.ContactCount, &c.Status); err != nil {
 			return nil, err
 		}
-		c.FirstContact, c.LastContact = first, last
+		c.FirstContact = time.Unix(first, 0).Format(time.RFC3339)
+		c.LastContact = time.Unix(last, 0).Format(time.RFC3339)
 		contacts = append(contacts, c)
 	}
 	return contacts, rows.Err()

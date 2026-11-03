@@ -977,17 +977,18 @@
                 }
 
                 container.innerHTML = contacts.map(contact => {
-                    const name = contact.listener_name
-                        ? escapeHtml(contact.listener_name)
-                        : '<em style="color:#555">unnamed profile</em>';
-                    const address = contact.listener_address
+                    // The listener reports the address; a profile name is only present
+                    // when the listener names the profile it served, so fall back to the
+                    // listener's own id rather than showing nothing.
+                    const title = contact.listener_name || contact.listener_address || contact.listener_id || 'unknown listener';
+                    const address = (contact.listener_name && contact.listener_address)
                         ? `<span style="color:#666; font-size:11px; margin-left:8px;">${escapeHtml(contact.listener_address)}</span>`
                         : '';
                     const statusColor = contact.status === 'active' ? '#4CAF50' : '#666';
                     return `
                         <div class="dns-contact-item">
                             <div class="dns-contact-header">
-                                <div class="dns-contact-domain">${name}${address}</div>
+                                <div class="dns-contact-domain">${escapeHtml(title)}${address}</div>
                                 <span style="color:${statusColor}; font-size:11px;">${escapeHtml(contact.status || '')}</span>
                             </div>
                             <div class="dns-contact-details">
