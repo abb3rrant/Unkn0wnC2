@@ -855,6 +855,7 @@
 
         // ---- HTTP listeners (per-beacon) ----
         let beaconHTTPTransport = null;
+        let beaconHTTPPending = false;
 
         async function loadBeaconHTTPListeners() {
             const container = document.getElementById('beaconHTTPListenersContainer');
@@ -868,6 +869,7 @@
 
                 const data = payload.data || {};
                 beaconHTTPTransport = data.transport || '';
+                beaconHTTPPending = !!data.pending;
                 renderBeaconHTTPListeners(data.listeners || []);
                 updateBOFAvailability();
             } catch (error) {
@@ -1039,7 +1041,7 @@
             const summary = document.getElementById('beaconTransportSummary');
             if (summary) {
                 summary.textContent = beaconHTTPTransport
-                    ? `current: ${beaconHTTPTransport}`
+                    ? (beaconHTTPPending ? `pending: ${beaconHTTPTransport} (not yet confirmed)` : `current: ${beaconHTTPTransport}`)
                     : 'current: not recorded';
             }
         }

@@ -1371,6 +1371,14 @@ func (api *APIServer) handleBeaconReport(w http.ResponseWriter, r *http.Request)
 		}(req.Beacon.ID, dnsServerID, dnsDomain)
 	}
 
+	// A report from the transport an operator asked for is the confirmation that
+	// the change landed; until then the dashboard shows it as pending.
+	go func(beaconID, reported string) {
+		if err := api.db.ConfirmBeaconTransport(beaconID, reported); err != nil && api.config.Debug {
+			fmt.Printf("[API] Warning: failed to confirm transport for %s: %v\n", beaconID, err)
+		}
+	}(req.Beacon.ID, transport)
+
 	if transport == "http" || transport == "dual" {
 		go func(beaconID, serverID, listener string) {
 			if err := api.db.RecordBeaconHTTPContact(beaconID, serverID, listener); err != nil {

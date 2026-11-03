@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -23,7 +24,13 @@ func (d *MasterDatabase) migration21AddBeaconHTTPListeners() error {
 	`); err != nil {
 		return err
 	}
-	return d.addColumnIfMissing("beacons", "transport", "TEXT")
+	if err := d.addColumnIfMissing("beacons", "transport", "TEXT"); err != nil {
+		return err
+	}
+	// When a transport was requested but no beacon report has confirmed it yet.
+	// The dashboard reads this so it can say "pending" instead of claiming a
+	// change that may never land.
+	return d.addColumnIfMissing("beacons", "transport_pending_since", "INTEGER DEFAULT 0")
 }
 
 // SetBeaconHTTPListeners replaces a beacon's listener selection and records the
@@ -50,7 +57,9 @@ func (d *MasterDatabase) SetBeaconHTTPListeners(beaconID string, names []string,
 		}
 	}
 
-	if _, err := tx.Exec(`UPDATE beacons SET transport = ?, updated_at = ? WHERE id = ?`, mode, now, beaconID); err != nil {
+	// Recorded as pending: the task is queued, not applied. A beacon report from
+	// the requested transport is what clears this.
+	if _, err := tx.Exec(`UPDATE beacons SET transport = ?, transport_pending_since = ?, updated_at = ? WHERE id = ?`, mode, now, now, beaconID); err != nil {
 		return fmt.Errorf("record transport for %s: %w", beaconID, err)
 	}
 
@@ -82,4 +91,41 @@ func (d *MasterDatabase) GetBeaconHTTPListeners(beaconID string) ([]string, stri
 		names = append(names, name)
 	}
 	return names, transport, true
+}
+
+// ConfirmBeaconTransport clears the pending marker when a beacon reports from the
+// transport that was requested. A report from a different transport leaves it in
+// place: the change has not landed.
+func (d *MasterDatabase) ConfirmBeaconTransport(beaconID, reported string) error {
+	reported = strings.ToLower(strings.TrimSpace(reported))
+	if reported == "" {
+		return nil
+	}
+	var recorded string
+	if err := d.db.QueryRow(`SELECT COALESCE(transport, '') FROM beacons WHERE id = ?`, beaconID).Scan(&recorded); err != nil {
+		return nil
+	}
+	recorded = strings.ToLower(strings.TrimSpace(recorded))
+	if recorded != reported {
+		return nil
+	}
+	_, err := d.db.Exec(`UPDATE beacons SET transport_pending_since = 0 WHERE id = ? AND transport_pending_since != 0`, beaconID)
+	return err
+}
+
+// BeaconTransportPending reports whether a requested transport is still waiting to
+// be confirmed by a beacon report.
+func (d *MasterDatabase) BeaconTransportPending(beaconID string) bool {
+	var pending int64
+	if err := d.db.QueryRow(`SELECT COALESCE(transport_pending_since, 0) FROM beacons WHERE id = ?`, beaconID).Scan(&pending); err != nil {
+		return false
+	}
+	return pending > 0
+}
+
+// migration25AddTransportPending adds the pending marker to databases created
+// before it existed. Same drift the token counter had: a migration that already
+// ran will not run again.
+func (d *MasterDatabase) migration25AddTransportPending() error {
+	return d.addColumnIfMissing("beacons", "transport_pending_since", "INTEGER DEFAULT 0")
 }

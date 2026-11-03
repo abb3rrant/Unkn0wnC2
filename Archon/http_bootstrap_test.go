@@ -91,3 +91,38 @@ func TestServerServingHTTPProfile(t *testing.T) {
 		t.Fatalf("ServerServingHTTPProfile = (%q,%v), want (dns-server-A,true)", serverID, ok)
 	}
 }
+
+// TestBeaconTransportPendingUntilConfirmed covers the honesty problem: recording a
+// transport at queue time is not the same as the beacon applying it.
+func TestBeaconTransportPendingUntilConfirmed(t *testing.T) {
+	db := newTestProfileDB(t)
+	if err := createTestBeacon(db, "beacon-pending"); err != nil {
+		t.Fatalf("seed beacon: %v", err)
+	}
+	if db.BeaconTransportPending("beacon-pending") {
+		t.Fatal("a beacon with no recorded change is already pending")
+	}
+
+	if err := db.SetBeaconHTTPListeners("beacon-pending", []string{"default"}, "dual"); err != nil {
+		t.Fatalf("record transport: %v", err)
+	}
+	if !db.BeaconTransportPending("beacon-pending") {
+		t.Fatal("requested transport is not marked pending")
+	}
+
+	// A report from the other transport is not a confirmation.
+	if err := db.ConfirmBeaconTransport("beacon-pending", "dns"); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	if !db.BeaconTransportPending("beacon-pending") {
+		t.Fatal("a DNS report cleared a pending dual change")
+	}
+
+	// The requested transport clears it.
+	if err := db.ConfirmBeaconTransport("beacon-pending", "dual"); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	if db.BeaconTransportPending("beacon-pending") {
+		t.Fatal("pending marker survived a matching report")
+	}
+}

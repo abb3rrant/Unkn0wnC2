@@ -68,6 +68,11 @@ for artifact in dns-server-1 dns-server-2 beacon beacon-http; do
 done
 if [ "${ARTIFACTS_OK}" = "1" ] && [ "${FORCE_REBUILD:-0}" != "1" ]; then
     echo "[Setup] Binaries already present in ${BUILDS_DIR}; nothing to build."
+    # Print their age: a deploy that wiped nothing looks identical to one that did,
+    # and a stale binary here is how a stack ends up serving an older build.
+    for artifact in dns-server-1 dns-server-2 beacon beacon-http; do
+        printf "[Setup]   %-14s %s\n" "${artifact}" "$(date -r "${BUILDS_DIR}/${artifact}" '+%Y-%m-%d %H:%M' 2>/dev/null || echo unknown)"
+    done
     echo "[Setup] Set FORCE_REBUILD=1 to rebuild them anyway."
     echo "=== Setup already complete ==="
     exit 0

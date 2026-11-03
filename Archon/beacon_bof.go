@@ -239,6 +239,10 @@ func (api *APIServer) handleListBeaconHTTPListeners(w http.ResponseWriter, r *ht
 		"listeners": listeners,
 		"transport": transport,
 		"active":    active,
+		// True while the requested transport has not been seen in a beacon report.
+		// The UI shows "pending" so an operator is not told a change landed before
+		// the beacon has actually applied it.
+		"pending": api.db.BeaconTransportPending(beaconID),
 	})
 }
 
