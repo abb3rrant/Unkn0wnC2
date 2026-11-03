@@ -106,7 +106,7 @@ func (d *MasterDatabase) ConfirmBeaconTransport(beaconID, reported string) error
 		return nil
 	}
 	recorded = strings.ToLower(strings.TrimSpace(recorded))
-	if recorded != reported {
+	if !transportModeSatisfiedBy(recorded, reported) {
 		return nil
 	}
 	_, err := d.db.Exec(`UPDATE beacons SET transport_pending_since = 0 WHERE id = ? AND transport_pending_since != 0`, beaconID)
@@ -128,4 +128,19 @@ func (d *MasterDatabase) BeaconTransportPending(beaconID string) bool {
 // ran will not run again.
 func (d *MasterDatabase) migration25AddTransportPending() error {
 	return d.addColumnIfMissing("beacons", "transport_pending_since", "INTEGER DEFAULT 0")
+}
+
+// transportModeSatisfiedBy reports whether a beacon seen on one path is running
+// the mode an operator asked for.
+//
+// The report carries the path that event arrived on, not the beacon's mode: a dual
+// beacon reports "http" on an HTTP poll and "dns" on a DNS poll. Comparing the two
+// strings directly means a dual change is never confirmed.
+func transportModeSatisfiedBy(recorded, reported string) bool {
+	switch recorded {
+	case "dual":
+		return reported == "http" || reported == "dns" || reported == "dual"
+	default:
+		return recorded == reported
+	}
 }

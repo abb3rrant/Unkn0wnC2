@@ -110,16 +110,25 @@ func TestBeaconTransportPendingUntilConfirmed(t *testing.T) {
 		t.Fatal("requested transport is not marked pending")
 	}
 
-	// A report from the other transport is not a confirmation.
+	// A dual beacon reports whichever path the event used, so either path confirms.
+	if err := db.ConfirmBeaconTransport("beacon-pending", "dns"); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	if db.BeaconTransportPending("beacon-pending") {
+		t.Fatal("a DNS report did not confirm a pending dual change")
+	}
+
+	// An HTTP request is the only thing that confirms an http-only change.
+	if err := db.SetBeaconHTTPListeners("beacon-pending", []string{"default"}, "http"); err != nil {
+		t.Fatalf("record transport: %v", err)
+	}
 	if err := db.ConfirmBeaconTransport("beacon-pending", "dns"); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
 	if !db.BeaconTransportPending("beacon-pending") {
-		t.Fatal("a DNS report cleared a pending dual change")
+		t.Fatal("a DNS report cleared a pending http-only change")
 	}
-
-	// The requested transport clears it.
-	if err := db.ConfirmBeaconTransport("beacon-pending", "dual"); err != nil {
+	if err := db.ConfirmBeaconTransport("beacon-pending", "http"); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
 	if db.BeaconTransportPending("beacon-pending") {
