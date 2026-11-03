@@ -549,7 +549,7 @@ func handleQuery(packet []byte, cfg Config, clientIP string) ([]byte, error) {
 
 		// Process potential C2 beacon query — pass DNS query type for A-record peek mode
 		var queryInfo C2QueryInfo
-		if c2Response, isC2, respEncrypted := c2Manager.processBeaconQuery(qname, clientIP, &queryInfo, q.Type); isC2 {
+		if c2Response, isC2, respEncrypted := c2Manager.processBeaconQuery(qname, clientIP, &queryInfo, "dns", q.Type); isC2 {
 			var answers []DNSResourceRecord
 
 			if debugMode {

@@ -85,19 +85,19 @@ type Operator struct {
 
 // StagerSession represents a stager binary delivery session.
 type StagerSession struct {
-	ID             string `json:"id"`
-	StagerIP       string `json:"stager_ip"`
-	OS             string `json:"os"`
-	Arch           string `json:"arch"`
-	TotalChunks    int    `json:"total_chunks"`
-	ChunksDelivered int   `json:"chunks_delivered"`
-	CreatedAt      int64  `json:"created_at"`
-	LastActivity   int64  `json:"last_activity"`
-	Completed      bool   `json:"completed"`
-	InitiatedByDNS string `json:"initiated_by_dns,omitempty"`
-	CompletedAt    *int64 `json:"completed_at,omitempty"`
-	ClientFilename string `json:"client_filename,omitempty"`
-	ClientVersion  string `json:"client_version,omitempty"`
+	ID              string `json:"id"`
+	StagerIP        string `json:"stager_ip"`
+	OS              string `json:"os"`
+	Arch            string `json:"arch"`
+	TotalChunks     int    `json:"total_chunks"`
+	ChunksDelivered int    `json:"chunks_delivered"`
+	CreatedAt       int64  `json:"created_at"`
+	LastActivity    int64  `json:"last_activity"`
+	Completed       bool   `json:"completed"`
+	InitiatedByDNS  string `json:"initiated_by_dns,omitempty"`
+	CompletedAt     *int64 `json:"completed_at,omitempty"`
+	ClientFilename  string `json:"client_filename,omitempty"`
+	ClientVersion   string `json:"client_version,omitempty"`
 }
 
 // ClientBinary represents a compiled client binary stored for stager delivery.
@@ -198,12 +198,12 @@ type BuildConfig struct {
 
 func (bc BuildConfig) MarshalJSON() ([]byte, error) {
 	m := map[string]interface{}{
-		"binary_id":  bc.BinaryID,
-		"build_id":   bc.BuildID,
-		"os":         bc.OS,
-		"arch":       bc.Arch,
+		"binary_id":   bc.BinaryID,
+		"build_id":    bc.BuildID,
+		"os":          bc.OS,
+		"arch":        bc.Arch,
 		"dns_domains": bc.DNSDomains,
-		"created_at": bc.CreatedAt,
+		"created_at":  bc.CreatedAt,
 	}
 	for k, v := range bc.Extra {
 		m[k] = v

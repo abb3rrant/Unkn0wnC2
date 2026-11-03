@@ -17,7 +17,7 @@ func registerMeshBeacon(t *testing.T, c2 *C2Manager, beaconID string) {
 		t.Fatal(err)
 	}
 
-	if _, isC2, _ := c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil); !isC2 {
+	if _, isC2, _ := c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil, "dns"); !isC2 {
 		t.Fatalf("registration for %s was not recognised as C2 traffic", beaconID)
 	}
 
@@ -39,6 +39,21 @@ func registerMeshBeacon(t *testing.T, c2 *C2Manager, beaconID string) {
 
 // dnsPoll issues a POLL over the DNS path with the given query type. Type 1 is the
 // A-record readiness probe; type 16 is the TXT follow-up that carries the task.
+// dnsMessage runs an arbitrary protocol message through the DNS path.
+func dnsMessage(t *testing.T, c2 *C2Manager, message string, queryType uint16) string {
+	t.Helper()
+
+	encoded, err := encryptAndEncode(message, c2.aesKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, isC2, _ := c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil, "dns", queryType)
+	if !isC2 {
+		t.Fatalf("message %q was not recognised as C2 traffic", message[:min(20, len(message))])
+	}
+	return response
+}
+
 func dnsPoll(t *testing.T, c2 *C2Manager, beaconID string, queryType uint16) string {
 	t.Helper()
 
@@ -47,7 +62,7 @@ func dnsPoll(t *testing.T, c2 *C2Manager, beaconID string, queryType uint16) str
 		t.Fatal(err)
 	}
 
-	response, isC2, _ := c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil, queryType)
+	response, isC2, _ := c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil, "dns", queryType)
 	if !isC2 {
 		t.Fatal("poll was not recognised as C2 traffic")
 	}
@@ -190,7 +205,10 @@ func TestDualMode_ChunkedTaskSurvivesAMeshNodeSwitch(t *testing.T) {
 	second := NewC2Manager(false, "mesh-chunk-key", StagerJitter{}, ":memory:", "example.com")
 	const beaconID = "meshchunk"
 
-	longCommand := strings.Repeat("echo chunked; ", 40) // comfortably over one chunk
+	// Chunking is a DNS concern now: HTTP delivers up to httpTaskChunkPayload in one
+	// response, which is above any command Archon will accept, so this scenario
+	// exercises the DNS path where a long command really is split.
+	longCommand := strings.Repeat("echo chunked; ", 40)
 	if len(longCommand) <= MaxTaskChunkPayload {
 		t.Fatalf("test command is only %d bytes, which does not chunk", len(longCommand))
 	}
@@ -200,8 +218,8 @@ func TestDualMode_ChunkedTaskSurvivesAMeshNodeSwitch(t *testing.T) {
 		c2.AddTaskFromMaster("T400", beaconID, longCommand)
 	}
 
-	// The first chunk arrives over HTTP from one node...
-	head, _, _ := first.ProcessHTTPMessage("POLL|"+beaconID+"|1758500006", "127.0.0.1", true)
+	// The first chunk arrives over DNS from one node...
+	head := dnsMessage(t, first, "POLL|"+beaconID+"|1758500006", 16)
 	if !strings.HasPrefix(head, "TASKC|") {
 		t.Fatalf("first chunk delivery = %q, want a TASKC| message", head)
 	}
@@ -224,7 +242,7 @@ func TestDualMode_ChunkedTaskSurvivesAMeshNodeSwitch(t *testing.T) {
 	// ...and the rest from the other node, as a listener failover would.
 	for index := 2; index <= totalChunks; index++ {
 		request := "TASKGET|" + beaconID + "|T400|" + strconv.Itoa(index)
-		chunk, _, _ := second.ProcessHTTPMessage(request, "127.0.0.1", true)
+		chunk := dnsMessage(t, second, request, 16)
 
 		chunkParts := strings.SplitN(chunk, "|", 4)
 		if len(chunkParts) < 4 || chunkParts[0] != "TASKC" || chunkParts[1] != "T400" {
@@ -236,4 +254,40 @@ func TestDualMode_ChunkedTaskSurvivesAMeshNodeSwitch(t *testing.T) {
 	if assembled != longCommand {
 		t.Fatalf("assembled command does not match: got %d bytes, want %d", len(assembled), len(longCommand))
 	}
+}
+
+// TestTaskDeliveryChunkingDependsOnTransport pins the point of the change: the
+// same command is one message on HTTP and several on DNS. Chunking exists because
+// a DNS answer cannot carry much; an HTTP response can.
+func TestTaskDeliveryChunkingDependsOnTransport(t *testing.T) {
+	const beaconID = "chunktransport"
+	command := strings.Repeat("a", 2000) // over MaxTaskChunkPayload, under httpTaskChunkPayload
+
+	t.Run("http delivers one message", func(t *testing.T) {
+		c2 := NewC2Manager(false, "mesh-chunk-key", StagerJitter{}, ":memory:", "example.com")
+		registerMeshBeacon(t, c2, beaconID)
+		c2.AddTaskFromMaster("T500", beaconID, command)
+
+		response, _, _ := c2.ProcessHTTPMessage("POLL|"+beaconID+"|1758500100", "127.0.0.1", true)
+		if !strings.HasPrefix(response, "TASK|") {
+			t.Fatalf("HTTP delivery = %q, want a single TASK| message", response[:min(40, len(response))])
+		}
+		if strings.HasPrefix(response, "TASKC|") {
+			t.Fatal("HTTP delivery chunked a command that fits in one response")
+		}
+		if !strings.Contains(response, command) {
+			t.Fatal("HTTP delivery did not carry the whole command")
+		}
+	})
+
+	t.Run("dns still chunks", func(t *testing.T) {
+		c2 := NewC2Manager(false, "mesh-chunk-key", StagerJitter{}, ":memory:", "example.com")
+		registerMeshBeacon(t, c2, beaconID)
+		c2.AddTaskFromMaster("T501", beaconID, command)
+
+		response := dnsMessage(t, c2, "POLL|"+beaconID+"|1758500101", 16)
+		if !strings.HasPrefix(response, "TASKC|") {
+			t.Fatalf("DNS delivery = %q, want a TASKC| chunk", response[:min(40, len(response))])
+		}
+	})
 }

@@ -19,7 +19,7 @@ import (
 
 const (
 	// MasterDatabaseSchemaVersion tracks the current schema version
-	MasterDatabaseSchemaVersion = 20
+	MasterDatabaseSchemaVersion = 25
 
 	// MaxTaskCommandLength is the maximum length for task commands.
 	// DNS TXT responses are limited to ~512 bytes UDP. After encryption (AES-GCM adds 28 bytes)
@@ -298,6 +298,44 @@ func (d *MasterDatabase) applyMigrations(fromVersion int) error {
 	if fromVersion < 20 {
 		if err := d.migration20AddHTTPProfileAssignments(); err != nil {
 			return fmt.Errorf("migration 20 failed: %w", err)
+		}
+	}
+
+	// Migration 21: Per-beacon HTTP listener selection and transport
+	if fromVersion < 21 {
+		if err := d.migration21AddBeaconHTTPListeners(); err != nil {
+			return fmt.Errorf("migration 21 failed: %w", err)
+		}
+	}
+
+	// Migration 22: HTTP listener contact history per beacon
+	if fromVersion < 22 {
+		if err := d.migration22AddBeaconHTTPContacts(); err != nil {
+			return fmt.Errorf("migration 22 failed: %w", err)
+		}
+	}
+
+	// Migration 23: single-use bootstrap tokens for HTTP listener updates
+	if fromVersion < 23 {
+		if err := d.migration23AddHTTPProfileTokens(); err != nil {
+			return fmt.Errorf("migration 23 failed: %w", err)
+		}
+	}
+
+	// Migration 25: pending-transport marker. Migration 21 adds it for fresh
+	// databases; a database already past 21 needs this to gain the column.
+	if fromVersion < 25 {
+		if err := d.migration25AddTransportPending(); err != nil {
+			return fmt.Errorf("migration 25 failed: %w", err)
+		}
+	}
+
+	// Migration 24: redemption counter on those tokens. Migration 23 created the
+	// table without it, and an already-migrated database will not re-run 23, so a
+	// deployed instance would otherwise keep a schema the token query cannot use.
+	if fromVersion < 24 {
+		if err := d.migration24AddTokenUses(); err != nil {
+			return fmt.Errorf("migration 24 failed: %w", err)
 		}
 	}
 
@@ -1270,14 +1308,16 @@ func (d *MasterDatabase) RegisterDNSServer(id, domain, address, apiKey string) e
 		if err != nil {
 			// Check if it's a domain conflict
 			if strings.Contains(err.Error(), "UNIQUE constraint failed: dns_servers.domain") {
-				// Domain already exists with different ID - this shouldn't happen in normal operation
-				// but could occur if DNS server was rebuilt with new ID
-				// Update the existing record with the new ID
+				// The domain is already registered. Rotate its credentials and address,
+				// but keep the existing primary key: beacon contacts, tasks and exfil
+				// sessions reference it, and rewriting it fails with a foreign-key
+				// violation. Callers that need the surviving ID should ask
+				// ServerIDForDomain before building.
 				_, err = d.db.Exec(`
-					UPDATE dns_servers 
-					SET id = ?, address = ?, api_key_hash = ?, updated_at = ?
+					UPDATE dns_servers
+					SET address = ?, api_key_hash = ?, updated_at = ?
 					WHERE domain = ?
-				`, id, address, string(apiKeyHash), now, domain)
+				`, address, string(apiKeyHash), now, domain)
 			}
 		}
 
@@ -1624,7 +1664,7 @@ func (d *MasterDatabase) GetActiveBeaconsPaginated(minutesThreshold, limit, offs
 			COALESCE(build_id, '') as build_id
 		FROM beacons
 		WHERE last_seen >= ? AND status = 'active'
-		ORDER BY last_seen DESC
+		ORDER BY first_seen ASC, id ASC
 	`
 
 	query, paginationArgs := appendPagination(query, limit, offset)
@@ -1680,7 +1720,11 @@ func appendPagination(query string, limit, offset int) (string, []interface{}) {
 }
 
 // GetAllBeaconsPaginated retrieves all beacons with pagination support (no time filter)
-// This preserves history - beacons are shown regardless of when they last checked in
+// This preserves history - beacons are shown regardless of when they last checked in.
+//
+// Ordering is by registration (first_seen), not by last_seen. Sorting by last
+// activity made the dashboard reshuffle every poll interval, so rows moved under
+// the operator's cursor while they were reading or selecting them.
 func (d *MasterDatabase) GetAllBeaconsPaginated(limit, offset int) ([]Beacon, error) {
 
 	query := `
@@ -1691,7 +1735,7 @@ func (d *MasterDatabase) GetAllBeaconsPaginated(limit, offset int) ([]Beacon, er
 			COALESCE(build_id, '') as build_id,
 			registration_stage
 		FROM beacons
-		ORDER BY last_seen DESC
+		ORDER BY first_seen ASC, id ASC
 	`
 
 	query, args := appendPagination(query, limit, offset)
@@ -3837,13 +3881,15 @@ func (d *MasterDatabase) GetTaskWithResult(taskID string) (Task, error) {
 		task.CompletedAt = time.Unix(completedAt.Int64, 0).Format(time.RFC3339)
 	}
 
-	// Get result if task is completed
-	if status == "completed" {
+	// Load the result for terminal states. A failed task carries the reason it
+	// failed, and hiding it leaves the operator staring at "failed" with no
+	// explanation.
+	if status == "completed" || status == "failed" {
 		result, isComplete, err := d.GetTaskResult(taskID)
 		if err == nil && isComplete {
 			task.Result = result
 			task.ResultSize = len(result)
-		} else if !isComplete {
+		} else if status == "completed" && !isComplete {
 			// Task is marked completed but no assembled result row exists yet — the
 			// chunk-arrival path assembles asynchronously, so a read can land in that
 			// window. If every chunk is already stored, assemble synchronously here
@@ -5172,4 +5218,16 @@ func (d *MasterDatabase) DetectPartialResults(sentHours int) (int, error) {
 
 	rows, err := result.RowsAffected()
 	return int(rows), err
+}
+
+// ServerIDForDomain returns the registered server ID for a domain, if any.
+//
+// The builder asks before generating a new ID so a rebuild keeps the identity the
+// rest of the schema already points at.
+func (d *MasterDatabase) ServerIDForDomain(domain string) (string, bool) {
+	var id string
+	if err := d.db.QueryRow(`SELECT id FROM dns_servers WHERE domain = ?`, domain).Scan(&id); err != nil {
+		return "", false
+	}
+	return id, true
 }

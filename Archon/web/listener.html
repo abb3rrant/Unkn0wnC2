@@ -135,14 +135,15 @@
 
     <div class="nav-menu">
         <a href="/dashboard" class="nav-btn">Dashboard</a>
-        <a href="/listeners" class="nav-btn active">Listeners</a>
-        <a href="/profiles" class="nav-btn">HTTP Profiles</a>
         <a href="/builder" class="nav-btn">Builder</a>
+        <a href="/listeners" class="nav-btn active">HTTP Listeners</a>
         <a href="/stager" class="nav-btn">Stager Sessions</a>
         <a href="/exfils" class="nav-btn">Exfils</a>
         <a href="/logs" class="nav-btn">Logs</a>
         <a href="/report" class="nav-btn">Report</a>
         <a href="/users" class="nav-btn" id="usersNavBtn">Users</a>
+
+
     </div>
 
     <div class="container">
@@ -179,7 +180,7 @@
                     <option value="">Select a profile...</option>
                 </select>
                 <button class="btn" onclick="attachProfile()">Assign</button>
-                <a class="btn" href="/profiles" style="text-decoration: none;">Manage Profiles</a>
+                <a class="btn" href="/listeners#profiles" style="text-decoration: none;">Manage Profiles</a>
             </div>
             <div id="assignStatus" class="status-line"></div>
         </div>

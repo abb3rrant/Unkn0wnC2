@@ -30,7 +30,7 @@ func main() {
 	// Parse command line flags
 	debugFlag := flag.Bool("debug", false, "Enable debug mode")
 	generateConfig := flag.Bool("generate-config", false, "Generate example configuration file")
-	configPath := flag.String("config", "/opt/unkn0wnc2/master_config.json", "Path to configuration file")
+	configPath := flag.String("config", "", "Path to configuration file (default: $MASTER_CONFIG, then /opt/unkn0wnc2/master_config.json)")
 	bindAddr := flag.String("bind-addr", "", "Override bind address (e.g., 0.0.0.0 or 192.168.1.100)")
 	bindPort := flag.Int("bind-port", 0, "Override bind port (e.g., 8443)")
 	flag.Parse()
@@ -71,8 +71,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Initialize logger - always log to file, also to stdout if debug mode
+	// Initialize logger - always log to file, also to stdout if debug mode.
+	// The container layout lives under /opt/unkn0wnc2; a local run as an ordinary
+	// user cannot create that, so fall back to ./logs rather than refusing to start.
 	logDir := "/opt/unkn0wnc2/logs"
+	if err := os.MkdirAll("/opt/unkn0wnc2", 0o700); err != nil {
+		logDir = "./logs"
+	}
 	if err := InitLogger(logDir, cfg.Debug); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
 		os.Exit(1)
@@ -104,6 +109,10 @@ func main() {
 		LogError("Failed to initialize admin: %v", err)
 		os.Exit(1)
 	}
+
+	// Work queued for a beacon that has died would otherwise sit "pending" for the
+	// life of the database. The sweep closes those out with a reason.
+	StartAbandonedTaskSweeper(db)
 
 	// Register pre-configured DNS servers
 	if err := registerConfiguredDNSServers(db, cfg); err != nil {
@@ -261,9 +270,14 @@ func newArchonHTTPServer(addr string, handler http.Handler) *http.Server {
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      60 * time.Second,
-		IdleTimeout:       120 * time.Second,
-		MaxHeaderBytes:    1 << 20,
+		// Builder requests compile a Go binary for the caller and answer when the
+		// build finishes. On a small host (1 vCPU) that is minutes, not seconds, so
+		// a 60s write timeout cuts the connection mid-build and the caller sees a
+		// stream error instead of a build result. The read side is still bounded,
+		// which is what slow-request protection actually needs.
+		WriteTimeout:   15 * time.Minute,
+		IdleTimeout:    120 * time.Second,
+		MaxHeaderBytes: 1 << 20,
 	}
 }
 

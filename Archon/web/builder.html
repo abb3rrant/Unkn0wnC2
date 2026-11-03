@@ -337,14 +337,14 @@
     <!-- Navigation Menu -->
     <div class="nav-menu">
         <a href="/dashboard" class="nav-btn">Dashboard</a>
-        <a href="/listeners" class="nav-btn">Listeners</a>
-        <a href="/profiles" class="nav-btn">HTTP Profiles</a>
         <a href="/builder" class="nav-btn active">Builder</a>
+        <a href="/listeners" class="nav-btn">HTTP Listeners</a>
         <a href="/stager" class="nav-btn">Stager Sessions</a>
         <a href="/exfils" class="nav-btn">Exfils</a>
         <a href="/logs" class="nav-btn">Logs</a>
         <a href="/report" class="nav-btn">Report</a>
         <a href="/users" class="nav-btn" id="usersNavBtn">Users</a>
+
     </div>
 
     <div class="container">
@@ -487,6 +487,19 @@
                         <input type="number" id="clientRetryBackoff" class="form-input" placeholder="Retry backoff (s)" value="60" min="1">
                     </div>
                     <div class="help-text">Consecutive HTTP failures before a dual-mode beacon uses DNS again, and how long before it probes HTTP again.</div>
+                </div>
+
+                <div class="form-group" id="clientHTTPChunkGroup" style="display:none;">
+                    <label class="form-label">HTTP Output Chunking</label>
+                    <div class="form-row">
+                        <input type="number" id="httpMaxPayload" class="form-input" placeholder="HTTP bytes per result chunk" value="0" min="0">
+                        <input type="number" id="httpMaxBodyBytes" class="form-input" placeholder="Listener body limit (0 = from profile)" value="0" min="0">
+                    </div>
+                    <div class="form-row">
+                        <input type="number" id="httpChunksPerBurst" class="form-input" placeholder="HTTP chunks per burst" value="0" min="0">
+                        <input type="number" id="httpBurstPauseMs" class="form-input" placeholder="HTTP burst pause (ms)" value="0" min="0">
+                    </div>
+                    <div class="help-text">How much result data one HTTP request carries. Leave at 0 to inherit the listener's body limit (a 1 MiB profile yields ~650 KiB per request). DNS sizing is unaffected: this only applies to http and dual builds.</div>
                 </div>
 
                 <div class="advanced-toggle" onclick="toggleAdvanced('clientAdvanced')">
@@ -1106,7 +1119,7 @@
             if (!container) return;
 
             if (savedHTTPProfiles.length === 0) {
-                container.innerHTML = 'No profiles saved. Create one on the Profiles page first.';
+                container.innerHTML = 'No profiles saved. Create one on the HTTP Listeners page.';
                 return;
             }
 
@@ -1130,6 +1143,8 @@
             const mode = document.getElementById('clientTransport').value;
             document.getElementById('clientTransportProfilesGroup').style.display = mode === 'dns' ? 'none' : 'block';
             document.getElementById('clientTransportFallbackGroup').style.display = mode === 'dual' ? 'block' : 'none';
+            const chunkGroup = document.getElementById('clientHTTPChunkGroup');
+            if (chunkGroup) chunkGroup.style.display = mode === 'dns' ? 'none' : 'block';
             updateBuildPreview();
         }
 
@@ -1521,6 +1536,10 @@
                         exfil_jitter_min_ms: exfilJitterMin,
                         exfil_jitter_max_ms: exfilJitterMax,
                         exfil_chunks_per_burst: chunksPerBurst,
+                        http_max_payload: parseInt((document.getElementById('httpMaxPayload') || {}).value, 10) || 0,
+                        http_max_body_bytes: parseInt((document.getElementById('httpMaxBodyBytes') || {}).value, 10) || 0,
+                        http_chunks_per_burst: parseInt((document.getElementById('httpChunksPerBurst') || {}).value, 10) || 0,
+                        http_burst_pause_ms: parseInt((document.getElementById('httpBurstPauseMs') || {}).value, 10) || 0,
                         exfil_burst_pause_ms: burstPause,
                         max_subdomain_length: 0,
                         static_link: staticLink,

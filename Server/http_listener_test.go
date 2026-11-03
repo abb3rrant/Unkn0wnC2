@@ -661,7 +661,7 @@ func TestC2Manager_RejectsImplausibleChunkCount(t *testing.T) {
 		qname := base36EncodeString(message) + ".example.com"
 
 		// The call must return promptly with isC2=false instead of allocating.
-		response, isC2, _ := c2.processBeaconQuery(qname, "127.0.0.1", nil)
+		response, isC2, _ := c2.processBeaconQuery(qname, "127.0.0.1", nil, "dns")
 		if isC2 {
 			t.Errorf("message %q was accepted (response %q), want rejection", message, response)
 		}

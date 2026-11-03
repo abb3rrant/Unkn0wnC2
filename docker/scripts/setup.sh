@@ -4,8 +4,21 @@ set -e
 ARCHON_URL="${ARCHON_URL:-https://172.20.0.10:8443}"
 ADMIN_USER="admin"
 ADMIN_PASS="${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}"
+ADMIN_PASS_ENV_HINT="the ADMIN_PASSWORD you supplied"
 COOKIE_JAR="/tmp/cookies.txt"
 BUILDS_DIR="/opt/unkn0wnc2/builds"
+
+# Install a freshly built binary without tripping "Text file busy" when the
+# container that runs it is already up: copy to a temp name, then rename over
+# the live path. The rename replaces the inode, so a running process keeps the
+# file it started with.
+install_atomic() {
+    local src=$1 dest=$2 tmp
+    tmp="${dest}.new.$$"
+    cp "$src" "$tmp"
+    chmod +x "$tmp"
+    mv -f "$tmp" "$dest"
+}
 
 echo "=== unkn0wnc2 Docker Setup ==="
 echo "[Setup] Archon: ${ARCHON_URL}"
@@ -41,6 +54,29 @@ fi
 
 CSRF_TOKEN=$(grep csrf_token "$COOKIE_JAR" | awk '{print $NF}')
 echo "[Setup] Authenticated (CSRF token obtained)"
+
+# --------------------------------------------------------
+# Idempotency gate
+# --------------------------------------------------------
+# setup is the compose dependency that produces every binary. Re-running it on a
+# live deployment used to rebuild on top of running services and fail, which made
+# `docker compose up -d --force-recreate <service>` unusable. If the artifacts are
+# already there, there is nothing to do.
+ARTIFACTS_OK=1
+for artifact in dns-server-1 dns-server-2 beacon beacon-http; do
+    [ -x "${BUILDS_DIR}/${artifact}" ] || ARTIFACTS_OK=0
+done
+if [ "${ARTIFACTS_OK}" = "1" ] && [ "${FORCE_REBUILD:-0}" != "1" ]; then
+    echo "[Setup] Binaries already present in ${BUILDS_DIR}; nothing to build."
+    # Print their age: a deploy that wiped nothing looks identical to one that did,
+    # and a stale binary here is how a stack ends up serving an older build.
+    for artifact in dns-server-1 dns-server-2 beacon beacon-http; do
+        printf "[Setup]   %-14s %s\n" "${artifact}" "$(date -r "${BUILDS_DIR}/${artifact}" '+%Y-%m-%d %H:%M' 2>/dev/null || echo unknown)"
+    done
+    echo "[Setup] Set FORCE_REBUILD=1 to rebuild them anyway."
+    echo "=== Setup already complete ==="
+    exit 0
+fi
 
 # Helper: authenticated POST with CSRF
 api_post() {
@@ -84,8 +120,7 @@ fi
 echo "[Setup] DNS Server 1 built: ${DNS1_FILE}"
 
 # Copy to well-known location for dns1 container
-cp "${BUILDS_DIR}/dns-server/${DNS1_FILE}" "${BUILDS_DIR}/dns-server-1"
-chmod +x "${BUILDS_DIR}/dns-server-1"
+install_atomic "${BUILDS_DIR}/dns-server/${DNS1_FILE}" "${BUILDS_DIR}/dns-server-1"
 
 # --------------------------------------------------------
 # Build DNS Server 2
@@ -108,8 +143,7 @@ if [ -z "$DNS2_FILE" ]; then
 fi
 echo "[Setup] DNS Server 2 built: ${DNS2_FILE}"
 
-cp "${BUILDS_DIR}/dns-server/${DNS2_FILE}" "${BUILDS_DIR}/dns-server-2"
-chmod +x "${BUILDS_DIR}/dns-server-2"
+install_atomic "${BUILDS_DIR}/dns-server/${DNS2_FILE}" "${BUILDS_DIR}/dns-server-2"
 
 # --------------------------------------------------------
 # Build Linux Client (beacon)
@@ -150,8 +184,7 @@ if [ -z "$CLIENT_FILE" ]; then
 fi
 echo "[Setup] Client built: ${CLIENT_FILE} (BuildID: ${BUILD_ID})"
 
-cp "${BUILDS_DIR}/client/${CLIENT_FILE}" "${BUILDS_DIR}/beacon"
-chmod +x "${BUILDS_DIR}/beacon"
+install_atomic "${BUILDS_DIR}/client/${CLIENT_FILE}" "${BUILDS_DIR}/beacon"
 
 # --------------------------------------------------------
 # Build HTTP-only client from the exact listener profile
@@ -213,8 +246,7 @@ if [ -z "$HTTP_CLIENT_FILE" ]; then
     echo "$HTTP_CLIENT_RESP" | jq .
     exit 1
 fi
-cp "${BUILDS_DIR}/client/${HTTP_CLIENT_FILE}" "${BUILDS_DIR}/beacon-http"
-chmod +x "${BUILDS_DIR}/beacon-http"
+install_atomic "${BUILDS_DIR}/client/${HTTP_CLIENT_FILE}" "${BUILDS_DIR}/beacon-http"
 echo "[Setup] HTTP-only client built: ${HTTP_CLIENT_FILE} (BuildID: ${HTTP_BUILD_ID})"
 
 # --------------------------------------------------------
@@ -276,8 +308,7 @@ if [ -z "$DEFAULT_CLIENT_FILE" ]; then
     echo "$DEFAULT_CLIENT_RESP" | jq .
     exit 1
 fi
-cp "${BUILDS_DIR}/client/${DEFAULT_CLIENT_FILE}" "${BUILDS_DIR}/beacon-default"
-chmod +x "${BUILDS_DIR}/beacon-default"
+install_atomic "${BUILDS_DIR}/client/${DEFAULT_CLIENT_FILE}" "${BUILDS_DIR}/beacon-default"
 echo "[Setup] Default-profile client built: ${DEFAULT_CLIENT_FILE} (BuildID: ${DEFAULT_BUILD_ID})"
 
 # --------------------------------------------------------
@@ -309,8 +340,7 @@ if [ -z "$CLIENT2_FILE" ]; then
 fi
 echo "[Setup] Multi-DNS client built: ${CLIENT2_FILE} (BuildID: ${BUILD2_ID})"
 
-cp "${BUILDS_DIR}/client/${CLIENT2_FILE}" "${BUILDS_DIR}/beacon-mesh"
-chmod +x "${BUILDS_DIR}/beacon-mesh"
+install_atomic "${BUILDS_DIR}/client/${CLIENT2_FILE}" "${BUILDS_DIR}/beacon-mesh"
 
 # --------------------------------------------------------
 # Build Go client: A-record polling
@@ -332,8 +362,7 @@ AREC_RESP=$(api_post "/api/builder/client" "{
 }")
 AREC_FILE=$(echo "$AREC_RESP" | jq -r '.data.filename // empty')
 if [ -n "$AREC_FILE" ]; then
-    cp "${BUILDS_DIR}/client/${AREC_FILE}" "${BUILDS_DIR}/beacon-a-record"
-    chmod +x "${BUILDS_DIR}/beacon-a-record"
+    install_atomic "${BUILDS_DIR}/client/${AREC_FILE}" "${BUILDS_DIR}/beacon-a-record"
     echo "[Setup] A-record Go client built: ${AREC_FILE}"
 else
     echo "[Setup] WARNING: A-record Go client build failed (non-fatal)"
@@ -357,8 +386,7 @@ UNENC_RESP=$(api_post "/api/builder/client" "{
 }")
 UNENC_FILE=$(echo "$UNENC_RESP" | jq -r '.data.filename // empty')
 if [ -n "$UNENC_FILE" ]; then
-    cp "${BUILDS_DIR}/client/${UNENC_FILE}" "${BUILDS_DIR}/beacon-unencrypted"
-    chmod +x "${BUILDS_DIR}/beacon-unencrypted"
+    install_atomic "${BUILDS_DIR}/client/${UNENC_FILE}" "${BUILDS_DIR}/beacon-unencrypted"
     echo "[Setup] Unencrypted Go client built: ${UNENC_FILE}"
 else
     echo "[Setup] WARNING: Unencrypted Go client build failed (non-fatal)"
@@ -382,8 +410,7 @@ STAGED_RESP=$(api_post "/api/builder/client" "{
 }")
 STAGED_FILE=$(echo "$STAGED_RESP" | jq -r '.data.filename // empty')
 if [ -n "$STAGED_FILE" ]; then
-    cp "${BUILDS_DIR}/client/${STAGED_FILE}" "${BUILDS_DIR}/beacon-staged"
-    chmod +x "${BUILDS_DIR}/beacon-staged"
+    install_atomic "${BUILDS_DIR}/client/${STAGED_FILE}" "${BUILDS_DIR}/beacon-staged"
     echo "[Setup] Staged Go client built: ${STAGED_FILE}"
 else
     echo "[Setup] WARNING: Staged Go client build failed (non-fatal)"
@@ -407,6 +434,6 @@ echo "    beacon-a-record     Go   A-record poll"
 echo "    beacon-unencrypted  Go   base36 (no AES)"
 echo "    beacon-staged       Go   staged registration"
 echo ""
-echo "  Login:          admin / ${ADMIN_PASS}"
+echo "  Login:          ${ADMIN_USER} (password: ${ADMIN_PASS_ENV_HINT})"
 echo "  Web UI:         https://localhost:8443"
 echo ""

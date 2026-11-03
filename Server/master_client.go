@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"sync"
 	"time"
@@ -140,6 +141,7 @@ type StagerCacheTask struct {
 type BeaconReportRequest struct {
 	DNSServerID string     `json:"dns_server_id"`
 	APIKey      string     `json:"api_key"`
+	Transport   string     `json:"transport,omitempty"`
 	Beacon      BeaconData `json:"beacon"`
 }
 
@@ -435,6 +437,7 @@ func (mc *MasterClient) ReportBeacon(beacon *Beacon) error {
 	}
 
 	req := BeaconReportRequest{
+		Transport:   transportOf(beacon),
 		DNSServerID: mc.serverID,
 		APIKey:      mc.apiKey,
 		Beacon:      beaconData,
@@ -1366,4 +1369,40 @@ func (mc *MasterClient) FetchHTTPProfiles() ([]*HTTPProfile, error) {
 	}
 
 	return profiles, nil
+}
+
+// transportOf names the transport a beacon last spoke, defaulting to DNS for
+// beacons reported before the transport was tracked.
+func transportOf(beacon *Beacon) string {
+	if beacon != nil && beacon.Transport != "" {
+		return beacon.Transport
+	}
+	return "dns"
+}
+
+// FetchBootstrapProfile asks Archon for the profile a one-time token refers to.
+// The listener calls this on the beacon's behalf: the beacon only holds the token.
+func (mc *MasterClient) FetchBootstrapProfile(token string) (string, error) {
+	endpoint := fmt.Sprintf("/api/dns-server/bootstrap?dns_server_id=%s&api_key=%s&token=%s",
+		mc.serverID, mc.apiKey, url.QueryEscape(token))
+
+	respData, err := mc.doRequest("GET", endpoint, nil)
+	if err != nil {
+		return "", fmt.Errorf("bootstrap fetch failed: %w", err)
+	}
+
+	var resp struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Payload string `json:"payload"`
+		} `json:"data"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(respData, &resp); err != nil {
+		return "", fmt.Errorf("failed to parse bootstrap response: %w", err)
+	}
+	if !resp.Success || resp.Data.Payload == "" {
+		return "", fmt.Errorf("bootstrap rejected: %s", resp.Message)
+	}
+	return resp.Data.Payload, nil
 }

