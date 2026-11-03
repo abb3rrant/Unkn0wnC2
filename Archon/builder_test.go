@@ -65,7 +65,7 @@ func TestValidatePayloadFormat_CHKOnlyThreshold(t *testing.T) {
 	// Below 103 slots: format applies to CHK only (data falls back to default)
 	// At or above 103 slots: format can carry at least 1 byte of data per chunk
 	chkOnly := 100 // 100*5/8-63 = 62-63 = -1 → CHK only
-	data1    := 104 // 104*5/8-63 = 65-63 = 2  → can carry 2 bytes
+	data1 := 104   // 104*5/8-63 = 65-63 = 2  → can carry 2 bytes
 
 	if chkOnly*5/8-63 >= 1 {
 		t.Errorf("slots=%d should be CHK-only (formatChunk < 1), got %d", chkOnly, chkOnly*5/8-63)
@@ -117,7 +117,7 @@ func TestValidatePayloadFormat_FQDNTooLong(t *testing.T) {
 
 func TestValidatePayloadFormat_MultipleDomains_OneFails(t *testing.T) {
 	// Format valid for short domain but too long for a long domain
-	shortDomain := "c2.io"               // 5 chars
+	shortDomain := "c2.io"                          // 5 chars
 	longDomain := strings.Repeat("a", 100) + ".com" // 104 chars
 
 	// We need a format where len(format)+1+5 ≤ 253 but len(format)+1+104 > 253

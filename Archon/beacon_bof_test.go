@@ -245,18 +245,23 @@ func TestSetBeaconHTTPListeners_QueuesTransportUpdate(t *testing.T) {
 	}
 	var command string
 	for _, task := range tasks {
-		if strings.HasPrefix(task.Command, "update_transport:") {
+		if strings.HasPrefix(task.Command, "http_profile:") {
 			command = task.Command
 		}
 	}
 	if command == "" {
-		t.Fatal("no update_transport task was queued")
+		t.Fatal("no http_profile task was queued")
 	}
-	if !strings.Contains(command, `"mode":"http"`) {
-		t.Errorf("task does not carry the requested mode: %s", truncate(command, 80))
+	// The task carries a URL and a token, not the profile: the profile is fetched
+	// over HTTP so it never has to fit through DNS label chunking.
+	if strings.Contains(command, `"listeners"`) || strings.Contains(command, `"mode"`) {
+		t.Errorf("task carries the profile document: %s", truncate(command, 120))
 	}
-	if !strings.Contains(command, `"host":"127.0.0.1:8445"`) {
-		t.Errorf("task does not carry the profile's beacon host: %s", truncate(command, 120))
+	if !strings.Contains(command, "/_p|") {
+		t.Errorf("task does not point at the listener's bootstrap path: %s", truncate(command, 120))
+	}
+	if len(command) > 200 {
+		t.Errorf("short task is %d bytes; it must stay small enough for one or two DNS queries", len(command))
 	}
 }
 

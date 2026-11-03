@@ -3680,6 +3680,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	dnsRouter.HandleFunc("/http-profiles", api.handleFetchAssignedHTTPProfiles).Methods("GET")
 	dnsRouter.HandleFunc("/checkin", api.handleDNSServerCheckin).Methods("POST")
 	dnsRouter.HandleFunc("/beacon", api.handleBeaconReport).Methods("POST")
+	dnsRouter.HandleFunc("/bootstrap", api.handleBootstrapProfile).Methods("GET")
 	dnsRouter.HandleFunc("/beacon-status", api.handleBeaconStatusUpdate).Methods("POST")
 	dnsRouter.HandleFunc("/logs", api.handleDNSServerLogs).Methods("POST")
 	dnsRouter.HandleFunc("/result", api.handleSubmitResult).Methods("POST")

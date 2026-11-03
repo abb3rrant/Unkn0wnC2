@@ -21,7 +21,8 @@ import (
 // shared navbar chrome, and every class they reference resolves to a rule in
 // static/style.css or in the page's own <style> block.
 
-var webUIPages = []string{"listener.html", "listeners.html", "profiles.html"}
+// HTTP profiles share the listeners page now; there is no profiles.html.
+var webUIPages = []string{"listener.html", "listeners.html"}
 
 var classAttrRe = regexp.MustCompile(`class="([^"]*)"`)
 var styleBlockRe = regexp.MustCompile(`(?s)<style>(.*?)</style>`)

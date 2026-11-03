@@ -156,6 +156,11 @@ type HTTPProfile struct {
 	Jitter              ProfileJitter `json:"jitter"`
 	MaxBodyBytes        int64         `json:"max_body_bytes"`
 
+	// BootstrapPath is where the listener hands out profiles on request. Empty
+	// means the default (/_p); a profile can move it if a fronting proxy needs
+	// a different shape.
+	BootstrapPath string `json:"bootstrap_path,omitempty"`
+
 	// SourcePath is where this profile was loaded from. Not serialized.
 	SourcePath string `json:"-"`
 }

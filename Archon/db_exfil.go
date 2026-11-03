@@ -192,7 +192,6 @@ func (d *MasterDatabase) StoreExfilChunk(req *ExfilChunkStoreRequest) (*ExfilTra
 		return nil, false, fmt.Errorf("session_id is required")
 	}
 
-
 	tx, err := d.db.Begin()
 	if err != nil {
 		return nil, false, err
@@ -276,7 +275,6 @@ func (d *MasterDatabase) MarkExfilTransferComplete(req *ExfilCompletionRecord) (
 	dbLog("Exfil completion signal for session %s (totalChunks=%d, source=%s)\n",
 		req.SessionID, req.TotalChunks, req.SourceDNS)
 
-
 	tx, err := d.db.Begin()
 	if err != nil {
 		return nil, err
@@ -345,7 +343,6 @@ func (d *MasterDatabase) ListExfilTransfers(limit, offset int) ([]ExfilTransfer,
 	if limit <= 0 {
 		limit = 100
 	}
-
 
 	rows, err := d.db.Query(`
         SELECT session_id, job_id, source_dns, file_name, file_size,
@@ -550,7 +547,6 @@ func (d *MasterDatabase) EnsureExfilTransfer(sessionID, jobID, dnsID, fileName s
 	if sessionID == "" {
 		return nil, fmt.Errorf("session_id is required")
 	}
-
 
 	tx, err := d.db.Begin()
 	if err != nil {
@@ -970,7 +966,6 @@ func (d *MasterDatabase) RegisterExfilSessionTag(tag, sessionID string) error {
 		return fmt.Errorf("tag and session_id are required")
 	}
 
-
 	// Ensure the session exists in exfil_transfers first (create placeholder if needed)
 	// This is needed because of the foreign key constraint
 	var exists int
@@ -1004,7 +999,6 @@ func (d *MasterDatabase) GetExfilSessionIDByTag(tag string) (string, error) {
 	if tag == "" {
 		return "", fmt.Errorf("tag is required")
 	}
-
 
 	var sessionID string
 	err := d.db.QueryRow("SELECT session_id FROM exfil_session_tags WHERE tag = ?", tag).Scan(&sessionID)

@@ -95,6 +95,9 @@ type HTTPListenerSpec struct {
 	Auth           map[string]interface{} `json:"auth,omitempty"`
 	TimeoutSecs    int                    `json:"timeout_secs,omitempty"`
 	MaxBodyBytes   int64                  `json:"max_body_bytes,omitempty"`
+	// BootstrapPath is where this listener hands out profiles to beacons
+	// (default /_p). Set from the profile document's uris.bootstrap.
+	BootstrapPath string `json:"bootstrap_path,omitempty"`
 }
 
 type PhaseConfigRequest struct {
