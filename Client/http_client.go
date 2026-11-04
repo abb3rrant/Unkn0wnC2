@@ -504,7 +504,11 @@ func (t *httpTransport) authHeaderValue(method, path string, body []byte) string
 
 	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
 	mac := hmac.New(sha256.New, t.hmacKey())
-	mac.Write([]byte(strings.ToUpper(method) + "\n" + pathOnly(path) + "\n" + timestamp + "\n" + string(body)))
+	// Sign the FULL request target (path and, for a GET, the query value), not the
+	// query-less path. The GET message travels in the query, so signing only the
+	// path would leave the payload unauthenticated (WIR-1). The listener verifies
+	// against r.URL.RequestURI(), which carries the same full target.
+	mac.Write([]byte(strings.ToUpper(method) + "\n" + path + "\n" + timestamp + "\n" + string(body)))
 
 	signature := hex.EncodeToString(mac.Sum(nil))
 	if t.listener.Auth.SigEncoding == "base64" {
@@ -665,7 +669,9 @@ func hostOnly(host string) string {
 	return host
 }
 
-// pathOnly strips a query string, matching what the listener signs.
+// pathOnly strips a query string for the {{path}} header template. The signature
+// binds the FULL request target (path and query); only the template-visible path
+// is query-stripped, so this is not what the listener verifies against.
 func pathOnly(path string) string {
 	if index := strings.Index(path, "?"); index >= 0 {
 		return path[:index]

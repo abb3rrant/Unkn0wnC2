@@ -347,13 +347,10 @@ func sendMessage(t *testing.T, baseURL string, profile *HTTPProfile, key []byte,
 	if len(body) > 0 {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	// The signature covers the path only; the listener verifies against
-	// r.URL.Path, so a query string must not be included.
-	signPath := path
-	if index := strings.Index(signPath, "?"); index >= 0 {
-		signPath = signPath[:index]
-	}
-	req.Header.Set(profile.Auth.Header, signHTTPRequest(key, method, signPath, body))
+	// The signature covers the FULL request target, path and query. The listener
+	// verifies against r.URL.RequestURI(), so a GET's query message is bound
+	// (WIR-1); the body is signed too when present.
+	req.Header.Set(profile.Auth.Header, signHTTPRequest(key, method, path, body))
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)

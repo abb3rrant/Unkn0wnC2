@@ -107,7 +107,10 @@ func verifyHTTPRequest(profile *HTTPProfile, encryptionKey []byte, r *http.Reque
 		}
 
 		mac := hmac.New(sha256.New, hmacKey(encryptionKey))
-		mac.Write(httpSignatureInput(r.Method, r.URL.Path, timestamp, body))
+		// Verify against the full request target (r.URL.RequestURI()) so a GET's
+		// query message is authenticated, matching what the beacon signs (WIR-1).
+		// A query-less POST has RequestURI == Path.
+		mac.Write(httpSignatureInput(r.Method, r.URL.RequestURI(), timestamp, body))
 		expected := mac.Sum(nil)
 
 		presented, err := decodeSignature(profile.Auth.SigEncoding, signature)

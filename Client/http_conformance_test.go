@@ -33,6 +33,13 @@ func TestHTTPTransportConformance(t *testing.T) {
 			Body      string `json:"body"`
 			ExpectHex string `json:"expect_hex"`
 		} `json:"signature"`
+		SignatureGet struct {
+			Method    string `json:"method"`
+			Path      string `json:"path"`
+			Timestamp string `json:"timestamp"`
+			Body      string `json:"body"`
+			ExpectHex string `json:"expect_hex"`
+		} `json:"signature_get"`
 		Base36 struct {
 			Plaintext string `json:"plaintext"`
 			Encoded   string `json:"encoded"`
@@ -68,6 +75,16 @@ func TestHTTPTransportConformance(t *testing.T) {
 		actual := hex.EncodeToString(mac.Sum(nil))
 		if actual != vectors.Signature.ExpectHex {
 			t.Fatalf("beacon signature does not match what the listener verifies:\n  computed %s\n  vector   %s", actual, vectors.Signature.ExpectHex)
+		}
+
+		// GET: the beacon must sign the query-bearing target, exactly as the
+		// listener verifies it (WIR-1).
+		mac.Reset()
+		mac.Write([]byte(vectors.SignatureGet.Method + "\n" + vectors.SignatureGet.Path + "\n" +
+			vectors.SignatureGet.Timestamp + "\n" + vectors.SignatureGet.Body))
+		actualGet := hex.EncodeToString(mac.Sum(nil))
+		if actualGet != vectors.SignatureGet.ExpectHex {
+			t.Fatalf("beacon GET signature does not cover the query message:\n  computed %s\n  vector   %s", actualGet, vectors.SignatureGet.ExpectHex)
 		}
 	})
 

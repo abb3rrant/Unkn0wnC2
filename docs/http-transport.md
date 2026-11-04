@@ -177,10 +177,13 @@ the configured header.
 This proves possession of the C2 key — the same credential the DNS path relies on,
 since a beacon that can AES-GCM its subdomain payload can sign a request. No second,
 per-beacon secret is introduced, so rotating the C2 key rotates both transports at
-once. `max_skew_secs` bounds replay.
+once. `max_skew_secs` bounds replay; the shipped default is 60 seconds.
 
-The signature covers the path **without** the query string, which is what the
-listener verifies against.
+The signature covers the **full request target** — `METHOD\nREQUEST-TARGET\nTIMESTAMP\nBODY`,
+where `REQUEST-TARGET` is the path including any query string. A GET carries its C2
+message in the query, so signing the query-less path would leave the message
+unauthenticated; the listener verifies against `r.URL.RequestURI()` so the query is
+covered. A POST with no query is unchanged (`RequestURI == Path`).
 
 ### The pin
 

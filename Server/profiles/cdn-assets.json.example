@@ -60,7 +60,7 @@
     "mode": "hmac-sha256",
     "header": "X-Sig",
     "sig_encoding": "hex",
-    "max_skew_secs": 300
+    "max_skew_secs": 60
   },
   "status": {
     "ok": 200,
