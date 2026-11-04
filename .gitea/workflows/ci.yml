@@ -146,7 +146,7 @@ jobs:
           test "$(docker image inspect --format '{{.Config.User}}' "$IMAGE")" = "10001:10001"
           docker run --rm --entrypoint /opt/unkn0wnc2/unkn0wnc2 "$IMAGE" -h
           docker image inspect --format '{{.Id}}' "$IMAGE" > "dist/Unkn0wnC2-v${VERSION}-linux-amd64.container-image-id.txt"
-          syft "docker:${IMAGE}" -q -o "cyclonedx-json=dist/Unkn0wnC2-v${VERSION}-linux-amd64.container.sbom.cdx.json"
+          syft "docker:${IMAGE}" -o "cyclonedx-json=dist/Unkn0wnC2-v${VERSION}-linux-amd64.container.sbom.cdx.json"
           (
             cd dist
             sha256sum ./*.container-image-id.txt ./*.container.sbom.cdx.json >> SHA256SUMS
