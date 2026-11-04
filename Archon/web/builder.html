@@ -1129,7 +1129,7 @@
                 try { document_ = JSON.parse(profile.document) || {}; } catch (error) { document_ = {}; }
 
                 const host = document_.beacon_host || '';
-                const scheme = document_.scheme || 'https';
+                const scheme = document_.beacon_scheme || document_.scheme || 'https';
                 const target = host ? `${scheme}://${host}` : 'no beacon_host set';
                 const warning = host ? '' : ' <span style="color:#ff6b6b;">&#9888;</span>';
 
@@ -1174,7 +1174,7 @@
 
                 return {
                     name: name,
-                    scheme: document_.scheme || 'https',
+                    scheme: document_.beacon_scheme || document_.scheme || 'https',
                     host: host,
                     host_header: document_.host_header || '',
                     spki_sha256: (document_.tls && document_.tls.spki_sha256) || '',

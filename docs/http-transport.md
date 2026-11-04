@@ -204,6 +204,28 @@ healthy while every beacon failed, so this is a startup error rather than a warn
 Rotating to a certificate with a **new keypair** means rotating the pin in the profile
 and in any beacon build that pinned the old one. Renewing a certificate while reusing the
 same keypair leaves the SPKI pin unchanged.
+### Behind a TLS-terminating proxy (Cloudflare Flexible)
+
+You can front an **http** listener with a TLS-terminating HTTPS proxy (e.g.
+Cloudflare's proxied DNS records in Flexible mode). The beacon then dials **https**
+to the proxy's hostname while the origin listener stays plain **http** — no
+certificate ever exists on your origin. Set two fields on the served profile:
+
+- `beacon_host`: the proxy hostname the beacon dials (e.g. `cdn.example.com:443`).
+- `beacon_scheme`: `https`. This tells a build to dial `https://…` even though the
+  served scheme is `http`. It is served-scheme independent and does **not** require a
+  `tls.spki_sha256` pin — the certificate is the proxy's, never the origin's. Empty
+  (or absent) `beacon_scheme` means "use the served scheme", so existing profiles are
+  unchanged.
+
+The shipped default profile sets `beacon_scheme: https` and serves `http` on the
+origin. To use it behind Cloudflare, set `beacon_host` to your proxied hostname; a
+build from it then connects over HTTPS through Cloudflare with nothing to manage.
+Because no piece of the origin is authenticated by a pin in this arrangement, the
+HTTPS hop is validated only by the proxy's public certificate and hostname (the
+no-pin handshake path); keep Bot Fight/Under-Attack/Managed Challenge off the
+hostname, and restrict the origin port to the proxy's egress so it is not directly
+reachable.
 
 ## Listeners and profile assignment
 

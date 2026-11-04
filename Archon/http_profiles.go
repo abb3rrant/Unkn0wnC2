@@ -45,14 +45,15 @@ var httpProfileEncodings = map[string]bool{
 // are preserved as written, because the document is stored and shipped verbatim;
 // this type exists only to read the values that need checking.
 type httpProfileDocument struct {
-	Name       string `json:"name"`
-	Enabled    *bool  `json:"enabled"`
-	BindPort   int    `json:"bind_port"`
-	BindAddr   string `json:"bind_addr"`
-	Scheme     string `json:"scheme"`
-	HostHeader string `json:"host_header"`
-	BeaconHost string `json:"beacon_host"`
-	TLS        struct {
+	Name         string `json:"name"`
+	Enabled      *bool  `json:"enabled"`
+	BindPort     int    `json:"bind_port"`
+	BindAddr     string `json:"bind_addr"`
+	Scheme       string `json:"scheme"`
+	HostHeader   string `json:"host_header"`
+	BeaconHost   string `json:"beacon_host"`
+	BeaconScheme string `json:"beacon_scheme"`
+	TLS          struct {
 		CertFile   string `json:"cert_file"`
 		KeyFile    string `json:"key_file"`
 		SPKISHA256 string `json:"spki_sha256"`
@@ -285,6 +286,16 @@ func normalizeHTTPProfileDocument(name, document string) (string, error) {
 	case "", "http", "https":
 	default:
 		return "", fmt.Errorf("scheme must be \"http\" or \"https\", got %q", parsed.Scheme)
+	}
+	// beacon_scheme is the scheme a beacon DIALS to reach this listener, which can
+	// differ from the served scheme. Empty means "inherit the served scheme". A beacon
+	// facing a Cloudflare HTTPS proxy uses https here even though the served listener
+	// is plain http, so https does NOT require a TLS pin: the cert is Cloudflare's and
+	// no servable origin material exists.
+	switch strings.ToLower(parsed.BeaconScheme) {
+	case "", "http", "https":
+	default:
+		return "", fmt.Errorf("beacon_scheme must be \"http\" or \"https\", got %q", parsed.BeaconScheme)
 	}
 	if strings.ContainsAny(parsed.HostHeader, "\r\n") {
 		return "", fmt.Errorf("host_header contains a line break")

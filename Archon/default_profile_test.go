@@ -24,6 +24,7 @@ func TestDefaultHTTPProfileDocument_IsStorable(t *testing.T) {
 		Scheme         string `json:"scheme"`
 		BindPort       int    `json:"bind_port"`
 		BeaconHost     string `json:"beacon_host"`
+		BeaconScheme   string `json:"beacon_scheme"`
 		URIs           map[string][]string
 		RequestHeaders []struct {
 			Name  string `json:"name"`
@@ -45,6 +46,11 @@ func TestDefaultHTTPProfileDocument_IsStorable(t *testing.T) {
 	}
 	if parsed.BeaconHost == "" {
 		t.Error("beacon_host is empty, so the builder refuses to build a beacon from the default")
+	}
+	// The served listener is http, but the beacon must DIAL https so builds from the
+	// default are HTTPS through a Cloudflare front with no certificate to manage.
+	if parsed.BeaconScheme != "https" {
+		t.Errorf("beacon_scheme = %q, want https (Cloudflare HTTPS default)", parsed.BeaconScheme)
 	}
 	for _, operation := range []string{"register", "task", "result", "ack"} {
 		if len(parsed.URIs[operation]) == 0 {

@@ -198,8 +198,8 @@ func TestHTTPListenerSpecFromDocument_MapsBeaconFields(t *testing.T) {
 		t.Fatalf("httpListenerSpecFromDocument() error = %v", err)
 	}
 
-	if spec.Scheme != "http" {
-		t.Errorf("scheme = %q, want http", spec.Scheme)
+	if spec.Scheme != "https" {
+		t.Errorf("scheme = %q, want https (default dials Cloudflare)", spec.Scheme)
 	}
 	if spec.Host == "" {
 		t.Error("host is empty: the spec would not name where the beacon dials")

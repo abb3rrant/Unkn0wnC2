@@ -406,16 +406,28 @@ func (api *APIServer) httpListenerSpecs(names []string) ([]HTTPListenerSpec, err
 	return specs, nil
 }
 
+// beaconDialScheme returns the scheme a beacon uses to dial a listener: the
+// operator-declared beacon_scheme when set, otherwise the served scheme. Served
+// scheme is the fallback so existing profiles (which never set beacon_scheme) are
+// unaffected. A lone bare value is normalized to lowercase.
+func beaconDialScheme(served, beacon string) string {
+	if scheme := strings.TrimSpace(beacon); scheme != "" {
+		return strings.ToLower(scheme)
+	}
+	return strings.ToLower(served)
+}
+
 // httpListenerSpecFromDocument maps a stored profile document onto the fields a
 // beacon embeds. Listener-only fields (bind address, certificate paths) stay
 // behind: the beacon never uses them.
 func httpListenerSpecFromDocument(document string) (HTTPListenerSpec, error) {
 	var parsed struct {
-		Name       string `json:"name"`
-		Scheme     string `json:"scheme"`
-		BeaconHost string `json:"beacon_host"`
-		HostHeader string `json:"host_header"`
-		TLS        struct {
+		Name         string `json:"name"`
+		Scheme       string `json:"scheme"`
+		BeaconHost   string `json:"beacon_host"`
+		BeaconScheme string `json:"beacon_scheme"`
+		HostHeader   string `json:"host_header"`
+		TLS          struct {
 			SPKISHA256 string `json:"spki_sha256"`
 		} `json:"tls"`
 		URIs           map[string][]string    `json:"uris"`
@@ -434,8 +446,10 @@ func httpListenerSpecFromDocument(document string) (HTTPListenerSpec, error) {
 	}
 
 	return HTTPListenerSpec{
-		Name:           parsed.Name,
-		Scheme:         parsed.Scheme,
+		Name: parsed.Name,
+		// The beacon dials beacon_scheme when the operator fronted the listener with a
+		// TLS-terminating proxy (Cloudflare); otherwise it uses the served scheme.
+		Scheme:         beaconDialScheme(parsed.Scheme, parsed.BeaconScheme),
 		Host:           parsed.BeaconHost,
 		HostHeader:     parsed.HostHeader,
 		SPKISHA256:     parsed.TLS.SPKISHA256,
