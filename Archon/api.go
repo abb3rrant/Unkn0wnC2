@@ -561,9 +561,22 @@ func (api *APIServer) dnsServerAuthMiddleware(next http.Handler) http.Handler {
 			// Restore the body for the handler to read
 			r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 		} else {
-			// Try query parameters for GET requests
-			dnsServerID = r.URL.Query().Get("dns_server_id")
-			apiKey = r.URL.Query().Get("api_key")
+			// Header credentials keep newly generated GET URLs out of access logs.
+			// Retain query authentication for older peers, but never allow a
+			// conflicting query identity to differ from the authenticated header.
+			queryID := r.URL.Query().Get("dns_server_id")
+			dnsServerID = r.Header.Get("X-DNS-Server-ID")
+			if dnsServerID != "" && queryID != "" && dnsServerID != queryID {
+				api.sendError(w, http.StatusUnauthorized, "conflicting server identity")
+				return
+			}
+			if dnsServerID == "" {
+				dnsServerID = queryID
+			}
+			apiKey = r.Header.Get("X-DNS-Server-API-Key")
+			if apiKey == "" {
+				apiKey = r.URL.Query().Get("api_key")
+			}
 		}
 
 		if dnsServerID == "" || apiKey == "" {

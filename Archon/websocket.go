@@ -29,11 +29,13 @@ type WebSocketHub struct {
 
 // WebSocketClient represents a connected WebSocket client
 type WebSocketClient struct {
-	hub      *WebSocketHub
-	conn     *websocket.Conn
-	send     chan []byte
-	userID   string
-	username string
+	hub       *WebSocketHub
+	conn      *websocket.Conn
+	send      chan []byte
+	userID    string
+	username  string
+	authorize func() bool
+	expiresAt time.Time
 }
 
 // WSMessage represents a WebSocket message
@@ -161,52 +163,85 @@ func (c *WebSocketClient) readPump() {
 	}
 }
 
-// writePump sends messages to the WebSocket connection
+// sessionAuthorized fails closed and sends a policy close before terminating.
+// It is called only by the write pump, including before each queued event.
+func (c *WebSocketClient) sessionAuthorized() bool {
+	if c.authorize != nil && c.authorize() {
+		return true
+	}
+	_ = c.conn.WriteControl(websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "session is no longer authorized"),
+		time.Now().Add(10*time.Second))
+	return false
+}
+
+// writePump rechecks authorization before every event and while idle. Expiry has
+// its own timer so heartbeat pongs cannot extend a JWT's authorization lifetime.
 func (c *WebSocketClient) writePump() {
 	ticker := time.NewTicker(30 * time.Second)
+	authorizationTicker := time.NewTicker(5 * time.Second)
 	defer func() {
 		ticker.Stop()
+		authorizationTicker.Stop()
 		c.conn.Close()
 	}()
-
+	var expires <-chan time.Time
+	if !c.expiresAt.IsZero() {
+		timer := time.NewTimer(time.Until(c.expiresAt))
+		defer timer.Stop()
+		expires = timer.C
+	}
+	if !c.sessionAuthorized() {
+		return
+	}
 	for {
 		select {
 		case message, ok := <-c.send:
+			if !c.sessionAuthorized() {
+				return
+			}
 			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if !ok {
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
-
-			w, err := c.conn.NextWriter(websocket.TextMessage)
-			if err != nil {
+			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
 				return
 			}
-			w.Write(message)
-			if err := w.Close(); err != nil {
+		case <-authorizationTicker.C:
+			if !c.sessionAuthorized() {
 				return
 			}
-
-			// Send remaining queued messages as separate frames
-			n := len(c.send)
-			for i := 0; i < n; i++ {
-				w, err := c.conn.NextWriter(websocket.TextMessage)
-				if err != nil {
-					return
-				}
-				w.Write(<-c.send)
-				if err := w.Close(); err != nil {
-					return
-				}
-			}
-
+		case <-expires:
+			c.sessionAuthorized()
+			return
 		case <-ticker.C:
+			if !c.sessionAuthorized() {
+				return
+			}
 			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}
 		}
 	}
+}
+
+// websocketSessionAuthorized deliberately bypasses the revocation cache. A
+// persistent session must exist, belong to this operator, and remain active.
+func (api *APIServer) websocketSessionAuthorized(claims *Claims) bool {
+	if claims.JTI == "" || claims.ExpiresAt == nil || !time.Now().Before(claims.ExpiresAt.Time) {
+		return false
+	}
+	var allowed bool
+	err := api.db.db.QueryRow(`
+		SELECT EXISTS (
+			SELECT 1 FROM sessions s JOIN operators o ON o.id = s.operator_id
+			WHERE s.jti = ? AND s.operator_id = ? AND s.is_revoked = 0
+			AND s.expires_at > ? AND o.is_active = 1
+		)
+	`, claims.JTI, claims.OperatorID, time.Now().Unix()).Scan(&allowed)
+	return err == nil && allowed
 }
 
 // handleWebSocket handles WebSocket upgrade requests
@@ -232,12 +267,9 @@ func (api *APIServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if claims.JTI != "" {
-		isRevoked, err := api.db.IsSessionRevoked(claims.JTI)
-		if err != nil || isRevoked {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
+	if !api.websocketSessionAuthorized(claims) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
 	}
 
 	operator, err := api.db.GetOperator(claims.OperatorID)
@@ -253,11 +285,15 @@ func (api *APIServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := &WebSocketClient{
-		hub:      wsHub,
-		conn:     conn,
-		send:     make(chan []byte, 256),
-		userID:   operator.ID,
-		username: operator.Username,
+		hub:       wsHub,
+		conn:      conn,
+		send:      make(chan []byte, 256),
+		userID:    operator.ID,
+		username:  operator.Username,
+		authorize: func() bool { return api.websocketSessionAuthorized(claims) },
+	}
+	if claims.ExpiresAt != nil {
+		client.expiresAt = claims.ExpiresAt.Time
 	}
 
 	wsHub.register <- client

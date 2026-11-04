@@ -66,7 +66,10 @@ func (api *APIServer) bootstrapURLForListener(spec HTTPListenerSpec) string {
 // The token is what authorises the hand-off, so a listener cannot enumerate other
 // beacons' profiles.
 func (api *APIServer) handleBootstrapProfile(w http.ResponseWriter, r *http.Request) {
-	token := strings.TrimSpace(r.URL.Query().Get("token"))
+	token := strings.TrimSpace(r.Header.Get("X-Bootstrap-Token"))
+	if token == "" {
+		token = strings.TrimSpace(r.URL.Query().Get("token"))
+	}
 	if token == "" {
 		token = strings.TrimSpace(r.URL.Query().Get("t"))
 	}

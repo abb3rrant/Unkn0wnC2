@@ -208,13 +208,36 @@ type APIResponse struct {
 	Data    interface{} `json:"data"`
 }
 
+// masterRequestFailure keeps the underlying error available to errors.Is/As,
+// without copying URLs or potentially secret-bearing causes into log messages.
+type masterRequestFailure struct{ cause error }
+
+func (e *masterRequestFailure) Error() string { return "master HTTP request failed" }
+func (e *masterRequestFailure) Unwrap() error { return e.cause }
+
 // doRequest performs an HTTP request to the Master Server with retry logic
 func (mc *MasterClient) doRequest(method, endpoint string, body interface{}) ([]byte, error) {
-	url := mc.masterURL + endpoint
+	parsed, err := url.Parse(mc.masterURL + endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("invalid master request URL")
+	}
+	query := parsed.Query()
+	apiKey := query.Get("api_key")
+	bootstrapToken := query.Get("token")
+	if bootstrapToken == "" {
+		bootstrapToken = query.Get("t")
+	}
+	query.Del("api_key")
+	query.Del("token")
+	query.Del("t")
+	parsed.RawQuery = query.Encode()
+	requestURL := parsed.String()
+	// Custom credential headers must never be forwarded to redirect targets.
+	client := *mc.httpClient
+	client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
 
 	// Marshal body once (reuse the JSON bytes for retries)
 	var jsonData []byte
-	var err error
 	if body != nil {
 		jsonData, err = json.Marshal(body)
 		if err != nil {
@@ -233,42 +256,48 @@ func (mc *MasterClient) doRequest(method, endpoint string, body interface{}) ([]
 			reqBody = bytes.NewBuffer(jsonData)
 		}
 
-		req, err := http.NewRequest(method, url, reqBody)
+		req, err := http.NewRequest(method, requestURL, reqBody)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create request: %w", err)
+			return nil, fmt.Errorf("failed to create master request")
 		}
 
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("User-Agent", "Unkn0wnC2-DNSServer/0.3.0")
 		req.Header.Set("X-DNS-Server-ID", mc.serverID)
+		if apiKey != "" {
+			req.Header.Set("X-DNS-Server-API-Key", apiKey)
+		}
+		if bootstrapToken != "" {
+			req.Header.Set("X-Bootstrap-Token", bootstrapToken)
+		}
 
 		// Execute request
-		resp, err := mc.httpClient.Do(req)
+		resp, err := client.Do(req)
 		if err != nil {
-			lastErr = err
+			lastErr = &masterRequestFailure{cause: err}
 			if attempt < maxRetries {
 				backoff := time.Duration(attempt*attempt) * time.Second
 				if mc.debug {
 					logf("[Master Client] Request failed (attempt %d/%d): %v, retrying in %v",
-						attempt, maxRetries, err, backoff)
+						attempt, maxRetries, lastErr, backoff)
 				}
 				time.Sleep(backoff)
 				continue
 			}
-			return nil, fmt.Errorf("request failed after %d attempts: %w", maxRetries, err)
+			return nil, fmt.Errorf("request failed after %d attempts: %w", maxRetries, lastErr)
 		}
 		// Read response body
 		respBody, err := io.ReadAll(resp.Body)
 		resp.Body.Close() // Close immediately, not deferred, to avoid leaks in retry loop
 		if err != nil {
-			return nil, fmt.Errorf("failed to read response: %w", err)
+			return nil, fmt.Errorf("failed to read master response")
 		}
 
 		// Check status code
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			if attempt < maxRetries && (resp.StatusCode == 500 || resp.StatusCode == 503) {
 				// Retry on server errors
-				lastErr = fmt.Errorf("server error: %d - %s", resp.StatusCode, string(respBody))
+				lastErr = fmt.Errorf("master server error: %d", resp.StatusCode)
 				backoff := time.Duration(attempt*attempt) * time.Second
 				if mc.debug {
 					logf("[Master Client] Server error (attempt %d/%d): %v, retrying in %v",
@@ -277,7 +306,7 @@ func (mc *MasterClient) doRequest(method, endpoint string, body interface{}) ([]
 				time.Sleep(backoff)
 				continue
 			}
-			return nil, fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(respBody))
+			return nil, fmt.Errorf("request failed with status %d", resp.StatusCode)
 		}
 
 		return respBody, nil

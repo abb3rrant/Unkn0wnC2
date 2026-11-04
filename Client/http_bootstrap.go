@@ -52,11 +52,7 @@ func fetchBootstrapProfile(bootstrapURL, token, pin string) (string, error) {
 		return "", fmt.Errorf("bootstrap url: %w", err)
 	}
 
-	query := parsed.Query()
-	query.Set("t", token)
-	parsed.RawQuery = query.Encode()
-
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
 	if parsed.Scheme == "https" && pin != "" {
 		client.Transport = &http.Transport{
 			TLSClientConfig: &tls.Config{
@@ -90,19 +86,20 @@ func fetchBootstrapProfile(bootstrapURL, token, pin string) (string, error) {
 		return "", err
 	}
 	request.Header.Set("User-Agent", "Mozilla/5.0")
+	request.Header.Set("X-Bootstrap-Token", token)
 
 	response, err := client.Do(request)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("bootstrap request failed")
 	}
 	defer func() { _ = response.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to read bootstrap response")
 	}
 	if response.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("bootstrap returned %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+		return "", fmt.Errorf("bootstrap returned status %d", response.StatusCode)
 	}
 	return string(body), nil
 }

@@ -361,14 +361,16 @@ func (t *httpTransport) roundTrip(operation, method, path string, body []byte) (
 	return readHTTPResponse(conn, t.maxBody)
 }
 
-// tlsConfig pins the listener certificate's SPKI.
-//
-// Normal verification is skipped because the listener uses a self-signed
-// certificate; the pin is what provides assurance. Verifying the pin here rather
-// than accepting the connection and checking later means a wrong certificate
-// aborts the handshake.
+// tlsConfig uses ordinary certificate and hostname verification when no pin is
+// supplied. An explicit SPKI pin replaces PKI verification for self-signed peers.
 func (t *httpTransport) tlsConfig() (*tls.Config, error) {
 	expected := t.listener.SPKISHA256
+	if expected == "" {
+		return &tls.Config{
+			ServerName: hostOnly(t.listener.Host),
+			MinVersion: tls.VersionTLS12,
+		}, nil
+	}
 
 	return &tls.Config{
 		ServerName:         hostOnly(t.listener.Host),
@@ -377,10 +379,6 @@ func (t *httpTransport) tlsConfig() (*tls.Config, error) {
 		VerifyConnection: func(state tls.ConnectionState) error {
 			if len(state.PeerCertificates) == 0 {
 				return fmt.Errorf("listener presented no certificate")
-			}
-			if expected == "" {
-				// No pin configured: the profile asked for unpinned TLS.
-				return nil
 			}
 			cert := state.PeerCertificates[0]
 			sum := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
