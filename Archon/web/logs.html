@@ -170,6 +170,7 @@
         <div class="spinner"></div>
     </div>
 
+    <a class="skip-link" href="#main-content">Skip to content</a>
     <nav class="navbar">
         <div class="navbar-brand">Unkn0wnC2</div>
         <div class="navbar-right">
@@ -182,20 +183,20 @@
         </div>
     </nav>
 
-    <div class="nav-menu">
+    <nav class="nav-menu" aria-label="Primary">
         <a href="/dashboard" class="nav-btn">Dashboard</a>
         <a href="/builder" class="nav-btn">Builder</a>
         <a href="/listeners" class="nav-btn">HTTP Listeners</a>
         <a href="/stager" class="nav-btn">Stager Sessions</a>
         <a href="/exfils" class="nav-btn">Exfils</a>
-        <a href="/logs" class="nav-btn active">Logs</a>
+        <a href="/logs" class="nav-btn active" aria-current="page">Logs</a>
         <a href="/report" class="nav-btn">Report</a>
         <a href="/users" class="nav-btn" id="usersNavBtn">Users</a>
 
 
-    </div>
+    </nav>
 
-    <div class="container">
+    <main class="container" id="main-content" tabindex="-1">
         <div class="section">
             <div class="section-header">
                 <h2 class="section-title">Log Viewer</h2>
@@ -241,7 +242,7 @@
                 </div>
             </div>
         </div>
-    </div>
+    </main>
 
     <script src="/static/shared.js"></script>
     <script>

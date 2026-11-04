@@ -414,9 +414,10 @@ func (api *APIServer) csrfMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Only check CSRF for state-changing methods
 		if r.Method == "POST" || r.Method == "PUT" || r.Method == "DELETE" || r.Method == "PATCH" {
-			// Skip CSRF check if using API authentication (Authorization header)
-			// CSRF is primarily a browser concern
-			if r.Header.Get("Authorization") != "" {
+			// Only header-authenticated requests are exempt. authMiddleware prefers
+			// the session cookie, so a header must not bypass CSRF for that request.
+			_, cookieErr := r.Cookie("session_token")
+			if cookieErr == http.ErrNoCookie && r.Header.Get("Authorization") != "" {
 				next.ServeHTTP(w, r)
 				return
 			}
