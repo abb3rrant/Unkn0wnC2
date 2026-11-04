@@ -601,6 +601,7 @@
         <div class="spinner"></div>
     </div>
 
+    <a class="skip-link" href="#main-content">Skip to content</a>
     <nav class="navbar">
         <div class="navbar-brand">Unkn0wnC2</div>
         <div class="navbar-right">
@@ -614,8 +615,8 @@
     </nav>
 
     <!-- Navigation Menu -->
-    <div class="nav-menu">
-        <a href="/dashboard" class="nav-btn active">Dashboard</a>
+    <nav class="nav-menu" aria-label="Primary">
+        <a href="/dashboard" class="nav-btn active" aria-current="page">Dashboard</a>
         <a href="/builder" class="nav-btn">Builder</a>
         <a href="/listeners" class="nav-btn">HTTP Listeners</a>
         <a href="/stager" class="nav-btn">Stager Sessions</a>
@@ -624,9 +625,9 @@
         <a href="/report" class="nav-btn">Report</a>
         <a href="/users" class="nav-btn" id="usersNavBtn">Users</a>
 
-    </div>
+    </nav>
 
-    <div class="container">
+    <main class="container" id="main-content" tabindex="-1">
         <!-- Beacon Info Header -->
         <div class="beacon-header" id="beaconHeader">
             <div class="beacon-title">Loading beacon information...</div>
@@ -766,7 +767,7 @@
             </div>
         </div>
 
-    </div>
+    </main>
 
     <script src="/static/shared.js?v=2"></script>
     <script>
