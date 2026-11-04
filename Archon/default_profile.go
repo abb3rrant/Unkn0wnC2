@@ -40,13 +40,14 @@ type defaultProfileHeader struct {
 // field order here is the order written to the document, which matters because
 // request_headers is an authoritative wire-order template.
 type defaultProfileDocumentShape struct {
-	Name       string `json:"name"`
-	Enabled    bool   `json:"enabled"`
-	BindAddr   string `json:"bind_addr"`
-	BindPort   int    `json:"bind_port"`
-	Scheme     string `json:"scheme"`
-	HostHeader string `json:"host_header"`
-	BeaconHost string `json:"beacon_host"`
+	Name         string `json:"name"`
+	Enabled      bool   `json:"enabled"`
+	BindAddr     string `json:"bind_addr"`
+	BindPort     int    `json:"bind_port"`
+	Scheme       string `json:"scheme"`
+	HostHeader   string `json:"host_header"`
+	BeaconHost   string `json:"beacon_host"`
+	BeaconScheme string `json:"beacon_scheme"`
 
 	URIs struct {
 		Register []string `json:"register"`
@@ -114,6 +115,11 @@ func defaultHTTPProfileDocument() string {
 	document.Scheme = "http"
 	document.HostHeader = ""
 	document.BeaconHost = defaultHTTPProfileBeacon
+	// The served listener stays plain http (Cloudflare terminates TLS); the beacon
+	// DIALS https to the operator's Cloudflare-fronted hostname. Set beacon_host to
+	// that hostname (e.g. cdn.example.com:443) once and builds from this profile are
+	// HTTPS through Cloudflare with no certificate to manage.
+	document.BeaconScheme = "https"
 
 	document.URIs.Register = []string{"/api/v1/ping"}
 	document.URIs.Task = []string{"/api/v1/sync"}
