@@ -531,8 +531,9 @@ func TestHTTPTransport_GETCarriesMessageInQuery(t *testing.T) {
 		t.Errorf("GET request carried a %d byte body", len(request.body))
 	}
 
-	// The signature must cover the path WITHOUT the query string, which is what
-	// the server verifies against.
+	// The signature must cover the FULL request target including the query value,
+	// so the GET message is authenticated (WIR-1). The server verifies against
+	// r.URL.RequestURI().
 	signature := request.headerValue("X-Sig")
 	timestamp, presented, found := strings.Cut(signature, ".")
 	if !found {
@@ -541,9 +542,9 @@ func TestHTTPTransport_GETCarriesMessageInQuery(t *testing.T) {
 	derivedKey := hmac.New(sha256.New, key)
 	derivedKey.Write([]byte("unkn0wnc2-http-v1"))
 	mac := hmac.New(sha256.New, derivedKey.Sum(nil))
-	mac.Write([]byte("GET\n/api/v1/sync\n" + timestamp + "\n"))
+	mac.Write([]byte("GET\n" + request.path + "\n" + timestamp + "\n"))
 	if presented != hex.EncodeToString(mac.Sum(nil)) {
-		t.Fatal("signature does not cover the query-less path")
+		t.Fatal("signature does not cover the query message (GET payload is not authenticated)")
 	}
 }
 

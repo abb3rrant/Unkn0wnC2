@@ -25,6 +25,13 @@
     "path": "/api/v1/ping",
     "timestamp": "1758500000"
   },
+  "signature_get": {
+    "body": "",
+    "expect_hex": "0bd683a9735f5729747faed62bebcd6890f77ce08927b241604416d32d77de5e",
+    "method": "GET",
+    "path": "/api/v1/sync?d=abc123",
+    "timestamp": "1758500000"
+  },
   "transport_update_dns": {
     "fallback_after_failures": 0,
     "listeners": null,

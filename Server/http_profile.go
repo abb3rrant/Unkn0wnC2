@@ -206,7 +206,7 @@ func DefaultHTTPProfile() HTTPProfile {
 			Mode:        authHMACSHA256,
 			Header:      defaultHTTPAuthHeader,
 			SigEncoding: "hex",
-			MaxSkewSecs: 300,
+			MaxSkewSecs: 60,
 		},
 		Status: ProfileStatus{
 			OK:       defaultHTTPOK,

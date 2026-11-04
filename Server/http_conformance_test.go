@@ -20,6 +20,13 @@ type conformanceVectors struct {
 		Body      string `json:"body"`
 		ExpectHex string `json:"expect_hex"`
 	} `json:"signature"`
+	SignatureGet struct {
+		Method    string `json:"method"`
+		Path      string `json:"path"`
+		Timestamp string `json:"timestamp"`
+		Body      string `json:"body"`
+		ExpectHex string `json:"expect_hex"`
+	} `json:"signature_get"`
 	Base36 struct {
 		Plaintext string `json:"plaintext"`
 		Encoded   string `json:"encoded"`
@@ -67,13 +74,23 @@ func TestHTTPTransportConformance(t *testing.T) {
 	key := generateAESKey(vectors.Passphrase)
 
 	t.Run("signature", func(t *testing.T) {
+		// POST signature over the body.
 		mac := hmac.New(sha256.New, hmacKey(key))
 		mac.Write([]byte(vectors.Signature.Method + "\n" + vectors.Signature.Path + "\n" +
 			vectors.Signature.Timestamp + "\n" + vectors.Signature.Body))
-
 		actual := hex.EncodeToString(mac.Sum(nil))
 		if actual != vectors.Signature.ExpectHex {
 			t.Fatalf("signature drifted from the shared vector:\n  computed %s\n  vector   %s", actual, vectors.Signature.ExpectHex)
+		}
+
+		// GET signature must cover the query-bearing request target (WIR-1): the
+		// path in the vector includes "?d=...", not the query-less path.
+		mac.Reset()
+		mac.Write([]byte(vectors.SignatureGet.Method + "\n" + vectors.SignatureGet.Path + "\n" +
+			vectors.SignatureGet.Timestamp + "\n" + vectors.SignatureGet.Body))
+		actualGet := hex.EncodeToString(mac.Sum(nil))
+		if actualGet != vectors.SignatureGet.ExpectHex {
+			t.Fatalf("GET signature drifted from the shared vector (query not bound):\n  computed %s\n  vector   %s", actualGet, vectors.SignatureGet.ExpectHex)
 		}
 	})
 

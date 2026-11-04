@@ -166,7 +166,7 @@ func defaultHTTPProfileDocument() string {
 	document.Auth.Mode = "hmac-sha256"
 	document.Auth.Header = "X-Sig"
 	document.Auth.SigEncoding = "hex"
-	document.Auth.MaxSkewSecs = 300
+	document.Auth.MaxSkewSecs = 60
 
 	document.Status.OK = 200
 	document.Status.Empty = 204
