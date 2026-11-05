@@ -3715,6 +3715,11 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	operatorRouter.Handle("/http/profiles", operatorWrite(http.HandlerFunc(api.handleSaveHTTPProfile))).Methods("POST")
 	operatorRouter.HandleFunc("/http/profiles/{name}", api.handleGetHTTPProfile).Methods("GET")
 	operatorRouter.Handle("/http/profiles/{name}", operatorWrite(http.HandlerFunc(api.handleDeleteHTTPProfile))).Methods("DELETE")
+	// Cover site attached to a profile: a static front served for paths that do
+	// not match the profile's C2 URIs.
+	operatorRouter.HandleFunc("/http/profiles/{name}/site", api.handleGetHTTPProfileSite).Methods("GET")
+	operatorRouter.Handle("/http/profiles/{name}/site", operatorWrite(http.HandlerFunc(api.handleSaveHTTPProfileSite))).Methods("POST")
+	operatorRouter.Handle("/http/profiles/{name}/site", operatorWrite(http.HandlerFunc(api.handleDeleteHTTPProfileSite))).Methods("DELETE")
 	operatorRouter.Handle("/http/transport", operatorWrite(http.HandlerFunc(api.handlePushTransportUpdate))).Methods("POST")
 
 	// Stager session endpoints
@@ -3754,6 +3759,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 
 	dnsRouter.HandleFunc("/register", api.handleDNSServerRegistration).Methods("POST")
 	dnsRouter.HandleFunc("/http-profiles", api.handleFetchAssignedHTTPProfiles).Methods("GET")
+	dnsRouter.HandleFunc("/http-profile-site", api.handleFetchHTTPProfileSite).Methods("GET")
 	dnsRouter.HandleFunc("/checkin", api.handleDNSServerCheckin).Methods("POST")
 	dnsRouter.HandleFunc("/beacon", api.handleBeaconReport).Methods("POST")
 	dnsRouter.HandleFunc("/bootstrap", api.handleBootstrapProfile).Methods("GET")

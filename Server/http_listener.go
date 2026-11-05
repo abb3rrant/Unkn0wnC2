@@ -28,6 +28,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -262,6 +263,11 @@ func (l *HTTPListener) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	operation := profile.OperationForPath(r.Method, r.URL.Path)
 	if operation == "" {
+		// A cover site answers only what the C2 URI table did NOT claim, so it
+		// can never shadow tasking, results or the bootstrap hand-off.
+		if l.serveStaticSite(w, r, profile) {
+			return
+		}
 		l.reject(w, profile, "", "unmatched request %s %s from %s", r.Method, r.URL.Path, clientIP)
 		return
 	}
@@ -312,6 +318,48 @@ func (l *HTTPListener) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeProfileResponse(w, profile, operation, profile.Status.OK, encoded, responseContentType(profile.ResponseBody))
+}
+
+// serveStaticSite answers a request from the profile's cover site and reports
+// whether it handled it. It is deliberately a map lookup, never a filesystem
+// access: a traversal-shaped path simply misses, and nothing outside the bundle
+// can be read.
+func (l *HTTPListener) serveStaticSite(w http.ResponseWriter, r *http.Request, profile *HTTPProfile) bool {
+	if profile.Site == nil || len(profile.Site.Files) == 0 {
+		return false
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+
+	requestPath := path.Clean("/" + r.URL.Path)
+	if requestPath == "/" || strings.HasSuffix(r.URL.Path, "/") {
+		requestPath = path.Join(requestPath, "index.html")
+	}
+
+	file, ok := profile.Site.Files[requestPath]
+	if !ok {
+		if notFound, hasNotFound := profile.Site.Files["/404.html"]; hasNotFound {
+			w.Header().Set("Content-Type", notFound.ContentType)
+			w.Header().Set("Cache-Control", "no-store")
+			w.WriteHeader(http.StatusNotFound)
+			if r.Method != http.MethodHead {
+				_, _ = w.Write(notFound.Content)
+			}
+			return true
+		}
+		http.NotFound(w, r)
+		return true
+	}
+
+	w.Header().Set("Content-Type", file.ContentType)
+	w.Header().Set("Content-Length", strconv.Itoa(len(file.Content)))
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	w.WriteHeader(http.StatusOK)
+	if r.Method != http.MethodHead {
+		_, _ = w.Write(file.Content)
+	}
+	return true
 }
 
 // readBody reads at most the profile's limit so a large body cannot exhaust

@@ -183,6 +183,15 @@
                 <button class="btn" onclick="attachProfile()">Assign</button>
                 <a class="btn" href="/listeners#profiles" style="text-decoration: none;">Manage Profiles</a>
             </div>
+            <div class="attach-row" style="margin-top: 8px;">
+                <label class="muted" for="siteFolder" style="min-width: 210px;">Cover site (optional):</label>
+                <input type="file" id="siteFolder" webkitdirectory multiple>
+                <span class="muted">
+                    A folder of static files attached to the selected profile and served by every
+                    listener that hosts it. Only paths that are not C2 URIs are served; the folder
+                    must contain <span class="mono">index.html</span> at its root.
+                </span>
+            </div>
             <div id="assignStatus" class="status-line"></div>
         </div>
     </main>
@@ -192,6 +201,7 @@
         let listenerID = '';
         let assigned = [];
         let available = [];
+        let siteFiles = {};
 
         function queryParam(name) {
             return new URLSearchParams(window.location.search).get(name) || '';
@@ -220,6 +230,7 @@
                 renderTransport(data.listener || {});
                 renderReported(data.reported_listeners || []);
 
+                await loadSites();
                 renderAssignments();
                 renderAttachPicker();
             } catch (error) {
@@ -277,6 +288,29 @@
             </table>`;
         }
 
+        async function loadSites() {
+            const entries = await Promise.all(assigned.map(async name => {
+                try {
+                    const response = await authFetch(`/api/http/profiles/${encodeURIComponent(name)}/site`);
+                    if (!response || !response.ok) return [name, []];
+                    const payload = await response.json();
+                    return [name, (payload && payload.data && payload.data.files) || []];
+                } catch (error) {
+                    return [name, []];
+                }
+            }));
+            siteFiles = Object.fromEntries(entries);
+        }
+
+        function siteSummary(name) {
+            const files = siteFiles[name] || [];
+            if (files.length === 0) return '<span class="muted">no cover site</span>';
+            const bytes = files.reduce((total, file) => total + (file.size || 0), 0);
+            const kb = Math.max(1, Math.round(bytes / 1024));
+            return `<span class="ok">cover site</span> <span class="muted">${files.length} file(s), ${kb} KB</span>` +
+                ` <button class="btn" onclick="clearSite('${escapeHtml(name)}')">Clear</button>`;
+        }
+
         function renderAssignments() {
             const container = document.getElementById('assignments');
             if (assigned.length === 0) {
@@ -287,6 +321,7 @@
             container.innerHTML = assigned.map(name => `
                 <div class="assignment-row">
                     <span class="mono">${escapeHtml(name)}</span>
+                    ${siteSummary(name)}
                     <button class="btn" onclick="detachProfile('${escapeHtml(name)}')">Remove</button>
                 </div>
             `).join('');
@@ -313,6 +348,11 @@
             }
 
             try {
+                const site = document.getElementById('siteFolder');
+                if (site && site.files && site.files.length > 0) {
+                    await uploadSite(name);
+                }
+
                 const response = await authFetch(`/api/listeners/${encodeURIComponent(listenerID)}/http-profiles`, {
                     method: 'POST',
                     body: JSON.stringify({ name: name })
@@ -329,6 +369,69 @@
                 await loadListener();
             } catch (error) {
                 setStatus('assignStatus', `Assign failed: ${error.message}`, 'status-err');
+            }
+        }
+
+        // base64FromBuffer converts file bytes for the JSON upload without
+        // spreading a large array into String.fromCharCode.apply.
+        function base64FromBuffer(buffer) {
+            const bytes = new Uint8Array(buffer);
+            let binary = '';
+            const chunkSize = 0x8000;
+            for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+                binary += String.fromCharCode.apply(null, bytes.subarray(offset, offset + chunkSize));
+            }
+            return btoa(binary);
+        }
+
+        async function uploadSite(profileName) {
+            const input = document.getElementById('siteFolder');
+            const files = Array.from(input.files || []);
+            if (files.length === 0) return;
+
+            const payload = [];
+            let total = 0;
+            for (const file of files) {
+                // webkitRelativePath is "<picked-folder>/<path>"; strip the folder
+                // so index.html lands at the site root.
+                const relative = file.webkitRelativePath || file.name;
+                const parts = relative.split('/');
+                if (parts.length > 1) parts.shift();
+                const path = parts.join('/');
+                if (!path) continue;
+
+                const buffer = await file.arrayBuffer();
+                if (buffer.byteLength > 1024 * 1024) {
+                    throw new Error(`${path} is larger than the 1 MB per-file limit`);
+                }
+                total += buffer.byteLength;
+                if (total > 8 * 1024 * 1024) {
+                    throw new Error('the folder is larger than the 8 MB site limit');
+                }
+                payload.push({ path: path, content: base64FromBuffer(buffer) });
+            }
+
+            setStatus('assignStatus', `Uploading ${payload.length} file(s) to ${profileName}...`, '');
+            const response = await authFetch(`/api/http/profiles/${encodeURIComponent(profileName)}/site`, {
+                method: 'POST',
+                body: JSON.stringify({ files: payload })
+            });
+            const result = await response.json();
+            if (!response.ok) {
+                throw new Error((result && result.message) || 'site upload failed');
+            }
+            setStatus('assignStatus', `Uploaded ${payload.length} file(s) to ${profileName}.`, 'status-ok');
+        }
+
+        async function clearSite(profileName) {
+            if (!confirm(`Remove the cover site from profile ${profileName}?`)) return;
+            try {
+                const response = await authFetch(`/api/http/profiles/${encodeURIComponent(profileName)}/site`, { method: 'DELETE' });
+                if (!response || !response.ok) throw new Error('request failed');
+                setStatus('assignStatus', `Cover site cleared from ${profileName}.`, 'status-ok');
+                await loadListener();
+            } catch (error) {
+                setStatus('assignStatus', `Clear failed: ${error.message}`, 'status-err');
             }
         }
 
