@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -119,7 +120,12 @@ func (b *Beacon) applyHTTPProfileTask(command string) {
 	if err != nil {
 		// The token is spent on Archon's side as soon as it is consumed, so a
 		// retry is pointless: the operator has to re-apply the listener.
+		fmt.Fprintf(os.Stderr, "[Beacon] profile fetch failed: %v\n", err)
 		return
 	}
-	_ = b.transport.ApplyUpdate(payload)
+	if err := b.transport.ApplyUpdate(payload); err != nil {
+		// Silent rejection was indistinguishable from a queued change that had
+		// not arrived yet; make the reason visible.
+		fmt.Fprintf(os.Stderr, "[Beacon] transport update rejected: %v\n", err)
+	}
 }
