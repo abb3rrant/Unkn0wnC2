@@ -499,6 +499,16 @@
                     <div class="help-text">Relative odds a dual beacon sends each check-in over DNS or HTTP (default 2:1, DNS-favoured). 0/0 keeps the default.</div>
                 </div>
 
+                <div class="form-group" id="clientResultTransportGroup" style="display:none;">
+                    <label class="form-label">Result Transport</label>
+                    <select id="clientResultTransport" class="form-select">
+                        <option value="auto">Auto (HTTP first, DNS fallback in dual)</option>
+                        <option value="http">Force HTTP</option>
+                        <option value="dns">Force DNS</option>
+                    </select>
+                    <div class="help-text">How command results ride home. A large DNS result splits into hundreds of small labels and can take minutes; forcing HTTP routes it in one request. Auto is the safe default and the only sensible choice for a DNS-only beacon.</div>
+                </div>
+
                 <div class="form-group" id="clientHTTPChunkGroup" style="display:none;">
                     <label class="form-label">HTTP Output Chunking</label>
                     <div class="form-row">
@@ -1154,6 +1164,8 @@
             document.getElementById('clientTransportProfilesGroup').style.display = mode === 'dns' ? 'none' : 'block';
             document.getElementById('clientTransportFallbackGroup').style.display = mode === 'dual' ? 'block' : 'none';
             document.getElementById('clientCheckinWeightGroup').style.display = mode === 'dual' ? 'block' : 'none';
+            const resultGroup = document.getElementById('clientResultTransportGroup');
+            if (resultGroup) resultGroup.style.display = mode === 'dns' ? 'none' : 'block';
             const chunkGroup = document.getElementById('clientHTTPChunkGroup');
             if (chunkGroup) chunkGroup.style.display = mode === 'dns' ? 'none' : 'block';
             updateBuildPreview();
@@ -1202,6 +1214,7 @@
             });
 
             const request = { transport: mode, http_listeners: listeners };
+            request.result_transport = document.getElementById('clientResultTransport').value || 'auto';
             if (mode === 'dual') {
                 request.http_fallback_after_failures = parseInt(document.getElementById('clientFallbackAfter').value, 10) || 3;
                 request.http_retry_backoff_secs = parseInt(document.getElementById('clientRetryBackoff').value, 10) || 60;

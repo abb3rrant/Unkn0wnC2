@@ -146,6 +146,10 @@ type ClientBuildRequest struct {
 	HTTPListeners             []HTTPListenerSpec `json:"http_listeners,omitempty"`
 	HTTPFallbackAfterFailures int                `json:"http_fallback_after_failures,omitempty"`
 	HTTPRetryBackoffSecs      int                `json:"http_retry_backoff_secs,omitempty"`
+	// ResultTransport is how command results ride home: ""/"auto" (the
+	// transport's own HTTP-first dual decision), "http" (force results over an
+	// HTTP listener), or "dns" (force over DNS).
+	ResultTransport string `json:"result_transport,omitempty"`
 
 	// HTTP result chunking. MaxPayload is the raw byte budget for one DATA chunk
 	// on an HTTP beacon; MaxBodyBytes clamps it to what the listener accepts.
@@ -353,6 +357,11 @@ func validateClientBuildRequest(req ClientBuildRequest) error {
 	}
 	if mode != "http" && len(req.DNSDomains) == 0 {
 		return fmt.Errorf("at least one DNS domain is required for %s transport", mode)
+	}
+	switch strings.ToLower(strings.TrimSpace(req.ResultTransport)) {
+	case "", "auto", "http", "dns":
+	default:
+		return fmt.Errorf("result_transport must be \"auto\", \"http\" or \"dns\", got %q", req.ResultTransport)
 	}
 	return nil
 }
@@ -1225,6 +1234,7 @@ var (
 	embeddedTransportMode     = %q
 	embeddedFallbackAfter     = %d
 	embeddedRetryBackoffSecs  = %d
+	embeddedResultTransport   = %q
 	embeddedHTTPListenersJSON = %q
 )
 
@@ -1233,6 +1243,7 @@ func getConfig() Config {
 	cfg.Transport = embeddedTransportMode
 	cfg.HTTPFallbackAfterFailures = embeddedFallbackAfter
 	cfg.HTTPRetryBackoffSecs = embeddedRetryBackoffSecs
+	cfg.ResultTransport = embeddedResultTransport
 
 	if embeddedHTTPListenersJSON != "" {
 		var listeners []HTTPListener
@@ -1252,7 +1263,7 @@ func getConfig() Config {
 		pollQT, pollEnc, pollMaxPayload, pollPayloadFmt, pollACKIP,
 		pollTaskIP, txtFollowUp,
 		exfilQT, exfilEnc, exfilMaxPayload, exfilPayloadFmt, exfilACKIP,
-		transportMode, req.HTTPFallbackAfterFailures, req.HTTPRetryBackoffSecs, listenersJSON)
+		transportMode, req.HTTPFallbackAfterFailures, req.HTTPRetryBackoffSecs, req.ResultTransport, listenersJSON)
 
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		return "", fmt.Errorf("failed to write config: %w", err)

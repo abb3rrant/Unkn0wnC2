@@ -2226,8 +2226,15 @@ func (c2 *C2Manager) authorizeBeaconControl(parts []string, encrypted bool) bool
 		if len(parts) < 3 {
 			return false
 		}
-		task, ok := c2.tasks[parts[2]]
-		return ok && task.BeaconID == beaconID
+		if task, ok := c2.tasks[parts[2]]; ok {
+			// Known locally: the task must belong to this beacon.
+			return task.BeaconID == beaconID
+		}
+		// Shadow Mesh / dual: a result can reach a listener that has not synced
+		// the task yet, or never delivered it. The beacon is registered and
+		// auth-mode valid at this point; the Master is the authoritative store
+		// and enforces task-to-beacon ownership on store and completion.
+		return true
 	default:
 		return true
 	}

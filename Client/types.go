@@ -81,6 +81,12 @@ type Config struct {
 	// and one third over HTTP listeners.
 	CheckinDNSWeight  int
 	CheckinHTTPWeight int
+	// ResultTransport is how command results are carried back. It lets an
+	// operator override the transport-level HTTP-first decision for results,
+	// which on a dual beacon can otherwise ride the slow DNS path for a large
+	// result. "" or "auto" keeps the current behaviour, "http" forces results
+	// over an HTTP listener, "dns" forces them over DNS.
+	ResultTransport string
 }
 
 // HTTPBodyCodec describes how an HTTP request or response body is encoded.

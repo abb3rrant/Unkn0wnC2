@@ -2210,6 +2210,20 @@ func (api *APIServer) handleSubmitResult(w http.ResponseWriter, r *http.Request)
 
 	dnsServerID := r.Header.Get("X-DNS-Server-ID")
 
+	// Shadow Mesh / dual: results may be relayed by a listener that did not
+	// deliver the task, and a listener may not have synced it yet. Enforce
+	// task-to-beacon ownership here, the authoritative store, so a beacon
+	// cannot write results into another beacon's task.
+	task, taskErr := api.db.GetTaskWithResult(req.TaskID)
+	if taskErr != nil {
+		api.sendError(w, http.StatusNotFound, "task not found")
+		return
+	}
+	if task.BeaconID != req.BeaconID {
+		api.sendError(w, http.StatusForbidden, "result does not belong to this beacon")
+		return
+	}
+
 	// Store the result chunk in master database
 	err := api.db.SaveResultChunk(
 		req.TaskID,
@@ -2267,6 +2281,17 @@ func (api *APIServer) handleResultComplete(w http.ResponseWriter, r *http.Reques
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		api.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Enforce task-to-beacon ownership before completing (see handleSubmitResult).
+	task, taskErr := api.db.GetTaskWithResult(req.TaskID)
+	if taskErr != nil {
+		api.sendError(w, http.StatusNotFound, "task not found")
+		return
+	}
+	if task.BeaconID != req.BeaconID {
+		api.sendError(w, http.StatusForbidden, "completion does not belong to this beacon")
 		return
 	}
 
