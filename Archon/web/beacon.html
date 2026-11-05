@@ -665,15 +665,17 @@
             </div>
         </div>
 
-        <!-- Transport: which domains and listeners this beacon can reach -->
+        <!-- Transport: endpoints the beacon may use; the mode follows the selection -->
         <div class="section">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
                 <h2 class="section-title" style="margin: 0;">Transport</h2>
-                <span id="beaconTransportSummary" style="font-size: 12px; color: #888;"></span>
+                <span id="beaconTransportActive" style="font-size: 12px; color: #888;">Active: …</span>
             </div>
+            <div id="beaconTransportSummary" style="font-size: 11px; color: #666; margin-bottom: 8px;"></div>
             <div style="font-size: 12px; color: #888; margin-bottom: 14px;">
-                DNS domains carry tasking through the mesh; HTTP listeners carry it in requests.
-                Apply a listener to move the beacon without rebuilding it.
+                Check the DNS domains and HTTP listeners this beacon may use. The mode follows the
+                selection: only DNS → DNS, only HTTP → HTTP, both → dual. At least one endpoint must
+                stay selected.
             </div>
 
             <div class="transport-block">
@@ -696,13 +698,9 @@
                 </div>
             </div>
 
-            <div class="task-form" style="margin-bottom: 0; margin-top: 14px;">
-                <select id="beaconTransportMode" class="task-input" style="max-width: 160px; font-family: inherit;">
-                    <option value="http">http</option>
-                    <option value="dual">dual</option>
-                    <option value="dns">dns (no HTTP)</option>
-                </select>
-                <button class="btn-task" onclick="applyBeaconHTTPListeners()">Apply To Beacon</button>
+            <div class="task-form" style="margin-bottom: 0; margin-top: 14px; align-items: center;">
+                <span id="beaconTransportComputed" style="font-size: 12px; color: #888;">Selected: …</span>
+                <button class="btn-task" id="beaconTransportApply" onclick="applyBeaconTransport()" disabled>Apply To Beacon</button>
             </div>
             <div id="beaconHTTPStatus" style="font-size: 12px; margin-top: 8px;"></div>
         </div>
@@ -811,46 +809,154 @@
 
                 if (domains.length === 0) {
                     container.innerHTML = '<span style="color: #555;">No domains available. Beacon will register domains on next check-in.</span>';
+                    domainSnapshot = {};
                 } else {
+                    domainSnapshot = {};
                     container.innerHTML = domains.map(d => {
-                        const checked = d.active ? 'checked' : '';
-                        const color = d.active ? '#4CAF50' : '#666';
-                        const label = d.active ? '' : ' (inactive)';
-                        return `<label style="display: flex; align-items: center; gap: 8px; padding: 5px; cursor: pointer; color: ${color};">
-                            <input type="checkbox" ${checked} data-domain="${escapeHtml(d.domain)}" onchange="toggleBeaconDomain(this)" style="width: 14px; height: 14px;">
-                            ${escapeHtml(d.domain)}${label}
+                        domainSnapshot[d.domain] = !!d.active;
+                        return `<label style="display: flex; align-items: center; gap: 8px; padding: 5px; cursor: pointer; color: #ddd;">
+                            <input type="checkbox" ${d.active ? 'checked' : ''} data-domain="${escapeHtml(d.domain)}" onchange="onTransportSelectionChange()" style="width: 14px; height: 14px;">
+                            ${escapeHtml(d.domain)}
                         </label>`;
                     }).join('');
                 }
+                applyActiveMarkers();
+                updateTransportComputed();
+                transportDirty = false;
             } catch (error) {
                 console.error('Failed to load beacon domains:', error);
             }
         }
 
-        async function toggleBeaconDomain(checkbox) {
-            const domain = checkbox.dataset.domain;
-            const active = checkbox.checked;
+        // ---- Transport selection: the mode is derived from the endpoints kept ----
+        let domainSnapshot = {};
+        let transportInitialized = false;
+        let transportDirty = false;
+        let transportActiveInterval = null;
+        let activeDomainSet = new Set();
+        let activeListenerSet = new Set();
 
+        function selectedDomains() {
+            return Array.from(document.querySelectorAll('#beaconDomainsContainer input[type=checkbox]:checked'))
+                .map(box => box.dataset.domain);
+        }
+
+        function selectedListeners() {
+            return Array.from(document.querySelectorAll('#beaconHTTPListenersContainer input[type=checkbox]:checked'))
+                .map(box => box.dataset.listener);
+        }
+
+        // The operator never picks a mode: the endpoints they keep selected define
+        // it (DNS only, HTTP only, or both -> dual).
+        function computeTransportMode() {
+            const dnsCount = selectedDomains().length;
+            const httpCount = selectedListeners().length;
+            if (dnsCount > 0 && httpCount > 0) return 'dual';
+            if (dnsCount > 0) return 'dns';
+            if (httpCount > 0) return 'http';
+            return '';
+        }
+
+        function onTransportSelectionChange() {
+            transportDirty = true;
+            updateTransportComputed();
+        }
+
+        function updateTransportComputed() {
+            const label = document.getElementById('beaconTransportComputed');
+            const button = document.getElementById('beaconTransportApply');
+            if (!label || !button) return;
+
+            const mode = computeTransportMode();
+            const dnsCount = selectedDomains().length;
+            const httpCount = selectedListeners().length;
+
+            if (!mode) {
+                label.style.color = '#ff6b6b';
+                label.textContent = 'Select at least one DNS domain or HTTP listener.';
+                button.disabled = true;
+                return;
+            }
+            const name = mode === 'dual' ? 'Dual' : mode === 'dns' ? 'DNS only' : 'HTTP only';
+            label.style.color = '#888';
+            label.textContent = `Selected: ${name} (${dnsCount} DNS · ${httpCount} HTTP)`;
+            button.disabled = false;
+        }
+
+        // Mirror the endpoints the beacon is actually contacting into the checkbox
+        // selection, unless the operator has unsaved edits.
+        function syncSelectionToActive() {
+            if (activeDomainSet.size === 0 && activeListenerSet.size === 0) return;
+            document.querySelectorAll('#beaconDomainsContainer input[type=checkbox]').forEach(box => {
+                box.checked = activeDomainSet.has(box.dataset.domain);
+            });
+            document.querySelectorAll('#beaconHTTPListenersContainer input[type=checkbox]').forEach(box => {
+                box.checked = activeListenerSet.has(box.dataset.listener);
+            });
+            updateTransportComputed();
+        }
+
+        // Dim endpoints the beacon is not currently contacting.
+        function applyActiveMarkers() {
+            document.querySelectorAll('#beaconDomainsContainer input[type=checkbox]').forEach(box => {
+                const active = activeDomainSet.has(box.dataset.domain);
+                box.title = active ? 'active' : 'no recent contact';
+                const label = box.closest('label');
+                if (label) label.style.opacity = active ? '1' : '0.55';
+            });
+            document.querySelectorAll('#beaconHTTPListenersContainer input[type=checkbox]').forEach(box => {
+                const active = activeListenerSet.has(box.dataset.listener);
+                box.title = active ? 'active' : 'no recent contact';
+                const label = box.closest('label');
+                if (label) label.style.opacity = active ? '1' : '0.55';
+            });
+        }
+
+        // The Active badge and the endpoint markers come from contact history, so
+        // they follow the beacon as it checks in over DNS and/or HTTP.
+        async function loadTransportActive() {
+            if (!currentBeaconId) return;
             try {
-                const response = await authFetch(`/api/beacons/${currentBeaconId}/domains`, {
-                    method: 'PUT',
-                    body: JSON.stringify({ domain, active })
-                });
-                if (!response) {
-                    checkbox.checked = !active; // revert
-                    return;
+                const [dnsResponse, httpResponse] = await Promise.all([
+                    authFetch(`/api/beacons/${currentBeaconId}/dns-contacts`),
+                    authFetch(`/api/beacons/${currentBeaconId}/http-contacts`)
+                ]);
+                const dnsContacts = dnsResponse && dnsResponse.ok ? await dnsResponse.json() : [];
+                const httpContacts = httpResponse && httpResponse.ok ? await httpResponse.json() : [];
+
+                activeDomainSet = new Set((dnsContacts || [])
+                    .filter(c => c.dns_status === 'active')
+                    .map(c => c.dns_domain));
+                activeListenerSet = new Set((httpContacts || [])
+                    .filter(c => c.status === 'active')
+                    .map(c => c.listener_name));
+
+                const pill = document.getElementById('beaconTransportActive');
+                if (pill) {
+                    const hasDns = activeDomainSet.size > 0;
+                    const hasHttp = activeListenerSet.size > 0;
+                    if (!hasDns && !hasHttp) {
+                        pill.style.color = '#888';
+                        pill.textContent = 'Active: no recent contact';
+                    } else {
+                        const name = hasDns && hasHttp ? 'Dual' : hasDns ? 'DNS only' : 'HTTP only';
+                        pill.style.color = '#4CAF50';
+                        pill.textContent = `Active: ${name} (${activeDomainSet.size} DNS · ${activeListenerSet.size} HTTP)`;
+                    }
                 }
-                const result = await response.json();
-                if (!result.success) {
-                    showToast(result.message || 'Failed to update domain', 'error');
-                    checkbox.checked = !active; // revert
-                    return;
+
+                applyActiveMarkers();
+
+                // On first load, and whenever the operator has no unsaved edits,
+                // whatever the beacon is actually using is selected.
+                if (!transportInitialized) {
+                    transportInitialized = true;
+                    syncSelectionToActive();
+                } else if (!transportDirty) {
+                    syncSelectionToActive();
                 }
-                showToast(result.message, 'success');
-                loadBeaconDomains(); // refresh to show updated state
             } catch (error) {
-                showToast('Failed to update domain', 'error');
-                checkbox.checked = !active; // revert
+                console.error('Failed to load active transport:', error);
             }
         }
 
@@ -888,40 +994,58 @@
 
             container.innerHTML = listeners.map(listener => {
                 const checked = listener.active ? 'checked' : '';
-                const color = listener.active ? '#4CAF50' : '#ccc';
                 const target = listener.beacon_host ? `${listener.scheme || 'http'}://${listener.beacon_host}` : 'no beacon_host';
                 const disabled = listener.enabled === false ? ' <span style="color:#ff6b6b;">(disabled)</span>' : '';
-                return `<label style="display: flex; align-items: center; gap: 8px; padding: 5px; cursor: pointer; color: ${color};">
-                    <input type="checkbox" ${checked} data-listener="${escapeHtml(listener.name)}" style="width: 14px; height: 14px;">
+                return `<label style="display: flex; align-items: center; gap: 8px; padding: 5px; cursor: pointer; color: #ddd;">
+                    <input type="checkbox" ${checked} data-listener="${escapeHtml(listener.name)}" onchange="onTransportSelectionChange()" style="width: 14px; height: 14px;">
                     <span style="font-family: 'Courier New', monospace;">${escapeHtml(listener.name)}</span>
                     <span style="color: #666; font-size: 11px;">${escapeHtml(target)}</span>${disabled}
                 </label>`;
             }).join('');
 
-            const modeSelect = document.getElementById('beaconTransportMode');
-            if (modeSelect && beaconHTTPTransport) {
-                modeSelect.value = beaconHTTPTransport;
+            applyActiveMarkers();
+            updateTransportComputed();
+            transportDirty = false;
+        }
+
+        // Persist the checked domains, then push the transport that follows from
+        // them. Domains go first because the transport endpoint refuses a DNS-only
+        // switch with no active domain.
+        async function persistDomains(selected) {
+            const wanted = new Set(selected);
+            for (const domain of Object.keys(domainSnapshot)) {
+                const active = wanted.has(domain);
+                if (!!domainSnapshot[domain] === active) continue;
+                const response = await authFetch(`/api/beacons/${currentBeaconId}/domains`, {
+                    method: 'PUT',
+                    body: JSON.stringify({ domain: domain, active: active })
+                });
+                if (!response || !response.ok) {
+                    throw new Error(`failed to update domain ${domain}`);
+                }
+                domainSnapshot[domain] = active;
             }
         }
 
-        async function applyBeaconHTTPListeners() {
-            const mode = document.getElementById('beaconTransportMode').value;
+        async function applyBeaconTransport() {
             const status = document.getElementById('beaconHTTPStatus');
-
-            // DNS mode carries no listeners: it is the explicit "stop using HTTP"
-            // action, which also re-enables nothing on the BOF card.
-            const names = mode === 'dns'
-                ? []
-                : Array.from(document.querySelectorAll('#beaconHTTPListenersContainer input[type=checkbox]:checked'))
-                    .map(box => box.dataset.listener);
-
-            if (mode !== 'dns' && names.length === 0) {
+            const mode = computeTransportMode();
+            if (!mode) {
                 status.style.color = '#ff6b6b';
-                status.textContent = 'Select at least one listener.';
+                status.textContent = 'Select at least one DNS domain or HTTP listener.';
                 return;
             }
 
+            // DNS mode carries no listeners; anything else carries the selection.
+            const names = mode === 'dns' ? [] : selectedListeners();
+            const domains = selectedDomains();
+
             try {
+                status.style.color = '#888';
+                status.textContent = 'Applying…';
+
+                await persistDomains(domains);
+
                 const response = await authFetch(`/api/beacons/${currentBeaconId}/http-listeners`, {
                     method: 'POST',
                     body: JSON.stringify({ names: names, mode: mode })
@@ -934,9 +1058,12 @@
                 }
 
                 status.style.color = '#4CAF50';
-                status.textContent = `Queued: ${mode} with ${names.length} listener(s). The beacon applies it on its next poll.`;
+                status.textContent = `Queued: ${mode}. The beacon applies it on its next poll; the Active badge confirms it.`;
                 showToast('Transport update queued', 'success');
-                loadBeaconHTTPListeners();
+                transportDirty = false;
+                await loadBeaconDomains();
+                await loadBeaconHTTPListeners();
+                await loadTransportActive();
             } catch (error) {
                 status.style.color = '#ff6b6b';
                 status.textContent = 'Apply failed: ' + error.message;
@@ -1867,6 +1994,8 @@
                 await loadBeaconInfo();
                 await loadBeaconDomains();
                 await loadBeaconHTTPListeners();
+                // Select what the beacon is actually using before the operator edits.
+                await loadTransportActive();
 
                 // Set up event delegation for task actions once (not inside loadTasks)
                 document.getElementById('tasksList').addEventListener('click', function(e) {
@@ -1898,6 +2027,10 @@
 
             // Auto-refresh tasks every 5 seconds
             startAutoRefresh();
+
+            // Keep the Active badge and endpoint markers current as check-ins land.
+            if (transportActiveInterval) clearInterval(transportActiveInterval);
+            transportActiveInterval = setInterval(loadTransportActive, 10000);
 
             // WebSocket handlers for real-time updates
             ws.on('task_update', (payload) => {
@@ -1973,6 +2106,9 @@
         window.addEventListener('beforeunload', () => {
             if (autoRefreshInterval) {
                 clearInterval(autoRefreshInterval);
+            }
+            if (transportActiveInterval) {
+                clearInterval(transportActiveInterval);
             }
         });
 
