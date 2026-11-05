@@ -154,6 +154,7 @@ func (b *Beacon) checkIn() (string, error) {
 			if err != nil {
 				return "", fmt.Errorf("HTTP poll failed: %v", err)
 			}
+			fmt.Fprintf(os.Stderr, "[Beacon] checkin via http\n")
 			if response == "REREG" {
 				b.regStage.Store(0)
 				return "", nil
@@ -168,6 +169,10 @@ func (b *Beacon) checkIn() (string, error) {
 			response, err := b.client.sendPhaseCommand(pollData, pollPhase.PhaseConfig)
 			if err != nil {
 				return "", fmt.Errorf("poll failed: %v", err)
+			}
+			// In dual mode the dual branch above already logged the DNS choice.
+			if b.transport == nil || b.transport.Mode() != transportDual {
+				fmt.Fprintf(os.Stderr, "[Beacon] checkin via dns\n")
 			}
 
 			if response == pollPhase.ARecordTaskIP {
@@ -236,6 +241,9 @@ func (b *Beacon) checkIn() (string, error) {
 		if response == "REREG" {
 			b.regStage.Store(0)
 		} else {
+			if !pollViaDNS {
+				fmt.Fprintf(os.Stderr, "[Beacon] checkin via dns\n")
+			}
 			return response, nil
 		}
 		stage = 0
