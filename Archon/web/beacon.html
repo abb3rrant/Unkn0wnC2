@@ -1768,6 +1768,11 @@
                     
                     // Reload tasks immediately
                     await loadTasks();
+                    // Open the new task so its status and output update in place
+                    // as the beacon executes it, instead of needing a click.
+                    if (result.data && result.data.task_id && selectedTaskId !== result.data.task_id) {
+                        await selectTask(result.data.task_id);
+                    }
                 } else {
                     showAlert(result.message || 'Failed to create task', 'error');
                 }
@@ -1898,6 +1903,11 @@
             ws.on('task_update', (payload) => {
                 if (payload && payload.beacon_id === currentBeaconId) {
                     loadTasks();
+                    // If the event is for the task whose output is open, refresh
+                    // the result immediately rather than waiting for the 5s poll.
+                    if (selectedTaskId && payload.task_id === selectedTaskId) {
+                        loadTaskResult(selectedTaskId);
+                    }
                 }
             });
             ws.on('beacon_update', (payload) => {

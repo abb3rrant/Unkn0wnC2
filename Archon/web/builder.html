@@ -468,9 +468,9 @@
                     <select id="clientTransport" class="form-select" onchange="onTransportChange()">
                         <option value="dns">DNS only (default)</option>
                         <option value="http">HTTP/HTTPS only</option>
-                        <option value="dual">Dual (DNS signal, HTTP tasking)</option>
+                        <option value="dual">Dual (DNS + HTTP, weighted check-ins)</option>
                     </select>
-                    <div class="help-text">Dual uses DNS only to signal that a task is ready; the task and its results travel over HTTP.</div>
+                    <div class="help-text">Dual proves both transports at registration, then sends each check-in over DNS or HTTP (default 2:1, DNS-favoured). Tasks travel over whichever listener is checked in; results follow the Result Transport setting.</div>
                 </div>
 
                 <div class="form-group" id="clientTransportProfilesGroup" style="display:none;">
