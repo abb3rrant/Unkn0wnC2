@@ -949,7 +949,7 @@ func TestTransportManager_ApplyUpdate(t *testing.T) {
 	key := testKey()
 	listener := testListener("127.0.0.1:1", nil)
 
-	manager := newTransportManager(&Config{Transport: "dns"}, key)
+	manager := newTransportManager(&Config{Transport: "dns", DNSDomains: []string{"example.test"}}, key)
 	if manager.Mode() != transportDNS {
 		t.Fatalf("initial mode = %q, want dns", manager.Mode())
 	}

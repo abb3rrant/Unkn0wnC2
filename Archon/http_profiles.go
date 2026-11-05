@@ -391,6 +391,13 @@ func normalizeHTTPProfileDocument(name, document string) (string, error) {
 // is exactly the document shape the beacon's ApplyUpdate expects, and reuses the
 // stored listener list so a runtime change and a build cannot disagree.
 func buildTransportUpdatePayload(mode string, listeners []HTTPListenerSpec, fallbackAfterFailures, retryBackoffSecs int) (string, error) {
+	return buildTransportUpdatePayloadWithWeights(mode, listeners, fallbackAfterFailures, retryBackoffSecs, nil, nil)
+}
+
+// buildTransportUpdatePayloadWithWeights is buildTransportUpdatePayload plus an
+// optional runtime retune of the dual check-in split. Nil weights keep the
+// beacon's build-time values; an explicit 0 disables that class.
+func buildTransportUpdatePayloadWithWeights(mode string, listeners []HTTPListenerSpec, fallbackAfterFailures, retryBackoffSecs int, dnsWeight, httpWeight *int) (string, error) {
 	normalized := strings.ToLower(strings.TrimSpace(mode))
 	switch normalized {
 	case "dns", "http", "dual":
@@ -415,12 +422,26 @@ func buildTransportUpdatePayload(mode string, listeners []HTTPListenerSpec, fall
 		}
 	}
 
-	payload, err := json.Marshal(map[string]interface{}{
+	if dnsWeight != nil && *dnsWeight < 0 {
+		return "", fmt.Errorf("dns_weight must be >= 0")
+	}
+	if httpWeight != nil && *httpWeight < 0 {
+		return "", fmt.Errorf("http_weight must be >= 0")
+	}
+
+	doc := map[string]interface{}{
 		"mode":                    normalized,
 		"listeners":               listeners,
 		"fallback_after_failures": fallbackAfterFailures,
 		"retry_backoff_secs":      retryBackoffSecs,
-	})
+	}
+	if dnsWeight != nil {
+		doc["dns_weight"] = *dnsWeight
+	}
+	if httpWeight != nil {
+		doc["http_weight"] = *httpWeight
+	}
+	payload, err := json.Marshal(doc)
 	if err != nil {
 		return "", fmt.Errorf("failed to serialise transport update: %w", err)
 	}
@@ -603,13 +624,15 @@ func (api *APIServer) handlePushTransportUpdate(w http.ResponseWriter, r *http.R
 		Listeners             []HTTPListenerSpec `json:"listeners"`
 		FallbackAfterFailures int                `json:"fallback_after_failures"`
 		RetryBackoffSecs      int                `json:"retry_backoff_secs"`
+		DNSWeight             *int               `json:"dns_weight"`
+		HTTPWeight            *int               `json:"http_weight"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		api.sendError(w, 400, "invalid request body")
 		return
 	}
 
-	payload, err := buildTransportUpdatePayload(req.Mode, req.Listeners, req.FallbackAfterFailures, req.RetryBackoffSecs)
+	payload, err := buildTransportUpdatePayloadWithWeights(req.Mode, req.Listeners, req.FallbackAfterFailures, req.RetryBackoffSecs, req.DNSWeight, req.HTTPWeight)
 	if err != nil {
 		api.sendError(w, 400, err.Error())
 		return

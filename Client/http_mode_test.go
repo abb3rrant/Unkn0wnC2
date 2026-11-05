@@ -426,9 +426,11 @@ func TestRuntimeSwitch_HTTPOnlyToDNSAndBack(t *testing.T) {
 		t.Fatalf("listener saw %v, want two requests after the switch", operations)
 	}
 
-	// Switch back to DNS-only. The beacon must stop using HTTP immediately; the DNS
-	// client here has no domains, so the exchange fails, which is what proves it
-	// stopped using the listener rather than succeeding by accident.
+	// Switch back to DNS-only. Give it a domain so the switch is accepted (a
+	// domainless beacon has nowhere to call home over DNS); the lookup still fails
+	// because nothing answers it, which is what proves it stopped using the listener.
+	beacon.client.config.DNSDomains = []string{"httpmode.test"}
+	beacon.transport.RefreshDomains(1)
 	if err := beacon.transport.ApplyUpdate(`{"mode":"dns"}`); err != nil {
 		t.Fatalf("ApplyUpdate(dns) error = %v", err)
 	}
@@ -569,7 +571,10 @@ func TestTransportUpdateVectorIsAccepted(t *testing.T) {
 	}
 
 	// And the DNS-only document must switch it back, which is how an operator takes a
-	// beacon off HTTP again.
+	// beacon off HTTP again. A real beacon carries DNS domains; give this fixture
+	// one so the switch is accepted.
+	beacon.client.config.DNSDomains = []string{"httpmode.test"}
+	beacon.transport.RefreshDomains(1)
 	if err := beacon.transport.ApplyUpdate(string(vectors.DNS)); err != nil {
 		t.Fatalf("the beacon rejected Archon's DNS transport update: %v", err)
 	}
