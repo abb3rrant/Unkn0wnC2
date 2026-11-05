@@ -338,12 +338,35 @@ type TaskProgressRequest struct {
 
 // Middleware
 
+// isLargeUploadRoute reports whether the request targets an endpoint that
+// enforces its own, larger body limit after authentication. Cover-site uploads
+// legitimately carry a payload-sized image, so the global 4 MiB cap cannot apply;
+// the path is exact and the handler still bounds the body.
+func isLargeUploadRoute(r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	return strings.HasPrefix(r.URL.Path, "/api/http/profiles/") && strings.HasSuffix(r.URL.Path, "/site")
+}
+
 // requestBodyLimitMiddleware bounds every API request before authentication or
 // JSON decoding. This includes the public login and listener registration paths.
 func (api *APIServer) requestBodyLimitMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Body == nil || (r.Method != http.MethodPost && r.Method != http.MethodPut &&
 			r.Method != http.MethodPatch && r.Method != http.MethodDelete) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if isLargeUploadRoute(r) {
+			// Bound before auth so an unauthenticated client cannot stream
+			// unbounded data at this path; the handler applies the same limit
+			// again after authorization.
+			if r.ContentLength > maxSiteUploadBody {
+				api.sendError(w, http.StatusRequestEntityTooLarge, "request body too large")
+				return
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, maxSiteUploadBody)
 			next.ServeHTTP(w, r)
 			return
 		}

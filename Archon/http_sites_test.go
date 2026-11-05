@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/base64"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -182,5 +184,42 @@ func TestHTTPProfileSiteRoundTrip(t *testing.T) {
 	}
 	if got := db.HTTPProfileSiteRevision("cover"); got != 0 {
 		t.Fatalf("revision after delete = %d, want 0", got)
+	}
+}
+
+// TestSiteUploadBypassesGlobalBodyLimit proves the 4 MiB API cap does not reject
+// a legitimate site upload, while other write routes keep the cap.
+func TestSiteUploadBypassesGlobalBodyLimit(t *testing.T) {
+	api := &APIServer{}
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := api.requestBodyLimitMiddleware(next)
+
+	body := strings.Repeat("x", maxAPIRequestBodyBytes+1)
+
+	siteReq := httptest.NewRequest(http.MethodPost, "/api/http/profiles/cover/site", strings.NewReader(body))
+	siteReq.ContentLength = int64(len(body))
+	siteRec := httptest.NewRecorder()
+	handler.ServeHTTP(siteRec, siteReq)
+	if siteRec.Code != http.StatusOK {
+		t.Fatalf("site upload got %d, want 200 (global cap must not apply)", siteRec.Code)
+	}
+
+	otherReq := httptest.NewRequest(http.MethodPost, "/api/http/profiles/cover", strings.NewReader(body))
+	otherReq.ContentLength = int64(len(body))
+	otherRec := httptest.NewRecorder()
+	handler.ServeHTTP(otherRec, otherReq)
+	if otherRec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("other route got %d, want 413", otherRec.Code)
+	}
+
+	// The site route is bounded at its own limit even before authentication.
+	tooBig := httptest.NewRequest(http.MethodPost, "/api/http/profiles/cover/site", strings.NewReader("x"))
+	tooBig.ContentLength = maxSiteUploadBody + 1
+	tooBigRec := httptest.NewRecorder()
+	handler.ServeHTTP(tooBigRec, tooBig)
+	if tooBigRec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("over-limit site upload got %d, want 413", tooBigRec.Code)
 	}
 }
