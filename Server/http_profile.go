@@ -133,6 +133,19 @@ type ProfileJitter struct {
 	MaxMs int `json:"max_ms"`
 }
 
+// HTTPSiteFile is one static file belonging to a profile's cover site.
+type HTTPSiteFile struct {
+	Content     []byte
+	ContentType string
+}
+
+// HTTPSite is the cover site attached to a profile. Files are keyed by the URL
+// path they are served at, always with a leading slash.
+type HTTPSite struct {
+	Revision int64
+	Files    map[string]HTTPSiteFile
+}
+
 // HTTPProfile is one malleable HTTP/HTTPS listener.
 type HTTPProfile struct {
 	Name                string        `json:"name"`
@@ -163,6 +176,11 @@ type HTTPProfile struct {
 
 	// SourcePath is where this profile was loaded from. Not serialized.
 	SourcePath string `json:"-"`
+
+	// Site is the cover site delivered with an assigned profile. It travels on
+	// its own control-plane call and is never part of the document an operator
+	// edits, so a large asset set cannot bloat the profile editor.
+	Site *HTTPSite `json:"-"`
 }
 
 // DefaultHTTPProfile returns a profile with every field populated to a working

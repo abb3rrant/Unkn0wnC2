@@ -338,12 +338,35 @@ type TaskProgressRequest struct {
 
 // Middleware
 
+// isLargeUploadRoute reports whether the request targets an endpoint that
+// enforces its own, larger body limit after authentication. Cover-site uploads
+// legitimately carry a payload-sized image, so the global 4 MiB cap cannot apply;
+// the path is exact and the handler still bounds the body.
+func isLargeUploadRoute(r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	return strings.HasPrefix(r.URL.Path, "/api/http/profiles/") && strings.HasSuffix(r.URL.Path, "/site")
+}
+
 // requestBodyLimitMiddleware bounds every API request before authentication or
 // JSON decoding. This includes the public login and listener registration paths.
 func (api *APIServer) requestBodyLimitMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Body == nil || (r.Method != http.MethodPost && r.Method != http.MethodPut &&
 			r.Method != http.MethodPatch && r.Method != http.MethodDelete) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if isLargeUploadRoute(r) {
+			// Bound before auth so an unauthenticated client cannot stream
+			// unbounded data at this path; the handler applies the same limit
+			// again after authorization.
+			if r.ContentLength > maxSiteUploadBody {
+				api.sendError(w, http.StatusRequestEntityTooLarge, "request body too large")
+				return
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, maxSiteUploadBody)
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -3715,6 +3738,11 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	operatorRouter.Handle("/http/profiles", operatorWrite(http.HandlerFunc(api.handleSaveHTTPProfile))).Methods("POST")
 	operatorRouter.HandleFunc("/http/profiles/{name}", api.handleGetHTTPProfile).Methods("GET")
 	operatorRouter.Handle("/http/profiles/{name}", operatorWrite(http.HandlerFunc(api.handleDeleteHTTPProfile))).Methods("DELETE")
+	// Cover site attached to a profile: a static front served for paths that do
+	// not match the profile's C2 URIs.
+	operatorRouter.HandleFunc("/http/profiles/{name}/site", api.handleGetHTTPProfileSite).Methods("GET")
+	operatorRouter.Handle("/http/profiles/{name}/site", operatorWrite(http.HandlerFunc(api.handleSaveHTTPProfileSite))).Methods("POST")
+	operatorRouter.Handle("/http/profiles/{name}/site", operatorWrite(http.HandlerFunc(api.handleDeleteHTTPProfileSite))).Methods("DELETE")
 	operatorRouter.Handle("/http/transport", operatorWrite(http.HandlerFunc(api.handlePushTransportUpdate))).Methods("POST")
 
 	// Stager session endpoints
@@ -3754,6 +3782,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 
 	dnsRouter.HandleFunc("/register", api.handleDNSServerRegistration).Methods("POST")
 	dnsRouter.HandleFunc("/http-profiles", api.handleFetchAssignedHTTPProfiles).Methods("GET")
+	dnsRouter.HandleFunc("/http-profile-site", api.handleFetchHTTPProfileSite).Methods("GET")
 	dnsRouter.HandleFunc("/checkin", api.handleDNSServerCheckin).Methods("POST")
 	dnsRouter.HandleFunc("/beacon", api.handleBeaconReport).Methods("POST")
 	dnsRouter.HandleFunc("/bootstrap", api.handleBootstrapProfile).Methods("GET")

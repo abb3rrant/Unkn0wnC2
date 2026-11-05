@@ -1,0 +1,225 @@
+package main
+
+import (
+	"encoding/base64"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+func TestNormalizeSitePath(t *testing.T) {
+	valid := map[string]string{
+		"index.html":        "/index.html",
+		"./index.html":      "/index.html",
+		"/index.html":       "/index.html",
+		"assets/app.css":    "/assets/app.css",
+		`assets\app.css`:    "/assets/app.css",
+		"img/logo 2.png":    "/img/logo 2.png",
+		"fonts/inter.woff2": "/fonts/inter.woff2",
+	}
+	for input, want := range valid {
+		got, err := normalizeSitePath(input)
+		if err != nil {
+			t.Errorf("normalizeSitePath(%q) error = %v", input, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("normalizeSitePath(%q) = %q, want %q", input, got, want)
+		}
+	}
+
+	invalid := []string{
+		"",
+		"..",
+		"../index.html",
+		"a/../b.html",
+		"a//b.html",
+		"a/",
+		"/a/../b.html",
+		"a?b.html",
+		"a#b.html",
+		"a%20b.html",
+		"a:b.html",
+		"a<b.html",
+		"a\x00b.html",
+		strings.Repeat("a", 181),
+	}
+	for _, input := range invalid {
+		if got, err := normalizeSitePath(input); err == nil {
+			t.Errorf("normalizeSitePath(%q) = %q, want an error", input, got)
+		}
+	}
+}
+
+func TestValidateSiteFiles(t *testing.T) {
+	encode := func(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+
+	t.Run("valid", func(t *testing.T) {
+		records, err := validateSiteFiles([]HTTPSiteUploadFile{
+			{Path: "index.html", Content: encode("<h1>hi</h1>")},
+			{Path: "assets/app.css", Content: encode("body{}")},
+		})
+		if err != nil {
+			t.Fatalf("validateSiteFiles() error = %v", err)
+		}
+		if len(records) != 2 {
+			t.Fatalf("got %d records, want 2", len(records))
+		}
+		byPath := map[string]HTTPSiteFileRecord{}
+		for _, record := range records {
+			byPath[record.Path] = record
+		}
+		if got := byPath["/assets/app.css"]; got.ContentType != "text/css; charset=utf-8" {
+			t.Errorf("unexpected css record: %+v", got)
+		}
+		if got := byPath["/index.html"]; got.ContentType != "text/html; charset=utf-8" {
+			t.Errorf("unexpected index record: %+v", got)
+		}
+	})
+
+	t.Run("missing index", func(t *testing.T) {
+		if _, err := validateSiteFiles([]HTTPSiteUploadFile{{Path: "about.html", Content: encode("x")}}); err == nil {
+			t.Fatal("a site without index.html was accepted")
+		}
+	})
+
+	t.Run("duplicate path", func(t *testing.T) {
+		_, err := validateSiteFiles([]HTTPSiteUploadFile{
+			{Path: "index.html", Content: encode("x")},
+			{Path: "/index.html", Content: encode("y")},
+		})
+		if err == nil {
+			t.Fatal("duplicate paths were accepted")
+		}
+	})
+
+	t.Run("unsupported extension", func(t *testing.T) {
+		_, err := validateSiteFiles([]HTTPSiteUploadFile{
+			{Path: "index.html", Content: encode("x")},
+			{Path: "shell.exe", Content: encode("MZ")},
+		})
+		if err == nil {
+			t.Fatal("an executable was accepted")
+		}
+	})
+
+	t.Run("per-file limit", func(t *testing.T) {
+		limits := siteUploadLimits{MaxFiles: 10, MaxFileBytes: 4, MaxTotalBytes: 100}
+		_, err := validateSiteFilesWithLimits([]HTTPSiteUploadFile{
+			{Path: "index.html", Content: encode("x")},
+			{Path: "big.jpg", Content: encode("12345")},
+		}, limits)
+		if err == nil {
+			t.Fatal("an oversized file was accepted")
+		}
+	})
+
+	t.Run("total limit", func(t *testing.T) {
+		limits := siteUploadLimits{MaxFiles: 10, MaxFileBytes: 10, MaxTotalBytes: 12}
+		_, err := validateSiteFilesWithLimits([]HTTPSiteUploadFile{
+			{Path: "index.html", Content: encode("1234567")},
+			{Path: "big.jpg", Content: encode("1234567")},
+		}, limits)
+		if err == nil {
+			t.Fatal("a site over the total limit was accepted")
+		}
+	})
+
+	t.Run("too many files", func(t *testing.T) {
+		limits := siteUploadLimits{MaxFiles: 2, MaxFileBytes: 10, MaxTotalBytes: 100}
+		_, err := validateSiteFilesWithLimits([]HTTPSiteUploadFile{
+			{Path: "index.html", Content: encode("x")},
+			{Path: "a.txt", Content: encode("x")},
+			{Path: "b.txt", Content: encode("x")},
+		}, limits)
+		if err == nil {
+			t.Fatal("more files than the limit were accepted")
+		}
+	})
+}
+
+func TestHTTPProfileSiteRoundTrip(t *testing.T) {
+	db := newTestProfileDB(t)
+
+	first := []HTTPSiteFileRecord{
+		{Path: "/index.html", Content: []byte("<html>one</html>"), ContentType: "text/html; charset=utf-8", Size: 17, UpdatedAt: 100},
+		{Path: "/app.css", Content: []byte("body{}"), ContentType: "text/css; charset=utf-8", Size: 6, UpdatedAt: 100},
+	}
+	if err := db.SaveHTTPProfileSite("cover", first); err != nil {
+		t.Fatalf("SaveHTTPProfileSite() error = %v", err)
+	}
+
+	files, err := db.HTTPProfileSiteFiles("cover")
+	if err != nil {
+		t.Fatalf("HTTPProfileSiteFiles() error = %v", err)
+	}
+	if len(files) != 2 || files[0].Path != "/app.css" || files[1].Path != "/index.html" {
+		t.Fatalf("unexpected files: %+v", files)
+	}
+	if got := db.HTTPProfileSiteRevision("cover"); got != 100 {
+		t.Fatalf("revision = %d, want 100", got)
+	}
+
+	// Replacing must remove the files the new site does not contain.
+	if err := db.SaveHTTPProfileSite("cover", []HTTPSiteFileRecord{
+		{Path: "/index.html", Content: []byte("two"), ContentType: "text/html; charset=utf-8", Size: 3, UpdatedAt: 200},
+	}); err != nil {
+		t.Fatalf("second SaveHTTPProfileSite() error = %v", err)
+	}
+	files, _ = db.HTTPProfileSiteFiles("cover")
+	if len(files) != 1 || files[0].Path != "/index.html" {
+		t.Fatalf("replace left stale files: %+v", files)
+	}
+	if got := db.HTTPProfileSiteRevision("cover"); got != 200 {
+		t.Fatalf("revision after replace = %d, want 200", got)
+	}
+
+	if err := db.DeleteHTTPProfileSite("cover"); err != nil {
+		t.Fatalf("DeleteHTTPProfileSite() error = %v", err)
+	}
+	files, _ = db.HTTPProfileSiteFiles("cover")
+	if len(files) != 0 {
+		t.Fatalf("delete left files: %+v", files)
+	}
+	if got := db.HTTPProfileSiteRevision("cover"); got != 0 {
+		t.Fatalf("revision after delete = %d, want 0", got)
+	}
+}
+
+// TestSiteUploadBypassesGlobalBodyLimit proves the 4 MiB API cap does not reject
+// a legitimate site upload, while other write routes keep the cap.
+func TestSiteUploadBypassesGlobalBodyLimit(t *testing.T) {
+	api := &APIServer{}
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := api.requestBodyLimitMiddleware(next)
+
+	body := strings.Repeat("x", maxAPIRequestBodyBytes+1)
+
+	siteReq := httptest.NewRequest(http.MethodPost, "/api/http/profiles/cover/site", strings.NewReader(body))
+	siteReq.ContentLength = int64(len(body))
+	siteRec := httptest.NewRecorder()
+	handler.ServeHTTP(siteRec, siteReq)
+	if siteRec.Code != http.StatusOK {
+		t.Fatalf("site upload got %d, want 200 (global cap must not apply)", siteRec.Code)
+	}
+
+	otherReq := httptest.NewRequest(http.MethodPost, "/api/http/profiles/cover", strings.NewReader(body))
+	otherReq.ContentLength = int64(len(body))
+	otherRec := httptest.NewRecorder()
+	handler.ServeHTTP(otherRec, otherReq)
+	if otherRec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("other route got %d, want 413", otherRec.Code)
+	}
+
+	// The site route is bounded at its own limit even before authentication.
+	tooBig := httptest.NewRequest(http.MethodPost, "/api/http/profiles/cover/site", strings.NewReader("x"))
+	tooBig.ContentLength = maxSiteUploadBody + 1
+	tooBigRec := httptest.NewRecorder()
+	handler.ServeHTTP(tooBigRec, tooBig)
+	if tooBigRec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("over-limit site upload got %d, want 413", tooBigRec.Code)
+	}
+}

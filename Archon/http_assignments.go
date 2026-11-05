@@ -28,6 +28,9 @@ type HTTPProfileAssignment struct {
 	Name     string          `json:"name"`
 	Revision int64           `json:"revision"`
 	Document json.RawMessage `json:"document"`
+	// SiteRevision is the newest cover-site timestamp, 0 when the profile has no
+	// site. The listener fetches the site only when this is non-zero.
+	SiteRevision int64 `json:"site_revision,omitempty"`
 }
 
 // HTTPListenerStatus is the reported state of one listener on a DNS server.
@@ -155,7 +158,8 @@ func (d *MasterDatabase) GetAssignedHTTPProfileNames(dnsServerID string) ([]stri
 // do, and the server will simply stop serving it.
 func (d *MasterDatabase) GetAssignedHTTPProfiles(dnsServerID string) ([]HTTPProfileAssignment, error) {
 	rows, err := d.db.Query(`
-		SELECT a.profile_name, p.document, p.updated_at
+		SELECT a.profile_name, p.document, p.updated_at,
+		       COALESCE((SELECT MAX(s.updated_at) FROM http_profile_site_files s WHERE s.profile_name = a.profile_name), 0)
 		FROM http_profile_assignments a
 		JOIN http_profiles p ON p.name = a.profile_name
 		WHERE a.dns_server_id = ?
@@ -169,17 +173,19 @@ func (d *MasterDatabase) GetAssignedHTTPProfiles(dnsServerID string) ([]HTTPProf
 	assignments := []HTTPProfileAssignment{}
 	for rows.Next() {
 		var (
-			name     string
-			document string
-			revision int64
+			name         string
+			document     string
+			revision     int64
+			siteRevision int64
 		)
-		if err := rows.Scan(&name, &document, &revision); err != nil {
+		if err := rows.Scan(&name, &document, &revision, &siteRevision); err != nil {
 			return nil, err
 		}
 		assignments = append(assignments, HTTPProfileAssignment{
-			Name:     name,
-			Revision: revision,
-			Document: json.RawMessage(document),
+			Name:         name,
+			Revision:     revision,
+			Document:     json.RawMessage(document),
+			SiteRevision: siteRevision,
 		})
 	}
 	return assignments, rows.Err()

