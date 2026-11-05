@@ -25,14 +25,33 @@ import (
 )
 
 const (
-	maxSiteFiles      = 500
-	maxSiteFileBytes  = 1 << 20
-	maxSiteTotalBytes = 8 << 20
-	// Base64 inflates by 4/3; the extra room covers JSON framing and the
-	// per-file paths, so a request at the byte limit is rejected by the
-	// per-file/total checks rather than by a truncated decode.
-	maxSiteUploadBody = 16 << 20
+	// A cover site may double as a payload host (a smuggled image carrying a
+	// beacon can be tens of megabytes), so the limits are sized for a real
+	// delivery chain rather than a brochure site. They are still bounded: the
+	// listener keeps the site in memory and Archon decodes the upload before
+	// storing it.
+	//
+	// Base64 inflates by 4/3; the body cap leaves room for JSON framing and the
+	// per-file paths, so an over-limit upload is rejected by the per-file/total
+	// checks rather than by a truncated decode.
+	maxSiteUploadBody = 384 << 20
 )
+
+// siteUploadLimits bounds one cover-site upload. Variable so tests can exercise
+// the boundaries without allocating tens of megabytes.
+type siteUploadLimits struct {
+	MaxFiles      int
+	MaxFileBytes  int
+	MaxTotalBytes int
+}
+
+// defaultSiteUploadLimits is deliberately generous for a payload image that
+// carries a beacon: 128 MB per file, 256 MB per profile.
+var defaultSiteUploadLimits = siteUploadLimits{
+	MaxFiles:      500,
+	MaxFileBytes:  128 << 20,
+	MaxTotalBytes: 256 << 20,
+}
 
 // siteContentTypes is the allow-list. Static hosting never executes anything,
 // but restricting extensions keeps an operator from turning the profile into a
@@ -188,11 +207,15 @@ func decodeSiteContent(encoded string) ([]byte, error) {
 // records to store. index.html is required because the listener maps "/" to it;
 // a site without one would present a 404 at the front door.
 func validateSiteFiles(files []HTTPSiteUploadFile) ([]HTTPSiteFileRecord, error) {
+	return validateSiteFilesWithLimits(files, defaultSiteUploadLimits)
+}
+
+func validateSiteFilesWithLimits(files []HTTPSiteUploadFile, limits siteUploadLimits) ([]HTTPSiteFileRecord, error) {
 	if len(files) == 0 {
 		return nil, fmt.Errorf("no files were uploaded")
 	}
-	if len(files) > maxSiteFiles {
-		return nil, fmt.Errorf("too many files (%d); the limit is %d", len(files), maxSiteFiles)
+	if len(files) > limits.MaxFiles {
+		return nil, fmt.Errorf("too many files (%d); the limit is %d", len(files), limits.MaxFiles)
 	}
 
 	seen := make(map[string]bool, len(files))
@@ -215,12 +238,12 @@ func validateSiteFiles(files []HTTPSiteUploadFile) ([]HTTPSiteFileRecord, error)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", sitePath, err)
 		}
-		if len(content) > maxSiteFileBytes {
-			return nil, fmt.Errorf("%s is %d bytes; the per-file limit is %d", sitePath, len(content), maxSiteFileBytes)
+		if len(content) > limits.MaxFileBytes {
+			return nil, fmt.Errorf("%s is %d bytes; the per-file limit is %d", sitePath, len(content), limits.MaxFileBytes)
 		}
 		total += len(content)
-		if total > maxSiteTotalBytes {
-			return nil, fmt.Errorf("site exceeds the %d-byte total limit", maxSiteTotalBytes)
+		if total > limits.MaxTotalBytes {
+			return nil, fmt.Errorf("site exceeds the %d-byte total limit", limits.MaxTotalBytes)
 		}
 
 		contentType, ok := siteContentTypeFor(sitePath)

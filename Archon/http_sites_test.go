@@ -103,22 +103,35 @@ func TestValidateSiteFiles(t *testing.T) {
 	})
 
 	t.Run("per-file limit", func(t *testing.T) {
-		big := base64.StdEncoding.EncodeToString(make([]byte, maxSiteFileBytes+1))
-		_, err := validateSiteFiles([]HTTPSiteUploadFile{
+		limits := siteUploadLimits{MaxFiles: 10, MaxFileBytes: 4, MaxTotalBytes: 100}
+		_, err := validateSiteFilesWithLimits([]HTTPSiteUploadFile{
 			{Path: "index.html", Content: encode("x")},
-			{Path: "big.bin.jpg", Content: big},
-		})
+			{Path: "big.jpg", Content: encode("12345")},
+		}, limits)
 		if err == nil {
 			t.Fatal("an oversized file was accepted")
 		}
 	})
 
-	t.Run("too many files", func(t *testing.T) {
-		files := []HTTPSiteUploadFile{{Path: "index.html", Content: encode("x")}}
-		for i := 0; i < maxSiteFiles; i++ {
-			files = append(files, HTTPSiteUploadFile{Path: "f" + string(rune('a'+i%26)) + string(rune('a'+i/26)) + ".txt", Content: encode("x")})
+	t.Run("total limit", func(t *testing.T) {
+		limits := siteUploadLimits{MaxFiles: 10, MaxFileBytes: 10, MaxTotalBytes: 12}
+		_, err := validateSiteFilesWithLimits([]HTTPSiteUploadFile{
+			{Path: "index.html", Content: encode("1234567")},
+			{Path: "big.jpg", Content: encode("1234567")},
+		}, limits)
+		if err == nil {
+			t.Fatal("a site over the total limit was accepted")
 		}
-		if _, err := validateSiteFiles(files); err == nil {
+	})
+
+	t.Run("too many files", func(t *testing.T) {
+		limits := siteUploadLimits{MaxFiles: 2, MaxFileBytes: 10, MaxTotalBytes: 100}
+		_, err := validateSiteFilesWithLimits([]HTTPSiteUploadFile{
+			{Path: "index.html", Content: encode("x")},
+			{Path: "a.txt", Content: encode("x")},
+			{Path: "b.txt", Content: encode("x")},
+		}, limits)
+		if err == nil {
 			t.Fatal("more files than the limit were accepted")
 		}
 	})

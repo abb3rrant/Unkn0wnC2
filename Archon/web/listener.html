@@ -189,7 +189,8 @@
                 <span class="muted">
                     A folder of static files attached to the selected profile and served by every
                     listener that hosts it. Only paths that are not C2 URIs are served; the folder
-                    must contain <span class="mono">index.html</span> at its root.
+                    must contain <span class="mono">index.html</span> at its root. Up to 128 MB per
+                    file and 256 MB per site (one large payload image is the intended use).
                 </span>
             </div>
             <div id="assignStatus" class="status-line"></div>
@@ -401,12 +402,12 @@
                 if (!path) continue;
 
                 const buffer = await file.arrayBuffer();
-                if (buffer.byteLength > 1024 * 1024) {
-                    throw new Error(`${path} is larger than the 1 MB per-file limit`);
+                if (buffer.byteLength > 128 * 1024 * 1024) {
+                    throw new Error(`${path} is larger than the 128 MB per-file limit`);
                 }
                 total += buffer.byteLength;
-                if (total > 8 * 1024 * 1024) {
-                    throw new Error('the folder is larger than the 8 MB site limit');
+                if (total > 256 * 1024 * 1024) {
+                    throw new Error('the folder is larger than the 256 MB site limit');
                 }
                 payload.push({ path: path, content: base64FromBuffer(buffer) });
             }
