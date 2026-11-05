@@ -1853,6 +1853,13 @@ func (api *APIServer) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	api.db.LogAuditEvent(operatorID, "task_create", "task", taskID,
 		fmt.Sprintf("Created task for beacon %s: %s", req.BeaconID, req.Command), r.RemoteAddr)
 
+	BroadcastTaskUpdate(map[string]interface{}{
+		"task_id":   taskID,
+		"beacon_id": req.BeaconID,
+		"command":   req.Command,
+		"status":    "pending",
+	})
+
 	api.sendSuccess(w, "task created", map[string]interface{}{
 		"task_id":     taskID,
 		"beacon_id":   req.BeaconID,
@@ -2193,6 +2200,16 @@ func (api *APIServer) handleMarkTaskDelivered(w http.ResponseWriter, r *http.Req
 		}
 	}
 
+	if claimed {
+		if task, tErr := api.db.GetTaskWithResult(req.TaskID); tErr == nil {
+			BroadcastTaskUpdate(map[string]interface{}{
+				"task_id":   req.TaskID,
+				"beacon_id": task.BeaconID,
+				"status":    "sent",
+			})
+		}
+	}
+
 	api.sendSuccess(w, "task marked as delivered", map[string]interface{}{
 		"task_id": req.TaskID,
 		"claimed": claimed,
@@ -2308,6 +2325,12 @@ func (api *APIServer) handleResultComplete(w http.ResponseWriter, r *http.Reques
 		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to process completion: %v", err))
 		return
 	}
+
+	BroadcastTaskUpdate(map[string]interface{}{
+		"task_id":   req.TaskID,
+		"beacon_id": req.BeaconID,
+		"status":    "completed",
+	})
 
 	api.sendSuccess(w, "completion recorded", map[string]interface{}{
 		"task_id":      req.TaskID,
