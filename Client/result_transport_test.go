@@ -127,3 +127,20 @@ func TestSendResultFramesMetaFailureIsRetryable(t *testing.T) {
 		t.Fatalf("error = %v, want errResultMetaNotSent", err)
 	}
 }
+
+// Auto mode on a dual beacon must not fall back to DNS for a result frame: that
+// frame is sized for HTTP. It returns the HTTP error instead so the caller can
+// re-chunk for DNS. The DNS client is nil, so a fallback would panic.
+func TestSendResultMessage_AutoDoesNotFallbackWithHTTPFrames(t *testing.T) {
+	// A closed port: the HTTP send fails immediately.
+	cfg := &Config{
+		Transport:     "dual",
+		HTTPListeners: []HTTPListener{testListener("127.0.0.1:1", nil)},
+	}
+	manager := newTransportManager(cfg, testKey())
+	beacon := &Beacon{transport: manager, client: &DNSClient{config: cfg}}
+
+	if _, err := beacon.sendResultMessage("RESULT_META|b|T1|100|1", PhaseConfig{}); err == nil {
+		t.Fatal("auto dual with a dead HTTP listener returned success; it must surface the error for a DNS retry")
+	}
+}
