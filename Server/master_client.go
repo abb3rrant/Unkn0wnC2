@@ -30,6 +30,12 @@ type MasterClient struct {
 	debug        bool
 	lastCheckin  time.Time
 	checkinMutex sync.RWMutex
+
+	// siteCache keeps the last cover site fetched per profile, keyed by the
+	// revision the assignment reported. Profiles sync every 60s; without this a
+	// payload-sized image would be re-downloaded on every sync.
+	siteMutex sync.Mutex
+	siteCache map[string]*HTTPSite
 }
 
 // newMasterTLSConfig configures either normal PKI verification or an explicit
@@ -1359,10 +1365,33 @@ type HTTPProfileSiteFile struct {
 	Content     string `json:"content"`
 }
 
-// FetchHTTPProfileSite retrieves the cover site attached to a profile this
-// server is assigned. Called only when the assignment reports a site revision,
-// so profiles without one cost no extra request.
-func (mc *MasterClient) FetchHTTPProfileSite(name string) (*HTTPSite, error) {
+// FetchHTTPProfileSite returns the cover site for a profile, reusing the cached
+// copy when the assignment's revision has not changed.
+func (mc *MasterClient) FetchHTTPProfileSite(name string, revision int64) (*HTTPSite, error) {
+	mc.siteMutex.Lock()
+	cached, ok := mc.siteCache[name]
+	mc.siteMutex.Unlock()
+	if ok && cached.Revision == revision {
+		return cached, nil
+	}
+
+	site, err := mc.fetchHTTPProfileSite(name)
+	if err != nil {
+		return nil, err
+	}
+
+	mc.siteMutex.Lock()
+	if mc.siteCache == nil {
+		mc.siteCache = make(map[string]*HTTPSite)
+	}
+	mc.siteCache[name] = site
+	mc.siteMutex.Unlock()
+	return site, nil
+}
+
+// fetchHTTPProfileSite performs the control-plane call. Callers go through
+// FetchHTTPProfileSite so an unchanged site is not re-downloaded.
+func (mc *MasterClient) fetchHTTPProfileSite(name string) (*HTTPSite, error) {
 	endpoint := fmt.Sprintf("/api/dns-server/http-profile-site?dns_server_id=%s&api_key=%s&name=%s",
 		mc.serverID, mc.apiKey, url.QueryEscape(name))
 
@@ -1446,7 +1475,7 @@ func (mc *MasterClient) FetchHTTPProfiles() ([]*HTTPProfile, error) {
 		// revision. Fetch failures leave the C2 listener working without a site
 		// rather than rejecting the whole profile.
 		if assignment.SiteRevision > 0 {
-			site, siteErr := mc.FetchHTTPProfileSite(profile.Name)
+			site, siteErr := mc.FetchHTTPProfileSite(profile.Name, assignment.SiteRevision)
 			if siteErr != nil {
 				logf("[HTTP] Cover site for %q could not be fetched: %v", assignment.Name, siteErr)
 			} else {
@@ -1457,7 +1486,26 @@ func (mc *MasterClient) FetchHTTPProfiles() ([]*HTTPProfile, error) {
 		profiles = append(profiles, &profile)
 	}
 
+	// Drop cached sites for profiles that are no longer assigned, or whose site
+	// was deleted (revision 0), so a removed payload image does not pin memory.
+	current := make(map[string]int64, len(resp.Profiles))
+	for _, assignment := range resp.Profiles {
+		current[assignment.Name] = assignment.SiteRevision
+	}
+	mc.pruneSiteCache(current)
+
 	return profiles, nil
+}
+
+// pruneSiteCache removes cached sites that are no longer current.
+func (mc *MasterClient) pruneSiteCache(current map[string]int64) {
+	mc.siteMutex.Lock()
+	defer mc.siteMutex.Unlock()
+	for name := range mc.siteCache {
+		if revision, ok := current[name]; !ok || revision == 0 {
+			delete(mc.siteCache, name)
+		}
+	}
 }
 
 // transportOf names the transport a beacon last spoke, defaulting to DNS for
