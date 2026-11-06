@@ -352,14 +352,103 @@ func (l *HTTPListener) serveStaticSite(w http.ResponseWriter, r *http.Request, p
 		return true
 	}
 
+	size := int64(len(file.Content))
 	w.Header().Set("Content-Type", file.ContentType)
-	w.Header().Set("Content-Length", strconv.Itoa(len(file.Content)))
+	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("Cache-Control", "public, max-age=300")
+
+	// A site file is a byte slice in memory, so a range is a sub-slice. With no
+	// ETag/Last-Modified we cannot validate If-Range, so a conditional range is
+	// answered with the full object rather than risking a mixed old/new body.
+	if r.Header.Get("If-Range") == "" {
+		if start, end, ok, unsatisfiable := parseByteRange(r.Header.Get("Range"), size); ok {
+			if unsatisfiable {
+				w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", size))
+				w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+				return true
+			}
+			length := end - start + 1
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, size))
+			w.Header().Set("Content-Length", strconv.FormatInt(length, 10))
+			w.WriteHeader(http.StatusPartialContent)
+			if r.Method != http.MethodHead {
+				_, _ = w.Write(file.Content[start : end+1])
+			}
+			return true
+		}
+	}
+
+	w.Header().Set("Content-Length", strconv.Itoa(len(file.Content)))
 	w.WriteHeader(http.StatusOK)
 	if r.Method != http.MethodHead {
 		_, _ = w.Write(file.Content)
 	}
 	return true
+}
+
+// parseByteRange parses a single-range "bytes=" header for a resource of size
+// bytes.
+//
+// ok=false means "serve the whole object": absent, malformed, multi-range or a
+// different unit. Multi-range is intentionally unsupported because the response
+// would need multipart framing for no practical gain on a static site.
+// unsatisfiable=true is a valid range outside the resource (416).
+func parseByteRange(header string, size int64) (start, end int64, ok bool, unsatisfiable bool) {
+	header = strings.TrimSpace(header)
+	if header == "" || size < 0 || !strings.HasPrefix(strings.ToLower(header), "bytes=") {
+		return 0, 0, false, false
+	}
+
+	spec := strings.TrimSpace(header[len("bytes="):])
+	if spec == "" || strings.Contains(spec, ",") {
+		return 0, 0, false, false
+	}
+	for _, r := range spec {
+		if !(r >= '0' && r <= '9') && r != '-' && r != ' ' {
+			return 0, 0, false, false
+		}
+	}
+
+	dash := strings.Index(spec, "-")
+	if dash < 0 {
+		return 0, 0, false, false
+	}
+	startText := strings.TrimSpace(spec[:dash])
+	endText := strings.TrimSpace(spec[dash+1:])
+
+	if startText == "" {
+		suffix, err := strconv.ParseInt(endText, 10, 64)
+		if err != nil || suffix <= 0 {
+			return 0, 0, false, false
+		}
+		if size == 0 {
+			return 0, 0, true, true
+		}
+		if suffix > size {
+			suffix = size
+		}
+		return size - suffix, size - 1, true, false
+	}
+
+	startValue, err := strconv.ParseInt(startText, 10, 64)
+	if err != nil || startValue < 0 {
+		return 0, 0, false, false
+	}
+	if startValue >= size {
+		return 0, 0, true, true
+	}
+
+	if endText == "" {
+		return startValue, size - 1, true, false
+	}
+	endValue, err := strconv.ParseInt(endText, 10, 64)
+	if err != nil || endValue < startValue {
+		return 0, 0, false, false
+	}
+	if endValue >= size {
+		endValue = size - 1
+	}
+	return startValue, endValue, true, false
 }
 
 // readBody reads at most the profile's limit so a large body cannot exhaust
