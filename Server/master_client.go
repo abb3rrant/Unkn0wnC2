@@ -139,10 +139,12 @@ type StagerCacheTask struct {
 }
 
 type BeaconReportRequest struct {
-	DNSServerID string     `json:"dns_server_id"`
-	APIKey      string     `json:"api_key"`
-	Transport   string     `json:"transport,omitempty"`
-	Beacon      BeaconData `json:"beacon"`
+	// ListenerName is the HTTP profile that carried the message, when known.
+	ListenerName string     `json:"listener_name,omitempty"`
+	DNSServerID  string     `json:"dns_server_id"`
+	APIKey       string     `json:"api_key"`
+	Transport    string     `json:"transport,omitempty"`
+	Beacon       BeaconData `json:"beacon"`
 }
 
 type BeaconData struct {
@@ -466,10 +468,11 @@ func (mc *MasterClient) ReportBeacon(beacon *Beacon) error {
 	}
 
 	req := BeaconReportRequest{
-		Transport:   transportOf(beacon),
-		DNSServerID: mc.serverID,
-		APIKey:      mc.apiKey,
-		Beacon:      beaconData,
+		Transport:    transportOf(beacon),
+		ListenerName: beacon.ListenerName,
+		DNSServerID:  mc.serverID,
+		APIKey:       mc.apiKey,
+		Beacon:       beaconData,
 	}
 
 	respData, err := mc.doRequest("POST", "/api/dns-server/beacon", req)

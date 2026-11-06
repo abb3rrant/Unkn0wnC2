@@ -131,7 +131,7 @@ func TestDualMode_HTTPFetchDeliversAndConsumes(t *testing.T) {
 	}
 
 	// Then the fetch over HTTP.
-	response, _, _ := c2.ProcessHTTPMessage("POLL|"+beaconID+"|1758500002", "127.0.0.1", true)
+	response, _, _ := c2.ProcessHTTPMessage("POLL|"+beaconID+"|1758500002", "127.0.0.1", true, "")
 	if !strings.HasPrefix(response, "TASK|") {
 		t.Fatalf("HTTP fetch = %q, want a TASK| message", response)
 	}
@@ -157,18 +157,18 @@ func TestDualMode_HTTPFetchDeliversAndConsumes(t *testing.T) {
 
 	// Until the beacon confirms receipt, the task is re-delivered: that is the recovery
 	// for a lost response, and it holds over HTTP exactly as it does over DNS.
-	redelivered, _, _ := c2.ProcessHTTPMessage("POLL|"+beaconID+"|1758500003", "127.0.0.1", true)
+	redelivered, _, _ := c2.ProcessHTTPMessage("POLL|"+beaconID+"|1758500003", "127.0.0.1", true, "")
 	if !strings.Contains(redelivered, "T200") {
 		t.Fatalf("unconfirmed task was not re-delivered over HTTP: %q", redelivered)
 	}
 
 	// RESULT_META confirms receipt and clears it, so it is never handed out again.
-	confirmed, _, _ := c2.ProcessHTTPMessage("RESULT_META|"+beaconID+"|T200|12|1|1758500004", "127.0.0.1", true)
+	confirmed, _, _ := c2.ProcessHTTPMessage("RESULT_META|"+beaconID+"|T200|12|1|1758500004", "127.0.0.1", true, "")
 	if confirmed != "ACK" {
 		t.Fatalf("RESULT_META = %q, want ACK", confirmed)
 	}
 
-	after, _, _ := c2.ProcessHTTPMessage("POLL|"+beaconID+"|1758500005", "127.0.0.1", true)
+	after, _, _ := c2.ProcessHTTPMessage("POLL|"+beaconID+"|1758500005", "127.0.0.1", true, "")
 	if strings.Contains(after, "T200") {
 		t.Fatalf("confirmed task was delivered again: %q", after)
 	}
@@ -268,7 +268,7 @@ func TestTaskDeliveryChunkingDependsOnTransport(t *testing.T) {
 		registerMeshBeacon(t, c2, beaconID)
 		c2.AddTaskFromMaster("T500", beaconID, command)
 
-		response, _, _ := c2.ProcessHTTPMessage("POLL|"+beaconID+"|1758500100", "127.0.0.1", true)
+		response, _, _ := c2.ProcessHTTPMessage("POLL|"+beaconID+"|1758500100", "127.0.0.1", true, "")
 		if !strings.HasPrefix(response, "TASK|") {
 			t.Fatalf("HTTP delivery = %q, want a single TASK| message", response[:min(40, len(response))])
 		}

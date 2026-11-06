@@ -299,7 +299,7 @@ func (l *HTTPListener) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		logf("[HTTP] %s %s (%s) from %s", r.Method, r.URL.Path, operation, clientIP)
 	}
 
-	response, _, _ := l.c2.ProcessHTTPMessage(message, clientIP, profile.requestIsEncrypted())
+	response, _, _ := l.c2.ProcessHTTPMessage(message, clientIP, profile.requestIsEncrypted(), profile.Name)
 
 	l.applyJitter(profile)
 

