@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -111,6 +112,9 @@ func newTransportManager(cfg *Config, aesKey []byte) *transportManager {
 	}
 
 	if len(manager.transports) == 0 && manager.mode != transportDNS {
+		// A build that asked for HTTP but embeds no usable listener would
+		// otherwise fail silently as DNS-only.
+		fmt.Fprintf(os.Stderr, "[Beacon] %s transport has no usable HTTP listener; running DNS-only\n", manager.mode)
 		manager.mode = transportDNS
 	}
 

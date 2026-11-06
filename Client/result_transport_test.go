@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -79,5 +80,50 @@ func TestSendResultMessage_ForcesHTTPWhenLatched(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("result_transport=http did not use the HTTP listener after latching to DNS")
+	}
+}
+
+// sendResultFrames must size every DATA frame to the injected budget and mark a
+// result whose metadata never went out as safely retryable.
+func TestSendResultFramesChunking(t *testing.T) {
+	result := strings.Repeat("A", 100)
+	var frames []string
+	send := func(message string) (string, error) {
+		frames = append(frames, message)
+		return "ACK", nil
+	}
+	beacon := &Beacon{client: &DNSClient{config: &Config{}}, id: "b1"}
+	if err := beacon.sendResultFrames(result, "T1", 30, "dns", send); err != nil {
+		t.Fatalf("sendResultFrames() error = %v", err)
+	}
+
+	if !strings.HasPrefix(frames[0], "RESULT_META|b1|T1|100|4") {
+		t.Fatalf("meta = %q, want 4 chunks", frames[0])
+	}
+	if frames[len(frames)-1] != "RESULT_COMPLETE|b1|T1|4" {
+		t.Fatalf("completion = %q", frames[len(frames)-1])
+	}
+	dataFrames := 0
+	for _, frame := range frames {
+		if !strings.HasPrefix(frame, "DATA|") {
+			continue
+		}
+		dataFrames++
+		parts := strings.SplitN(frame, "|", 6)
+		if len(parts) != 6 || len(parts[5]) > 30 {
+			t.Fatalf("DATA frame exceeds the 30-byte budget: %q", frame)
+		}
+	}
+	if dataFrames != 4 {
+		t.Fatalf("data frames = %d, want 4", dataFrames)
+	}
+}
+
+func TestSendResultFramesMetaFailureIsRetryable(t *testing.T) {
+	beacon := &Beacon{client: &DNSClient{config: &Config{}}, id: "b1"}
+	fail := func(string) (string, error) { return "", errors.New("transport down") }
+	err := beacon.sendResultFrames("payload", "T1", 30, "http", fail)
+	if err == nil || !errors.Is(err, errResultMetaNotSent) {
+		t.Fatalf("error = %v, want errResultMetaNotSent", err)
 	}
 }
