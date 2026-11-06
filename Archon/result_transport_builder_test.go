@@ -13,6 +13,7 @@ func TestValidateClientBuildRequestResultTransport(t *testing.T) {
 		req := ClientBuildRequest{
 			Transport:       "dual",
 			DNSDomains:      []string{"alpha.test"},
+			HTTPListeners:   []HTTPListenerSpec{{Name: "default", Scheme: "https", Host: "c2.example.com:443"}},
 			ResultTransport: rt,
 		}
 		if err := validateClientBuildRequest(req); err != nil {
@@ -23,6 +24,7 @@ func TestValidateClientBuildRequestResultTransport(t *testing.T) {
 	req := ClientBuildRequest{
 		Transport:       "dual",
 		DNSDomains:      []string{"alpha.test"},
+		HTTPListeners:   []HTTPListenerSpec{{Name: "default", Scheme: "https", Host: "c2.example.com:443"}},
 		ResultTransport: "carrier-pigeon",
 	}
 	err := validateClientBuildRequest(req)

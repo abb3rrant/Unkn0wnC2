@@ -53,3 +53,31 @@ func TestSendResultMessage_NoHTTPTransport(t *testing.T) {
 		t.Errorf("error should explain the missing HTTP transport, got %v", err)
 	}
 }
+
+// A dual beacon that latched to DNS must still honour result_transport=http:
+// the latch narrows check-ins, it does not delete the listener the operator
+// explicitly selected for results.
+func TestSendResultMessage_ForcesHTTPWhenLatched(t *testing.T) {
+	addr, captured := rawHTTPServer(t, "{}")
+	cfg := &Config{
+		Transport:       "dual",
+		HTTPListeners:   []HTTPListener{testListener(addr, nil)},
+		ResultTransport: "http",
+	}
+	manager := newTransportManager(cfg, testKey())
+	manager.LatchTo("dns")
+	beacon := &Beacon{transport: manager, client: &DNSClient{config: cfg}}
+
+	if _, err := beacon.sendResultMessage("RESULT_COMPLETE|b|T1|1", PhaseConfig{}); err != nil {
+		t.Logf("sendResultMessage returned err (response decode expected to be noisy): %v", err)
+	}
+
+	select {
+	case req := <-captured:
+		if req.method != "POST" || !strings.Contains(req.path, "/api/v1/report") {
+			t.Errorf("latched result frame = %s %s, want POST /api/v1/report", req.method, req.path)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("result_transport=http did not use the HTTP listener after latching to DNS")
+	}
+}

