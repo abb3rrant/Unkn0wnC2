@@ -144,3 +144,28 @@ func TestSendResultMessage_AutoDoesNotFallbackWithHTTPFrames(t *testing.T) {
 		t.Fatal("auto dual with a dead HTTP listener returned success; it must surface the error for a DNS retry")
 	}
 }
+
+func TestResultChunkTransport(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  *Config
+		mode string // latched/forced manager mode, "" = leave dual
+		want string
+	}{
+		{"forced dns", &Config{Transport: "http", ResultTransport: "dns", HTTPListeners: []HTTPListener{testListener("127.0.0.1:1", nil)}}, "", "dns"},
+		{"forced http", &Config{Transport: "dual", ResultTransport: "http", HTTPListeners: []HTTPListener{testListener("127.0.0.1:1", nil)}}, "", "http"},
+		{"auto dual healthy", &Config{Transport: "dual", HTTPListeners: []HTTPListener{testListener("127.0.0.1:1", nil)}}, "", "http"},
+		{"auto dual latched", &Config{Transport: "dual", HTTPListeners: []HTTPListener{testListener("127.0.0.1:1", nil)}}, "dns", "dns"},
+		{"auto dns-only", &Config{Transport: "dns"}, "", "dns"},
+	}
+	for _, tc := range cases {
+		manager := newTransportManager(tc.cfg, testKey())
+		if tc.mode != "" {
+			manager.LatchTo(tc.mode)
+		}
+		beacon := &Beacon{transport: manager, client: &DNSClient{config: tc.cfg}}
+		if got := beacon.resultChunkTransport(); got != tc.want {
+			t.Errorf("%s: resultChunkTransport() = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

