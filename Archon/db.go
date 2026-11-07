@@ -19,7 +19,7 @@ import (
 
 const (
 	// MasterDatabaseSchemaVersion tracks the current schema version
-	MasterDatabaseSchemaVersion = 26
+	MasterDatabaseSchemaVersion = 27
 
 	// MaxTaskCommandLength is the maximum length for task commands.
 	// DNS TXT responses are limited to ~512 bytes UDP. After encryption (AES-GCM adds 28 bytes)
@@ -343,6 +343,13 @@ func (d *MasterDatabase) applyMigrations(fromVersion int) error {
 	if fromVersion < 26 {
 		if err := d.migration26AddHTTPProfileSites(); err != nil {
 			return fmt.Errorf("migration 26 failed: %w", err)
+		}
+	}
+
+	// Migration 27: catalogue distinct externally-built (Wraith) payload layouts
+	if fromVersion < 27 {
+		if err := d.migration27AddWraithConfigs(); err != nil {
+			return fmt.Errorf("migration 27 failed: %w", err)
 		}
 	}
 
@@ -2526,6 +2533,21 @@ func (d *MasterDatabase) GetDistinctBuildFormats() ([]string, error) {
 		}
 		if fmt, ok := cfg["payload_format"].(string); ok && fmt != "" {
 			seen[fmt] = true
+		}
+	}
+
+	// Externally built (Wraith) layouts live in their own catalog, not in any
+	// build config. Every listener needs the template to decode decorated
+	// queries, and this check-in list is the only channel they poll, so include
+	// them here. That keeps decoding local: no listener calls Archon per query.
+	wraithRows, wraithErr := d.db.Query(`SELECT payload_format FROM wraith_configs`)
+	if wraithErr == nil {
+		defer wraithRows.Close()
+		for wraithRows.Next() {
+			var f string
+			if err := wraithRows.Scan(&f); err == nil && f != "" {
+				seen[f] = true
+			}
 		}
 	}
 

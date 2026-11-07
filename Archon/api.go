@@ -1336,7 +1336,20 @@ func (api *APIServer) handleBeaconReport(w http.ResponseWriter, r *http.Request)
 
 	// Check if beacon_name is actually a build ID
 	var resolvedBuildID string
-	if req.Beacon.BeaconName != "" {
+	switch {
+	case strings.HasPrefix(req.Beacon.BeaconName, wraithBeaconPrefix):
+		// Externally built beacon: its template arrives at runtime in CHK_META.
+		// Number each distinct layout so operators get a stable WRAITH#N; the
+		// beacon never learns the number.
+		if req.Beacon.PayloadFormat != "" {
+			if id, err := api.db.RegisterWraithConfig(req.Beacon.PayloadFormat); err == nil {
+				req.Beacon.BeaconName = fmt.Sprintf("%s%d", wraithBeaconPrefix, id)
+			}
+		} else {
+			// Plain CHK carries no template; keep any number already assigned.
+			req.Beacon.BeaconName = ""
+		}
+	case req.Beacon.BeaconName != "":
 		if buildConfig, _ := api.db.GetBuildConfigByBuildID(req.Beacon.BeaconName); buildConfig.BinaryID != "" {
 			resolvedBuildID = req.Beacon.BeaconName
 			if origName, _ := buildConfig.Extra["beacon_name"].(string); origName != "" {
@@ -3727,6 +3740,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	operatorRouter.Handle("/builder/dns-server", operatorWrite(http.HandlerFunc(api.handleBuildDNSServer))).Methods("POST")
 	operatorRouter.Handle("/builder/client", operatorWrite(http.HandlerFunc(api.handleBuildClient))).Methods("POST")
 	operatorRouter.HandleFunc("/builder/client-binaries", api.handleListClientBinaries).Methods("GET")
+	operatorRouter.HandleFunc("/wraith/configs", api.handleListWraithConfigs).Methods("GET")
 	operatorRouter.Handle("/builder/stager", operatorWrite(http.HandlerFunc(api.handleBuildStager))).Methods("POST")
 	operatorRouter.HandleFunc("/builder/builds", api.handleListBuilds).Methods("GET")
 	operatorRouter.HandleFunc("/builder/builds/download", api.handleDownloadBuild).Methods("GET")
