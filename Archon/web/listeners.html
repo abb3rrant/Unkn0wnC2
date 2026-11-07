@@ -440,9 +440,26 @@
                         <div class="profile-meta">${escapeHtml(target)}</div>
                         ${warn}
                     </div>
-                    <div class="profile-meta">${profile.updated_at ? escapeHtml(formatTimestamp(profile.updated_at)) : ''}</div>
+                    <div class="profile-meta">${profile.updated_at ? escapeHtml(formatTimestamp(profile.updated_at)) : ''}
+                        <button class="chip" style="margin-left:8px;cursor:pointer" onclick="event.stopPropagation();assignToAllListeners('${escapeHtml(profile.name)}')">Assign to all</button>
+                    </div>
                 </div>`;
             }).join('');
+        }
+
+        async function assignToAllListeners(name) {
+            const ids = listeners.map(entry => (entry.server || entry).id).filter(Boolean);
+            let ok = 0;
+            for (const id of ids) {
+                const response = await authFetch(`/api/listeners/${encodeURIComponent(id)}/http-profiles`, {
+                    method: 'POST',
+                    body: JSON.stringify({ name })
+                });
+                if (response && response.ok) ok++;
+            }
+            showToast(`Assigned ${name} to ${ok}/${ids.length} listeners`, ok === ids.length ? 'success' : 'error');
+            await loadListeners();
+            await loadProfiles();
         }
 
         function selectProfile(name) {

@@ -163,6 +163,22 @@ function getCookie(name) {
     return null;
 }
 
+// friendlyMessage turns a raw API error into something an operator can act on.
+function friendlyMessage(message) {
+    const raw = (message || '').toString().trim();
+    const known = {
+        'cannot deactivate last active domain': 'This beacon must keep at least one DNS domain active.',
+        'domain is required': 'Choose a domain first.',
+        'missing CSRF token in header': 'Your session expired. Reload the page and sign in again.',
+        'invalid request body': 'The request was malformed. Check the values and try again.',
+        'beacon not found': 'That beacon no longer exists. Refresh the list.'
+    };
+    if (known[raw]) return known[raw];
+    if (/invalid base36/i.test(raw)) return 'A listener could not decode this beacon yet (payload format not learned).';
+    if (/timestamp outside/i.test(raw)) return 'The beacon clock is skewed beyond the 60s tolerance.';
+    return raw;
+}
+
 async function authFetch(url, options = {}) {
     const headers = {
         'Content-Type': 'application/json',
