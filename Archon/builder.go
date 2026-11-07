@@ -1108,6 +1108,9 @@ func buildClient(req ClientBuildRequest, sourceRoot, encryptionKey, buildID stri
 		regPayloadFmt = req.RegistrationPhase.PayloadFormat
 		regACKIP = req.RegistrationPhase.ARecordACKIP
 	}
+	if regPayloadFmt == "" {
+		regPayloadFmt = req.PayloadFormat
+	}
 
 	pollQT := "TXT"
 	pollEnc := globalEncrypted
@@ -1129,6 +1132,9 @@ func buildClient(req ClientBuildRequest, sourceRoot, encryptionKey, buildID stri
 		pollTaskIP = req.PollPhase.ARecordTaskIP
 		txtFollowUp = req.PollPhase.TxtFollowUpSecs
 	}
+	if pollPayloadFmt == "" {
+		pollPayloadFmt = req.PayloadFormat
+	}
 
 	exfilQT := "TXT"
 	exfilEnc := globalEncrypted
@@ -1145,6 +1151,9 @@ func buildClient(req ClientBuildRequest, sourceRoot, encryptionKey, buildID stri
 		exfilMaxPayload = req.DataExfilPhase.MaxPayload
 		exfilPayloadFmt = req.DataExfilPhase.PayloadFormat
 		exfilACKIP = req.DataExfilPhase.ARecordACKIP
+	}
+	if exfilPayloadFmt == "" {
+		exfilPayloadFmt = req.PayloadFormat
 	}
 
 	serverDomain := ""
