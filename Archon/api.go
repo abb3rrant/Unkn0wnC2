@@ -1749,6 +1749,10 @@ func (api *APIServer) handleUpdateBeaconDomain(w http.ResponseWriter, r *http.Re
 		api.sendError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	if req.Domain == "" {
+		api.sendError(w, http.StatusBadRequest, "domain is required")
+		return
+	}
 
 	// Ensure domain row exists before toggling — it may only exist in the UI
 	// via DNS server merge and not yet in beacon_domains
