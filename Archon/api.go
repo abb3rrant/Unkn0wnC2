@@ -3790,6 +3790,8 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	// Listener management: a DNS server is a listener that answers DNS and serves the
 	// HTTP profiles assigned to it.
 	operatorRouter.HandleFunc("/listeners/{id}", api.handleGetListener).Methods("GET")
+	operatorRouter.HandleFunc("/http/assignments", api.handleListHTTPProfileAssignments).Methods("GET")
+	operatorRouter.HandleFunc("/wraith-configs", api.handleListWraithConfigs).Methods("GET")
 	operatorRouter.Handle("/listeners/{id}/http-profiles", operatorWrite(http.HandlerFunc(api.handleAssignHTTPProfile))).Methods("POST")
 	operatorRouter.Handle("/listeners/{id}/http-profiles/{name}", operatorWrite(http.HandlerFunc(api.handleUnassignHTTPProfile))).Methods("DELETE")
 

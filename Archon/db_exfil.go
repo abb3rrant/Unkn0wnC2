@@ -48,6 +48,10 @@ type ExfilTransfer struct {
 	UpdatedAt      time.Time  `json:"updated_at"`
 	LastChunkAt    *time.Time `json:"last_chunk_at,omitempty"`
 	CompletedAt    *time.Time `json:"completed_at,omitempty"`
+	// Artifact details, available once the transfer is assembled.
+	SHA256          string `json:"sha256,omitempty"`
+	ArtifactBytes   int64  `json:"artifact_bytes,omitempty"`
+	CompressedBytes int64  `json:"compressed_bytes,omitempty"`
 }
 
 // migration8AddExfilTables introduces tables for dedicated exfil transfer tracking.
@@ -345,11 +349,13 @@ func (d *MasterDatabase) ListExfilTransfers(limit, offset int) ([]ExfilTransfer,
 	}
 
 	rows, err := d.db.Query(`
-        SELECT session_id, job_id, source_dns, file_name, file_size,
-               total_chunks, received_chunks, status, note,
-               created_at, updated_at, last_chunk_at, completed_at
-        FROM exfil_transfers
-        ORDER BY updated_at DESC
+        SELECT t.session_id, t.job_id, t.source_dns, t.file_name, t.file_size,
+               t.total_chunks, t.received_chunks, t.status, t.note,
+               t.created_at, t.updated_at, t.last_chunk_at, t.completed_at,
+               COALESCE(a.sha256, ''), COALESCE(a.size_bytes, 0), COALESCE(a.compressed_bytes, 0)
+        FROM exfil_transfers t
+        LEFT JOIN exfil_artifacts a ON a.session_id = t.session_id
+        ORDER BY t.updated_at DESC
         LIMIT ? OFFSET ?
     `, limit, offset)
 	if err != nil {
@@ -360,6 +366,8 @@ func (d *MasterDatabase) ListExfilTransfers(limit, offset int) ([]ExfilTransfer,
 	transfers := []ExfilTransfer{}
 	for rows.Next() {
 		var t ExfilTransfer
+	var sha sql.NullString
+	var artifactBytes, compressedBytes sql.NullInt64
 		var created, updated int64
 		var jobID, sourceDNS, fileName, note sql.NullString
 		var fileSize sql.NullInt64
@@ -378,6 +386,7 @@ func (d *MasterDatabase) ListExfilTransfers(limit, offset int) ([]ExfilTransfer,
 			&updated,
 			&lastChunk,
 			&completed,
+			&sha, &artifactBytes, &compressedBytes,
 		); err != nil {
 			return nil, err
 		}
@@ -406,6 +415,9 @@ func (d *MasterDatabase) ListExfilTransfers(limit, offset int) ([]ExfilTransfer,
 			ts := time.Unix(completed.Int64, 0)
 			t.CompletedAt = &ts
 		}
+		t.SHA256 = sha.String
+		t.ArtifactBytes = artifactBytes.Int64
+		t.CompressedBytes = compressedBytes.Int64
 		transfers = append(transfers, t)
 	}
 
@@ -416,14 +428,18 @@ func (d *MasterDatabase) ListExfilTransfers(limit, offset int) ([]ExfilTransfer,
 func (d *MasterDatabase) GetExfilTransfer(sessionID string) (*ExfilTransfer, error) {
 
 	row := d.db.QueryRow(`
-        SELECT session_id, job_id, source_dns, file_name, file_size,
-               total_chunks, received_chunks, status, note,
-               created_at, updated_at, last_chunk_at, completed_at
-        FROM exfil_transfers
-        WHERE session_id = ?
+        SELECT t.session_id, t.job_id, t.source_dns, t.file_name, t.file_size,
+               t.total_chunks, t.received_chunks, t.status, t.note,
+               t.created_at, t.updated_at, t.last_chunk_at, t.completed_at,
+               COALESCE(a.sha256, ''), COALESCE(a.size_bytes, 0), COALESCE(a.compressed_bytes, 0)
+        FROM exfil_transfers t
+        LEFT JOIN exfil_artifacts a ON a.session_id = t.session_id
+        WHERE t.session_id = ?
     `, sessionID)
 
 	var t ExfilTransfer
+	var sha sql.NullString
+	var artifactBytes, compressedBytes sql.NullInt64
 	var created, updated int64
 	var jobID, sourceDNS, fileName, note sql.NullString
 	var fileSize sql.NullInt64
@@ -442,6 +458,7 @@ func (d *MasterDatabase) GetExfilTransfer(sessionID string) (*ExfilTransfer, err
 		&updated,
 		&lastChunk,
 		&completed,
+		&sha, &artifactBytes, &compressedBytes,
 	); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("exfil transfer not found")
@@ -475,6 +492,9 @@ func (d *MasterDatabase) GetExfilTransfer(sessionID string) (*ExfilTransfer, err
 		ts := time.Unix(completed.Int64, 0)
 		t.CompletedAt = &ts
 	}
+	t.SHA256 = sha.String
+	t.ArtifactBytes = artifactBytes.Int64
+	t.CompressedBytes = compressedBytes.Int64
 
 	return &t, nil
 }
@@ -681,7 +701,7 @@ func (d *MasterDatabase) tryAssembleExfilTransferTx(tx *sql.Tx, sessionID string
 	err := tx.QueryRow(`
         SELECT total_chunks
         FROM exfil_transfers
-        WHERE session_id = ?
+        WHERE t.session_id = ?
     `, sessionID).Scan(&total)
 	if err != nil {
 		return false, err
@@ -873,14 +893,18 @@ func (d *MasterDatabase) clearPendingExfilCompletionTx(tx *sql.Tx, sessionID str
 
 func (d *MasterDatabase) fetchExfilTransferTx(tx *sql.Tx, sessionID string) (*ExfilTransfer, error) {
 	row := tx.QueryRow(`
-        SELECT session_id, job_id, source_dns, file_name, file_size,
-               total_chunks, received_chunks, status, note,
-               created_at, updated_at, last_chunk_at, completed_at
-        FROM exfil_transfers
-        WHERE session_id = ?
+        SELECT t.session_id, t.job_id, t.source_dns, t.file_name, t.file_size,
+               t.total_chunks, t.received_chunks, t.status, t.note,
+               t.created_at, t.updated_at, t.last_chunk_at, t.completed_at,
+               COALESCE(a.sha256, ''), COALESCE(a.size_bytes, 0), COALESCE(a.compressed_bytes, 0)
+        FROM exfil_transfers t
+        LEFT JOIN exfil_artifacts a ON a.session_id = t.session_id
+        WHERE t.session_id = ?
     `, sessionID)
 
 	var t ExfilTransfer
+	var sha sql.NullString
+	var artifactBytes, compressedBytes sql.NullInt64
 	var created, updated int64
 	var jobID, sourceDNS, fileName, note sql.NullString
 	var fileSize sql.NullInt64
@@ -899,6 +923,7 @@ func (d *MasterDatabase) fetchExfilTransferTx(tx *sql.Tx, sessionID string) (*Ex
 		&updated,
 		&lastChunk,
 		&completed,
+		&sha, &artifactBytes, &compressedBytes,
 	); err != nil {
 		return nil, err
 	}
@@ -930,6 +955,9 @@ func (d *MasterDatabase) fetchExfilTransferTx(tx *sql.Tx, sessionID string) (*Ex
 		ts := time.Unix(completed.Int64, 0)
 		t.CompletedAt = &ts
 	}
+	t.SHA256 = sha.String
+	t.ArtifactBytes = artifactBytes.Int64
+	t.CompressedBytes = compressedBytes.Int64
 
 	return &t, nil
 }

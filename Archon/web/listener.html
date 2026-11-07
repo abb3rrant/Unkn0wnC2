@@ -307,8 +307,8 @@
             const files = siteFiles[name] || [];
             if (files.length === 0) return '<span class="muted">no cover site</span>';
             const bytes = files.reduce((total, file) => total + (file.size || 0), 0);
-            const kb = Math.max(1, Math.round(bytes / 1024));
-            return `<span class="ok">cover site</span> <span class="muted">${files.length} file(s), ${kb} KB</span>` +
+            const mb = (bytes / 1048576).toFixed(2);
+            return `<span class="ok">cover site</span> <span class="muted">${files.length}/500 files, ${mb} of 256 MB</span>` +
                 ` <button class="btn" onclick="clearSite('${escapeHtml(name)}')">Clear</button>`;
         }
 

@@ -931,6 +931,31 @@
                     .filter(c => c.status === 'active')
                     .map(c => c.listener_name));
 
+                // Listener/profile assignments, so an operator can see which server
+                // serves which profile without opening each listener.
+                try {
+                    const assignResp = await authFetch('/api/http/assignments');
+                    if (assignResp && assignResp.ok) {
+                        const assignData = await assignResp.json();
+                        const rows = (assignData.data && assignData.data.assignments) || [];
+                        let host = document.getElementById('beaconTransportAssignments');
+                        if (!host) {
+                            host = document.createElement('div');
+                            host.id = 'beaconTransportAssignments';
+                            host.className = 'muted';
+                            host.style.marginTop = '8px';
+                            host.style.fontSize = '11px';
+                            const pillEl = document.getElementById('beaconTransportActive');
+                            if (pillEl && pillEl.parentElement) pillEl.parentElement.appendChild(host);
+                        }
+                        if (host) {
+                            host.innerHTML = rows.length
+                                ? 'Assignments: ' + rows.map(r => `<code>${escapeHtml(r.dns_server_id)}</code> → ${escapeHtml(r.profile_name)}`).join(' · ')
+                                : 'No HTTP profile assignments.';
+                        }
+                    }
+                } catch (e) { /* assignments are informational only */ }
+
                 const pill = document.getElementById('beaconTransportActive');
                 if (pill) {
                     const hasDns = activeDomainSet.size > 0;
@@ -972,7 +997,7 @@
                 const response = await authFetch(`/api/beacons/${currentBeaconId}/http-listeners`);
                 if (!response || !response.ok) throw new Error('request failed');
                 const payload = await response.json();
-                if (!payload.success) throw new Error(payload.message || 'request failed');
+                if (!payload.success) throw new Error(friendlyMessage(payload.message) || 'request failed');
 
                 const data = payload.data || {};
                 beaconHTTPTransport = data.transport || '';
@@ -1053,7 +1078,7 @@
                 const payload = await response.json();
                 if (!response.ok || !payload.success) {
                     status.style.color = '#ff6b6b';
-                    status.textContent = payload.message || 'Apply failed.';
+                    status.textContent = friendlyMessage(payload.message) || 'Apply failed.';
                     return;
                 }
 
@@ -1106,7 +1131,9 @@
                     return;
                 }
 
-                container.innerHTML = contacts.map(contact => {
+                const lastHttp = contacts.reduce((max, c) => Math.max(max, c.last_contact || 0), 0);
+                const httpSummary = `<div class="muted" style="margin-bottom:8px;">Last answered ${formatTimestamp(lastHttp)}</div>`;
+                container.innerHTML = httpSummary + contacts.map(contact => {
                     // The listener reports the address; a profile name is only present
                     // when the listener names the profile it served, so fall back to the
                     // listener's own id rather than showing nothing.
@@ -1211,13 +1238,19 @@
                 const payload = await response.json();
                 if (!response.ok || !payload.success) {
                     status.style.color = '#ff6b6b';
-                    status.textContent = payload.message || 'BOF was refused.';
+                    status.textContent = friendlyMessage(payload.message) || 'BOF was refused.';
                     return;
                 }
 
                 const task = payload.data || {};
                 status.style.color = '#4CAF50';
+                const queuedAt = Date.now();
                 status.textContent = `Queued task ${task.task_id} (${task.bytes} bytes).`;
+                const bofTimer = setInterval(() => {
+                    const secs = Math.floor((Date.now() - queuedAt) / 1000);
+                    status.textContent = `Task ${task.task_id} queued (${task.bytes} bytes) - ${secs}s elapsed`;
+                }, 1000);
+                setTimeout(() => clearInterval(bofTimer), 600000);
                 showToast('BOF task queued', 'success');
                 loadTasks();
             } catch (error) {
@@ -1441,7 +1474,9 @@
                     return;
                 }
 
-                const contactsHtml = contacts.map(contact => {
+                const lastDns = contacts.reduce((max, c) => Math.max(max, c.last_contact || 0), 0);
+                const dnsSummary = `<div class="muted" style="margin-bottom:8px;">Last answered ${formatTimestamp(lastDns)}</div>`;
+                const contactsHtml = dnsSummary + contacts.map(contact => {
                     return `
                         <div class="dns-contact-item">
                             <div class="dns-contact-header">
@@ -1901,7 +1936,7 @@
                         await selectTask(result.data.task_id);
                     }
                 } else {
-                    showAlert(result.message || 'Failed to create task', 'error');
+                    showAlert(friendlyMessage(result.message) || 'Failed to create task', 'error');
                 }
             } catch (error) {
                 console.error('Error creating task:', error);
