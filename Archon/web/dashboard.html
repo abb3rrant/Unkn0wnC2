@@ -295,7 +295,7 @@
             if (isLoadingBeacons) return;
             isLoadingBeacons = true;
             try {
-                const response = await authFetch('/api/beacons');
+                const response = await authFetch('/api/beacons?limit=500');
                 if (!response) return;
 
                 const data = await response.json();
