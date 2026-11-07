@@ -56,6 +56,14 @@ func (d *MasterDatabase) RecordBeaconHTTPContact(beaconID, listenerID, listenerN
 		return nil
 	}
 	now := time.Now().Unix()
+	if listenerName != "" {
+		// Older reports carried no profile name; once the real name arrives the
+		// unnamed row would linger and confuse the transport card, which matches
+		// active listeners by name.
+		_, _ = d.db.Exec(`DELETE FROM beacon_http_contacts
+			WHERE beacon_id = ? AND listener_id = ? AND listener_name = ''`, beaconID, listenerID)
+	}
+
 	_, err := d.db.Exec(`
 		INSERT INTO beacon_http_contacts (beacon_id, listener_id, listener_name, first_contact, last_contact, contact_count)
 		VALUES (?, ?, ?, ?, ?, 1)

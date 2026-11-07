@@ -181,7 +181,7 @@ func decodeSignature(encoding, signature string) ([]byte, error) {
 // queryType is passed as TXT. Over DNS, an A-record POLL means "peek: tell me a
 // task is ready without consuming it", which is what makes dual-mode A-record
 // signalling work. An HTTP task fetch is the real delivery, so it must not peek.
-func (c2 *C2Manager) ProcessHTTPMessage(decoded, clientIP string, encrypted bool) (response string, hasTask bool, respEncrypted bool) {
+func (c2 *C2Manager) ProcessHTTPMessage(decoded, clientIP string, encrypted bool, listenerName string) (response string, hasTask bool, respEncrypted bool) {
 	if strings.TrimSpace(decoded) == "" {
 		return "", false, true
 	}
@@ -202,7 +202,7 @@ func (c2 *C2Manager) ProcessHTTPMessage(decoded, clientIP string, encrypted bool
 
 	qname := fmt.Sprintf("%s.%d.%s", encoded, time.Now().Unix(), c2.domain)
 
-	var info C2QueryInfo
+	info := C2QueryInfo{ListenerName: listenerName}
 	response, hasTask, respEncrypted = c2.processBeaconQuery(qname, clientIP, &info, "http", 16 /* TXT: deliver, do not peek */)
 
 	if c2.debug && response != "" {
