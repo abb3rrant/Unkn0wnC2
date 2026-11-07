@@ -178,7 +178,34 @@
         }
 
         // Render beacons table from a given array
+        const BEACON_PAGE_SIZE = 50;
+        let beaconPage = 1;
+
+        function goToBeaconPage(delta) {
+            beaconPage += delta;
+            renderBeaconsTable(currentBeaconFilter);
+        }
+
+        let currentBeaconFilter = [];
+
         function renderBeaconsTable(beacons) {
+            currentBeaconFilter = beacons;
+            const totalRows = beacons.length;
+            const pages = Math.max(1, Math.ceil(totalRows / BEACON_PAGE_SIZE));
+            if (beaconPage > pages) beaconPage = pages;
+            if (beaconPage < 1) beaconPage = 1;
+            const pageStart = (beaconPage - 1) * BEACON_PAGE_SIZE;
+            const pageRows = beacons.slice(pageStart, pageStart + BEACON_PAGE_SIZE);
+            const pager = totalRows > BEACON_PAGE_SIZE ? `
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;font-size:12px;color:#888;">
+                    <span>Showing ${pageStart + 1}-${Math.min(pageStart + BEACON_PAGE_SIZE, totalRows)} of ${totalRows}</span>
+                    <span>
+                        <button class="btn-manage" onclick="goToBeaconPage(-1)" ${beaconPage === 1 ? 'disabled' : ''}>Prev</button>
+                        <span style="margin:0 10px;">Page ${beaconPage} / ${pages}</span>
+                        <button class="btn-manage" onclick="goToBeaconPage(1)" ${beaconPage === pages ? 'disabled' : ''}>Next</button>
+                    </span>
+                </div>` : '';
+
             document.getElementById('beaconCount').textContent = allBeacons.length;
 
             if (beacons.length === 0) {
@@ -215,7 +242,7 @@
                         </tr>
                     </thead>
                     <tbody>
-                        ${beacons.map(beacon => `
+                        ${pageRows.map(beacon => `
                             <tr data-beacon-id="${escapeHtml(beacon.id)}" data-beacon-hostname="${escapeHtml(beacon.hostname)}">
                                 <td><input type="checkbox" class="beacon-checkbox" value="${escapeHtml(beacon.id)}" onchange="updateBulkSelection()" ${selectedBeacons.has(beacon.id) ? 'checked' : ''}></td>
                                 <td><code>${escapeHtml(beacon.id)}</code></td>
@@ -236,7 +263,7 @@
                             </tr>
                         `).join('')}
                     </tbody>
-                </table>`;
+                </table>${pager}`;
 
             document.getElementById('beaconsTable').innerHTML = table;
 
@@ -266,6 +293,7 @@
                     );
                     // Re-render table body only, keep search value
                     const savedQuery = searchInput.value;
+                    beaconPage = 1;
                     renderBeaconsTable(filtered);
                     const newInput = document.getElementById('beaconSearch');
                     if (newInput) {
@@ -295,11 +323,20 @@
             if (isLoadingBeacons) return;
             isLoadingBeacons = true;
             try {
-                const response = await authFetch('/api/beacons?limit=500');
-                if (!response) return;
-
-                const data = await response.json();
-                allBeacons = data.beacons || [];
+                let fetched = [];
+                let offset = 0;
+                let total = Infinity;
+                while (fetched.length < total) {
+                    const response = await authFetch(`/api/beacons?limit=500&offset=${offset}`);
+                    if (!response) break;
+                    const data = await response.json();
+                    const batch = data.beacons || [];
+                    total = (data.pagination && data.pagination.total) || batch.length;
+                    fetched = fetched.concat(batch);
+                    offset += batch.length;
+                    if (batch.length === 0) break;
+                }
+                allBeacons = fetched;
 
                 renderBeaconsTable(allBeacons);
             } catch (error) {

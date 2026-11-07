@@ -35,6 +35,8 @@ const (
 	// per-file paths, so an over-limit upload is rejected by the per-file/total
 	// checks rather than by a truncated decode.
 	maxSiteUploadBody = 384 << 20
+	maxSiteTotalBytes = 256 << 20
+	maxSiteFiles      = 500
 )
 
 // siteUploadLimits bounds one cover-site upload. Variable so tests can exercise
@@ -105,6 +107,8 @@ type HTTPSiteSummary struct {
 	Files      []HTTPSiteFileRecord `json:"files"`
 	TotalBytes int                  `json:"total_bytes"`
 	UpdatedAt  int64                `json:"updated_at"`
+	LimitBytes int                  `json:"limit_bytes"`
+	FileLimit  int                  `json:"file_limit"`
 }
 
 // migration26AddHTTPProfileSites stores the cover site attached to an HTTP
@@ -370,6 +374,8 @@ func (api *APIServer) handleGetHTTPProfileSite(w http.ResponseWriter, r *http.Re
 		Files:      files,
 		TotalBytes: total,
 		UpdatedAt:  api.db.HTTPProfileSiteRevision(name),
+		LimitBytes: maxSiteTotalBytes,
+		FileLimit:  maxSiteFiles,
 	})
 }
 

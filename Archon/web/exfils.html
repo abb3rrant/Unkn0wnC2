@@ -722,6 +722,11 @@
                                 <div class="meta-label">Job ID</div>
                                 <div class="meta-value">${escapedJobId}</div>
                             </div>
+                            ${transfer.sha256 ? `
+                            <div style="grid-column: 1 / -1;">
+                                <div class="meta-label">SHA-256 (verified on assembly)</div>
+                                <div class="meta-value"><code style="font-size:10px;word-break:break-all;color:#0f0;">${escapeHtml(transfer.sha256)}</code></div>
+                            </div>` : ''}
                             <div>
                                 <div class="meta-label">Last Chunk</div>
                                 <div class="meta-value">${formatTimestamp(transfer.last_chunk_at)}</div>

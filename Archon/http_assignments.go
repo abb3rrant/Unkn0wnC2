@@ -382,3 +382,37 @@ func (d *MasterDatabase) ServerServingHTTPProfile(profileName string) (string, b
 	}
 	return serverID, true
 }
+
+// HTTPProfileAssignmentRow is one listener/profile assignment for the operator UI.
+type HTTPProfileAssignmentRow struct {
+	DNSServerID string `json:"dns_server_id"`
+	ProfileName string `json:"profile_name"`
+}
+
+// ListHTTPProfileAssignments returns every assignment, so the UI can show which
+// listeners serve which profile and offer bulk assignment.
+func (d *MasterDatabase) ListHTTPProfileAssignments() ([]HTTPProfileAssignmentRow, error) {
+	rows, err := d.db.Query(`SELECT dns_server_id, profile_name FROM http_profile_assignments ORDER BY dns_server_id, profile_name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []HTTPProfileAssignmentRow{}
+	for rows.Next() {
+		var r HTTPProfileAssignmentRow
+		if err := rows.Scan(&r.DNSServerID, &r.ProfileName); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func (api *APIServer) handleListHTTPProfileAssignments(w http.ResponseWriter, r *http.Request) {
+	assignments, err := api.db.ListHTTPProfileAssignments()
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to list assignments")
+		return
+	}
+	api.sendSuccess(w, "assignments", map[string]interface{}{"assignments": assignments})
+}
