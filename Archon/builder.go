@@ -358,6 +358,12 @@ func validateClientBuildRequest(req ClientBuildRequest) error {
 	if mode != "http" && len(req.DNSDomains) == 0 {
 		return fmt.Errorf("at least one DNS domain is required for %s transport", mode)
 	}
+	// A dual or HTTP build without a listener would silently run as DNS-only:
+	// the transport manager degrades when it cannot build a listener, and a dual
+	// beacon would latch on its first probe. Refuse the build instead.
+	if (mode == "http" || mode == "dual") && len(req.HTTPListeners) == 0 {
+		return fmt.Errorf("%s transport needs at least one HTTP listener", mode)
+	}
 	switch strings.ToLower(strings.TrimSpace(req.ResultTransport)) {
 	case "", "auto", "http", "dns":
 	default:

