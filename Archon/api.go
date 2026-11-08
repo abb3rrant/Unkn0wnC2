@@ -69,7 +69,7 @@ func NewAPIServer(db *MasterDatabase, config Config) *APIServer {
 		config:               config,
 		jwtSecret:            []byte(config.JWTSecret),
 		authLimiter:          NewRateLimiter(5, time.Minute),    // 5 login attempts per minute
-		apiLimiter:           NewRateLimiter(100, time.Minute),  // 100 API requests per minute
+		apiLimiter:           NewRateLimiter(300, time.Minute),  // 300 API requests per minute (one operator with several tabs polls well past 100)
 		dnsLimiter:           NewRateLimiter(1000, time.Minute), // 1000 DNS server API calls per minute
 		trustedProxyNets:     trustedProxyNets,
 		dnsServerDomainCache: make(map[string]string),
