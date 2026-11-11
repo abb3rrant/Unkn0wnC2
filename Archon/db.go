@@ -3329,13 +3329,27 @@ func (d *MasterDatabase) UpdateOperatorPassword(operatorID, newPassword string) 
 		return fmt.Errorf("failed to hash password: %w", err)
 	}
 
-	_, err = d.db.Exec(`
-		UPDATE operators 
-		SET password_hash = ?
-		WHERE id = ?
-	`, string(passwordHash), operatorID)
-
-	return err
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin password update: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`UPDATE operators SET password_hash = ? WHERE id = ?`, string(passwordHash), operatorID)
+	if err != nil {
+		return fmt.Errorf("failed to update password: %w", err)
+	}
+	if count, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("failed to verify password update: %w", err)
+	} else if count != 1 {
+		return fmt.Errorf("operator not found")
+	}
+	if _, err := tx.Exec(`UPDATE sessions SET is_revoked = 1 WHERE operator_id = ?`, operatorID); err != nil {
+		return fmt.Errorf("failed to revoke operator sessions: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit password update: %w", err)
+	}
+	return nil
 }
 
 // SetOperatorActive enables or disables an operator account

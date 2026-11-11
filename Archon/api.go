@@ -515,17 +515,12 @@ func (api *APIServer) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Check if the session is revoked (JWT revocation via JTI)
-		if claims.JTI != "" {
-			isRevoked, err := api.db.IsSessionRevoked(claims.JTI)
-			if err != nil {
-				api.sendError(w, http.StatusInternalServerError, "failed to check session status")
-				return
-			}
-			if isRevoked {
-				api.sendError(w, http.StatusUnauthorized, "session has been revoked")
-				return
-			}
+		// Require a live persisted session, matching its owner and JTI. This
+		// deliberately bypasses revocation caches so external/password revocations
+		// take effect on the next request.
+		if !api.websocketSessionAuthorized(claims) {
+			api.sendError(w, http.StatusUnauthorized, "session is unavailable")
+			return
 		}
 
 		// Resolve authorization state from the database on every request. JWT role
