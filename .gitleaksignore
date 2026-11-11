@@ -1,0 +1,4 @@
+# Confirmed non-production JWT signing key in a temporary-database regression.
+# Exact historical finding only; current fixture is annotated inline. Do not
+# suppress any production path, rule, or other credential occurrence.
+2a0256ac98f1c65027c481a516cb2bef16e11463:Archon/session_lifetime_test.go:generic-api-key:13

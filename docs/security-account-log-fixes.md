@@ -1,7 +1,15 @@
 # Defensive account and log fixes
 
 This change addresses six web-control-plane findings. It does not change beacon
-execution, transports, payloads, network topology, or deployment configuration.
+execution, transports, payloads, network topology, or runtime service configuration.
+
+## Compiler security floor
+
+The minimum/pinned compiler and container bases use Go 1.26.11 to address
+[GO-2026-6859](https://pkg.go.dev/vuln/GO-2026-6859). CI first passed the functional
+checks on Go 1.26.10, but its vulnerability gate correctly rejected that affected
+standard library. The security gate remains enabled; this is a patch-level
+compiler upgrade, not an application workaround.
 
 ## Authentication and password changes
 

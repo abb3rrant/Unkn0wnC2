@@ -4,7 +4,7 @@ Unkn0wnC2 releases are built from a clean, committed tree. The release script re
 
 ## Required tools
 
-- Go 1.26.10 or newer.
+- Go 1.26.11 or newer.
 - GNU tar and `sha256sum`.
 - Syft 1.38.2 for the CycloneDX SBOM.
 
@@ -36,7 +36,7 @@ Artifacts are written to `dist/`:
 ## Production container
 
 `docker/Dockerfile.release` builds the linux/amd64 Archon service from an
-architecture-specific, digest-pinned Go 1.26.10 base. The runtime keeps the Go
+architecture-specific, digest-pinned Go 1.26.11 base. The runtime keeps the Go
 toolchain and cross-compilers because Archon builds listener and beacon
 artifacts. It runs Archon as UID/GID 10001; source and web assets remain
 root-owned and read-only while build, profile, data, log, and Go cache paths are

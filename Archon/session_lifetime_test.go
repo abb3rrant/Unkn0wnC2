@@ -10,7 +10,7 @@ import (
 )
 
 func TestHTTPAuthRequiresPersistedOwnedLiveSession(t *testing.T) {
-	const secret = "0123456789abcdef0123456789abcdef"
+	const secret = "0123456789abcdef0123456789abcdef" // gitleaks:allow -- signing key for isolated temporary test fixtures only
 	for _, tc := range []struct {
 		name         string
 		row          bool
