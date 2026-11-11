@@ -6,6 +6,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -34,6 +35,8 @@ const (
 
 // Package-level debug flag for database logging
 var dbDebugMode bool
+
+var ErrLastActiveAdmin = errors.New("cannot remove the last active administrator")
 
 // SetDBDebugMode enables or disables verbose database logging
 func SetDBDebugMode(debug bool) {
@@ -3316,8 +3319,35 @@ func (d *MasterDatabase) UpdateOperator(operatorID, username, role, email string
 
 	query := fmt.Sprintf("UPDATE operators SET %s WHERE id = ?", strings.Join(setClauses, ", "))
 	args = append(args, operatorID)
-	_, err := d.db.Exec(query, args...)
-	return err
+	if role != "" && role != "admin" {
+		query += ` AND NOT (role = 'admin' AND is_active = 1 AND
+			(SELECT COUNT(*) FROM operators WHERE role = 'admin' AND is_active = 1) <= 1)`
+	}
+	result, err := d.db.Exec(query, args...)
+	if err != nil {
+		return err
+	}
+	if role != "" && role != "admin" {
+		if affected, err := result.RowsAffected(); err == nil && affected == 0 {
+			return d.lastActiveAdminErrorIfBlocked(operatorID)
+		}
+	}
+	return nil
+}
+
+// lastActiveAdminErrorIfBlocked distinguishes an invariant rejection from a missing row.
+func (d *MasterDatabase) lastActiveAdminErrorIfBlocked(operatorID string) error {
+	var blocked int
+	err := d.db.QueryRow(`SELECT COUNT(*) FROM operators
+		WHERE id = ? AND role = 'admin' AND is_active = 1
+		AND (SELECT COUNT(*) FROM operators WHERE role = 'admin' AND is_active = 1) <= 1`, operatorID).Scan(&blocked)
+	if err != nil {
+		return err
+	}
+	if blocked > 0 {
+		return ErrLastActiveAdmin
+	}
+	return nil
 }
 
 // UpdateOperatorPassword changes an operator's password
@@ -3360,20 +3390,35 @@ func (d *MasterDatabase) SetOperatorActive(operatorID string, active bool) error
 		activeInt = 1
 	}
 
-	_, err := d.db.Exec(`
+	result, err := d.db.Exec(`
 		UPDATE operators 
 		SET is_active = ?
-		WHERE id = ?
-	`, activeInt, operatorID)
-
-	return err
+		WHERE id = ? AND NOT (is_active = 1 AND role = 'admin' AND ? = 0 AND
+			(SELECT COUNT(*) FROM operators WHERE role = 'admin' AND is_active = 1) <= 1)
+	`, activeInt, operatorID, activeInt)
+	if err != nil {
+		return err
+	}
+	if !active {
+		if affected, err := result.RowsAffected(); err == nil && affected == 0 {
+			return d.lastActiveAdminErrorIfBlocked(operatorID)
+		}
+	}
+	return nil
 }
 
 // DeleteOperator removes an operator account
 func (d *MasterDatabase) DeleteOperator(operatorID string) error {
 
-	_, err := d.db.Exec(`DELETE FROM operators WHERE id = ?`, operatorID)
-	return err
+	result, err := d.db.Exec(`DELETE FROM operators WHERE id = ? AND NOT (role = 'admin' AND is_active = 1 AND
+		(SELECT COUNT(*) FROM operators WHERE role = 'admin' AND is_active = 1) <= 1)`, operatorID)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err == nil && affected == 0 {
+		return d.lastActiveAdminErrorIfBlocked(operatorID)
+	}
+	return nil
 }
 
 // CheckUsernameExists checks if a username is already taken

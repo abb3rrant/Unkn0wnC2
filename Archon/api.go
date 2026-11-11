@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -947,6 +948,10 @@ func (api *APIServer) handleUpdateOperator(w http.ResponseWriter, r *http.Reques
 
 	// Update operator
 	if err := api.db.UpdateOperator(operatorID, req.Username, req.Role, req.Email); err != nil {
+		if errors.Is(err, ErrLastActiveAdmin) {
+			api.sendError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		api.sendError(w, http.StatusInternalServerError, "failed to update operator")
 		return
 	}
@@ -1046,6 +1051,10 @@ func (api *APIServer) handleDeleteOperator(w http.ResponseWriter, r *http.Reques
 
 	// Delete operator
 	if err := api.db.DeleteOperator(operatorID); err != nil {
+		if errors.Is(err, ErrLastActiveAdmin) {
+			api.sendError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		api.sendError(w, http.StatusInternalServerError, "failed to delete operator")
 		return
 	}
@@ -1094,6 +1103,10 @@ func (api *APIServer) handleToggleOperatorStatus(w http.ResponseWriter, r *http.
 
 	// Update status
 	if err := api.db.SetOperatorActive(operatorID, req.Active); err != nil {
+		if errors.Is(err, ErrLastActiveAdmin) {
+			api.sendError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		api.sendError(w, http.StatusInternalServerError, "failed to update operator status")
 		return
 	}
