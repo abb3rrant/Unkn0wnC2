@@ -6,6 +6,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -34,6 +35,9 @@ const (
 
 // Package-level debug flag for database logging
 var dbDebugMode bool
+
+var ErrLastActiveAdmin = errors.New("cannot remove the last active administrator")
+var ErrCredentialsChanged = errors.New("credentials changed after verification")
 
 // SetDBDebugMode enables or disables verbose database logging
 func SetDBDebugMode(debug bool) {
@@ -3164,8 +3168,16 @@ func (d *MasterDatabase) CreateOperator(id, username, password, role, email stri
 	return err
 }
 
-// VerifyOperatorCredentials verifies operator login credentials
+// VerifyOperatorCredentials verifies operator login credentials while preserving
+// the existing return contract for all current callers.
 func (d *MasterDatabase) VerifyOperatorCredentials(username, password string) (string, string, error) {
+	id, role, _, err := d.VerifyOperatorCredentialsSnapshot(username, password)
+	return id, role, err
+}
+
+// VerifyOperatorCredentialsSnapshot returns the exact password hash that was
+// verified. Callers must keep the snapshot internal (never expose or log it).
+func (d *MasterDatabase) VerifyOperatorCredentialsSnapshot(username, password string) (string, string, string, error) {
 
 	var id, passwordHash, role string
 	var isActive int
@@ -3177,22 +3189,22 @@ func (d *MasterDatabase) VerifyOperatorCredentials(username, password string) (s
 	if err != nil {
 		if err == sql.ErrNoRows {
 			fmt.Printf("[DB] User not found: %s\n", username)
-			return "", "", fmt.Errorf("invalid credentials")
+			return "", "", "", fmt.Errorf("invalid credentials")
 		}
 		fmt.Printf("[DB] Query error for user %s: %v\n", username, err)
-		return "", "", err
+		return "", "", "", err
 	}
 
 	if isActive != 1 {
 		fmt.Printf("[DB] Account disabled for user: %s\n", username)
-		return "", "", fmt.Errorf("account disabled")
+		return "", "", "", fmt.Errorf("account disabled")
 	}
 
 	// Verify password
 	err = bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password))
 	if err != nil {
 		fmt.Printf("[DB] Password verification failed for user %s: %v\n", username, err)
-		return "", "", fmt.Errorf("invalid credentials")
+		return "", "", "", fmt.Errorf("invalid credentials")
 	}
 
 	// Update login stats
@@ -3202,7 +3214,7 @@ func (d *MasterDatabase) VerifyOperatorCredentials(username, password string) (s
 		`, time.Now().Unix(), id)
 	}()
 
-	return id, role, nil
+	return id, role, passwordHash, nil
 }
 
 // GetAllOperators returns all operator accounts
@@ -3316,8 +3328,66 @@ func (d *MasterDatabase) UpdateOperator(operatorID, username, role, email string
 
 	query := fmt.Sprintf("UPDATE operators SET %s WHERE id = ?", strings.Join(setClauses, ", "))
 	args = append(args, operatorID)
-	_, err := d.db.Exec(query, args...)
-	return err
+	if role != "" && role != "admin" {
+		query += ` AND NOT (role = 'admin' AND is_active = 1 AND
+			(SELECT COUNT(*) FROM operators WHERE role = 'admin' AND is_active = 1) <= 1)`
+	}
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin operator update: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(query, args...)
+	if err != nil {
+		return err
+	}
+	affected, err := adminMutationRowsAffected(result)
+	if err != nil {
+		return err
+	}
+	if role != "" && role != "admin" {
+		if affected == 0 {
+			return classifyRejectedAdminMutation(tx, operatorID)
+		}
+	}
+	if affected == 0 {
+		return fmt.Errorf("operator %q not found or update affected no rows", operatorID)
+	}
+	return tx.Commit()
+}
+
+// adminMutationRowsAffected treats an unreportable result as failure; callers must not
+// acknowledge a write unless the driver can confirm its outcome.
+func adminMutationRowsAffected(result sql.Result) (int64, error) {
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to verify operator mutation: %w", err)
+	}
+	return affected, nil
+}
+
+// classifyRejectedAdminMutation must run on the same transaction/connection as the
+// guarded write. The preceding UPDATE/DELETE establishes SQLite's write transaction;
+// classification therefore sees the exact serialized state that rejected it.
+func classifyRejectedAdminMutation(tx *sql.Tx, operatorID string) error {
+	var role string
+	var active int
+	if err := tx.QueryRow(`SELECT role, is_active FROM operators WHERE id = ?`, operatorID).Scan(&role, &active); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("operator %q not found or mutation affected no rows", operatorID)
+		}
+		return fmt.Errorf("failed to classify rejected operator mutation: %w", err)
+	}
+	if role == "admin" && active == 1 {
+		var count int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM operators WHERE role = 'admin' AND is_active = 1`).Scan(&count); err != nil {
+			return fmt.Errorf("failed to classify rejected operator mutation: %w", err)
+		}
+		if count <= 1 {
+			return ErrLastActiveAdmin
+		}
+	}
+	return fmt.Errorf("operator %q mutation affected no rows", operatorID)
 }
 
 // UpdateOperatorPassword changes an operator's password
@@ -3329,13 +3399,27 @@ func (d *MasterDatabase) UpdateOperatorPassword(operatorID, newPassword string) 
 		return fmt.Errorf("failed to hash password: %w", err)
 	}
 
-	_, err = d.db.Exec(`
-		UPDATE operators 
-		SET password_hash = ?
-		WHERE id = ?
-	`, string(passwordHash), operatorID)
-
-	return err
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin password update: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`UPDATE operators SET password_hash = ? WHERE id = ?`, string(passwordHash), operatorID)
+	if err != nil {
+		return fmt.Errorf("failed to update password: %w", err)
+	}
+	if count, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("failed to verify password update: %w", err)
+	} else if count != 1 {
+		return fmt.Errorf("operator not found")
+	}
+	if _, err := tx.Exec(`UPDATE sessions SET is_revoked = 1 WHERE operator_id = ?`, operatorID); err != nil {
+		return fmt.Errorf("failed to revoke operator sessions: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit password update: %w", err)
+	}
+	return nil
 }
 
 // SetOperatorActive enables or disables an operator account
@@ -3346,20 +3430,54 @@ func (d *MasterDatabase) SetOperatorActive(operatorID string, active bool) error
 		activeInt = 1
 	}
 
-	_, err := d.db.Exec(`
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin operator status update: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`
 		UPDATE operators 
 		SET is_active = ?
-		WHERE id = ?
-	`, activeInt, operatorID)
-
-	return err
+		WHERE id = ? AND NOT (is_active = 1 AND role = 'admin' AND ? = 0 AND
+			(SELECT COUNT(*) FROM operators WHERE role = 'admin' AND is_active = 1) <= 1)
+	`, activeInt, operatorID, activeInt)
+	if err != nil {
+		return err
+	}
+	affected, err := adminMutationRowsAffected(result)
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		if !active {
+			return classifyRejectedAdminMutation(tx, operatorID)
+		}
+		return fmt.Errorf("operator %q not found or status update affected no rows", operatorID)
+	}
+	return tx.Commit()
 }
 
 // DeleteOperator removes an operator account
 func (d *MasterDatabase) DeleteOperator(operatorID string) error {
 
-	_, err := d.db.Exec(`DELETE FROM operators WHERE id = ?`, operatorID)
-	return err
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin operator deletion: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`DELETE FROM operators WHERE id = ? AND NOT (role = 'admin' AND is_active = 1 AND
+		(SELECT COUNT(*) FROM operators WHERE role = 'admin' AND is_active = 1) <= 1)`, operatorID)
+	if err != nil {
+		return err
+	}
+	affected, err := adminMutationRowsAffected(result)
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return classifyRejectedAdminMutation(tx, operatorID)
+	}
+	return tx.Commit()
 }
 
 // CheckUsernameExists checks if a username is already taken
@@ -5137,6 +5255,30 @@ func (d *MasterDatabase) CreateSession(sessionID, operatorID, jti, tokenHash, ip
 	`, sessionID, operatorID, jti, tokenHash, now, expiresAt, now, ipAddress, userAgent)
 
 	return err
+}
+
+// CreateSessionForVerifiedCredentials atomically inserts a session only while
+// the operator remains active with the exact password hash that was verified.
+// The conditional insert is enforced by SQLite across connections/processes.
+func (d *MasterDatabase) CreateSessionForVerifiedCredentials(sessionID, operatorID, verifiedPasswordHash, jti, tokenHash, ipAddress, userAgent string, expiresAt int64) error {
+	now := time.Now().Unix()
+	result, err := d.db.Exec(`
+		INSERT INTO sessions (id, operator_id, jti, token_hash, created_at, expires_at, last_activity, ip_address, user_agent, is_revoked)
+		SELECT ?, operators.id, ?, ?, ?, ?, ?, ?, ?, 0
+		FROM operators
+		WHERE operators.id = ? AND operators.password_hash = ? AND operators.is_active = 1
+	`, sessionID, jti, tokenHash, now, expiresAt, now, ipAddress, userAgent, operatorID, verifiedPasswordHash)
+	if err != nil {
+		return fmt.Errorf("failed to create verified session: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to verify session creation: %w", err)
+	}
+	if rows != 1 {
+		return ErrCredentialsChanged
+	}
+	return nil
 }
 
 // IsSessionRevoked checks if a session with the given JTI is revoked.

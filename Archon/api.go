@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -515,17 +516,12 @@ func (api *APIServer) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Check if the session is revoked (JWT revocation via JTI)
-		if claims.JTI != "" {
-			isRevoked, err := api.db.IsSessionRevoked(claims.JTI)
-			if err != nil {
-				api.sendError(w, http.StatusInternalServerError, "failed to check session status")
-				return
-			}
-			if isRevoked {
-				api.sendError(w, http.StatusUnauthorized, "session has been revoked")
-				return
-			}
+		// Require a live persisted session, matching its owner and JTI. This
+		// deliberately bypasses revocation caches so external/password revocations
+		// take effect on the next request.
+		if !api.websocketSessionAuthorized(claims) {
+			api.sendError(w, http.StatusUnauthorized, "session is unavailable")
+			return
 		}
 
 		// Resolve authorization state from the database on every request. JWT role
@@ -671,7 +667,7 @@ func (api *APIServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("[API] Login attempt for user: %s\n", req.Username)
 
 	// Verify credentials
-	operatorID, role, err := api.db.VerifyOperatorCredentials(req.Username, req.Password)
+	operatorID, role, verifiedPasswordHash, err := api.db.VerifyOperatorCredentialsSnapshot(req.Username, req.Password)
 	if err != nil {
 		fmt.Printf("[API] Credential verification failed: %v\n", err)
 		api.sendError(w, http.StatusUnauthorized, "invalid credentials")
@@ -714,8 +710,14 @@ func (api *APIServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// Note: Use SHA256 for token hash (not bcrypt) since JWT tokens exceed bcrypt's 72-byte limit
 	sessionID := generateID()
 	tokenHash := sha256Hash(tokenString)
-	err = api.db.CreateSession(sessionID, operatorID, jti, tokenHash, r.RemoteAddr, r.UserAgent(), expiresAt.Unix())
+	err = api.db.CreateSessionForVerifiedCredentials(sessionID, operatorID, verifiedPasswordHash, jti, tokenHash, r.RemoteAddr, r.UserAgent(), expiresAt.Unix())
 	if err != nil {
+		if errors.Is(err, ErrCredentialsChanged) {
+			api.sendError(w, http.StatusUnauthorized, "credentials changed; please log in again")
+			api.db.LogAuditEvent("", "login_failed", "operator", req.Username,
+				"Credentials changed during login", r.RemoteAddr)
+			return
+		}
 		fmt.Printf("[API] Failed to create session: %v\n", err)
 		api.sendError(w, http.StatusInternalServerError, "failed to create session")
 		return
@@ -952,6 +954,10 @@ func (api *APIServer) handleUpdateOperator(w http.ResponseWriter, r *http.Reques
 
 	// Update operator
 	if err := api.db.UpdateOperator(operatorID, req.Username, req.Role, req.Email); err != nil {
+		if errors.Is(err, ErrLastActiveAdmin) {
+			api.sendError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		api.sendError(w, http.StatusInternalServerError, "failed to update operator")
 		return
 	}
@@ -1051,6 +1057,10 @@ func (api *APIServer) handleDeleteOperator(w http.ResponseWriter, r *http.Reques
 
 	// Delete operator
 	if err := api.db.DeleteOperator(operatorID); err != nil {
+		if errors.Is(err, ErrLastActiveAdmin) {
+			api.sendError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		api.sendError(w, http.StatusInternalServerError, "failed to delete operator")
 		return
 	}
@@ -1099,6 +1109,10 @@ func (api *APIServer) handleToggleOperatorStatus(w http.ResponseWriter, r *http.
 
 	// Update status
 	if err := api.db.SetOperatorActive(operatorID, req.Active); err != nil {
+		if errors.Is(err, ErrLastActiveAdmin) {
+			api.sendError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		api.sendError(w, http.StatusInternalServerError, "failed to update operator status")
 		return
 	}
@@ -1566,7 +1580,10 @@ func (api *APIServer) handleDNSServerLogs(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	for _, entry := range req.Entries {
+	for i := range req.Entries {
+		// Treat peer-supplied severity as an enum, never as display markup.
+		req.Entries[i].Level = normalizeLogLevel(req.Entries[i].Level)
+		entry := req.Entries[i]
 		msg := fmt.Sprintf("[DNS:%s] %s", req.DNSServerID, entry.Message)
 		LogInfo("%s", msg)
 		BroadcastLog(entry.Level, msg)

@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -169,6 +170,21 @@ func LogError(format string, args ...interface{}) {
 func CloseLogger() {
 	if appLogger != nil {
 		appLogger.Close()
+	}
+}
+
+// normalizeLogLevel keeps untrusted severity metadata out of markup and log
+// delimiters. Unknown levels retain their message but receive an INFO label.
+func normalizeLogLevel(level string) string {
+	switch strings.ToUpper(strings.TrimSpace(level)) {
+	case "DEBUG":
+		return "DEBUG"
+	case "WARN", "WARNING":
+		return "WARN"
+	case "ERROR":
+		return "ERROR"
+	default:
+		return "INFO"
 	}
 }
 

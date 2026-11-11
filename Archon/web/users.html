@@ -686,9 +686,13 @@
             const email = document.getElementById('editEmail').value;
 
             try {
+                const body = { username, email };
+                // A disabled selector still has a value when read by JS. Only
+                // admins may submit role changes; self-edits must omit it.
+                if (currentUserRole === 'admin') body.role = role;
                 const response = await authFetch(`/api/operators/${id}`, {
                     method: 'PUT',
-                    body: JSON.stringify({ username, role, email })
+                    body: JSON.stringify(body)
                 });
 
                 if (!response) return;

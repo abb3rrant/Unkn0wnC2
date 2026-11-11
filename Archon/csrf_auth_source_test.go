@@ -16,7 +16,7 @@ func TestCSRFMatchesAuthenticationSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	api := NewAPIServer(db, Config{JWTSecret: secret})
-	token := signedTestToken(t, secret, &Claims{OperatorID: "csrf-user", Username: "csrf-user", Role: "viewer"})
+	token := persistedTestToken(t, db, secret, &Claims{OperatorID: "csrf-user", Username: "csrf-user", Role: "viewer"})
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
 		for _, tc := range []struct {
 			name   string

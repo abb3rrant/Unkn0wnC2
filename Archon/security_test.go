@@ -227,6 +227,22 @@ func signedTestToken(t *testing.T, secret string, claims *Claims) string {
 	return token
 }
 
+// persistedTestToken models the real login contract for tests whose purpose is
+// downstream authorization rather than rejecting missing session records.
+func persistedTestToken(t *testing.T, db *MasterDatabase, secret string, claims *Claims) string {
+	t.Helper()
+	if claims.JTI == "" {
+		claims.JTI = "fixture-" + t.Name()
+	}
+	if claims.ExpiresAt == nil {
+		claims.ExpiresAt = jwt.NewNumericDate(time.Now().Add(time.Hour))
+	}
+	if err := db.CreateSession("row-"+claims.JTI, claims.OperatorID, claims.JTI, "fixture-hash", "127.0.0.1", "test", claims.ExpiresAt.Unix()); err != nil {
+		t.Fatalf("persist fixture session: %v", err)
+	}
+	return signedTestToken(t, secret, claims)
+}
+
 func TestAuthMiddlewareUsesCurrentOperatorRole(t *testing.T) {
 	const secret = "0123456789abcdef0123456789abcdef" //gitleaks:allow -- deterministic test fixture
 	db, cleanup := newTestDB(t)
@@ -235,7 +251,7 @@ func TestAuthMiddlewareUsesCurrentOperatorRole(t *testing.T) {
 		t.Fatalf("CreateOperator: %v", err)
 	}
 	api := NewAPIServer(db, Config{JWTSecret: secret})
-	token := signedTestToken(t, secret, &Claims{OperatorID: "operator-1", Username: "alice", Role: "admin"})
+	token := persistedTestToken(t, db, secret, &Claims{OperatorID: "operator-1", Username: "alice", Role: "admin"})
 
 	var gotRole string
 	handler := api.authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -266,7 +282,7 @@ func TestAuthMiddlewareRejectsDisabledOperatorSession(t *testing.T) {
 		t.Fatalf("SetOperatorActive: %v", err)
 	}
 	api := NewAPIServer(db, Config{JWTSecret: secret})
-	token := signedTestToken(t, secret, &Claims{OperatorID: "operator-1", Username: "alice", Role: "operator"})
+	token := persistedTestToken(t, db, secret, &Claims{OperatorID: "operator-1", Username: "alice", Role: "operator"})
 
 	called := false
 	handler := api.authMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
@@ -291,7 +307,7 @@ func TestViewerCannotMutateOperationalRoutes(t *testing.T) {
 	router := mux.NewRouter()
 	api.SetupRoutes(router)
 
-	token := signedTestToken(t, secret, &Claims{
+	token := persistedTestToken(t, db, secret, &Claims{
 		OperatorID: "viewer-1",
 		Username:   "viewer",
 		Role:       "viewer",
