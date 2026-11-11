@@ -55,6 +55,10 @@ if ! command -v go &>/dev/null; then
   MISSING_DEPS+=("go (Go compiler 1.26.10+)")
 else
   GO_VER=$(go env GOVERSION)
+  if [[ ! "$GO_VER" =~ ^go[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo -e "${RED}ERROR: Stable Go 1.26.10+ required, found ${GO_VER}${NC}"
+    exit 1
+  fi
   if ! printf '%s\n%s\n' 'go1.26.10' "$GO_VER" | sort -V -C; then
     echo -e "${RED}ERROR: Go 1.26.10+ required, found ${GO_VER}${NC}"
     exit 1

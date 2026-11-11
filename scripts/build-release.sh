@@ -31,6 +31,9 @@ BUILD_DATE=$(date -u -d "@${SOURCE_DATE_EPOCH}" '+%Y-%m-%d')
 
 GO_VERSION=$(${GO_BIN} env GOVERSION)
 MIN_GO_VERSION=go1.26.10
+if [[ ! "${GO_VERSION}" =~ ^go[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  fail "A stable Go ${MIN_GO_VERSION#go}+ is required, found ${GO_VERSION}"
+fi
 if ! printf '%s\n%s\n' "${MIN_GO_VERSION}" "${GO_VERSION}" | sort -V -C; then
   fail "Go 1.26.10 or newer is required, found ${GO_VERSION}"
 fi
