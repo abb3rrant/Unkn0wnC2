@@ -3332,31 +3332,62 @@ func (d *MasterDatabase) UpdateOperator(operatorID, username, role, email string
 		query += ` AND NOT (role = 'admin' AND is_active = 1 AND
 			(SELECT COUNT(*) FROM operators WHERE role = 'admin' AND is_active = 1) <= 1)`
 	}
-	result, err := d.db.Exec(query, args...)
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin operator update: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(query, args...)
+	if err != nil {
+		return err
+	}
+	affected, err := adminMutationRowsAffected(result)
 	if err != nil {
 		return err
 	}
 	if role != "" && role != "admin" {
-		if affected, err := result.RowsAffected(); err == nil && affected == 0 {
-			return d.lastActiveAdminErrorIfBlocked(operatorID)
+		if affected == 0 {
+			return classifyRejectedAdminMutation(tx, operatorID)
 		}
 	}
-	return nil
+	if affected == 0 {
+		return fmt.Errorf("operator %q not found or update affected no rows", operatorID)
+	}
+	return tx.Commit()
 }
 
-// lastActiveAdminErrorIfBlocked distinguishes an invariant rejection from a missing row.
-func (d *MasterDatabase) lastActiveAdminErrorIfBlocked(operatorID string) error {
-	var blocked int
-	err := d.db.QueryRow(`SELECT COUNT(*) FROM operators
-		WHERE id = ? AND role = 'admin' AND is_active = 1
-		AND (SELECT COUNT(*) FROM operators WHERE role = 'admin' AND is_active = 1) <= 1`, operatorID).Scan(&blocked)
+// adminMutationRowsAffected treats an unreportable result as failure; callers must not
+// acknowledge a write unless the driver can confirm its outcome.
+func adminMutationRowsAffected(result sql.Result) (int64, error) {
+	affected, err := result.RowsAffected()
 	if err != nil {
-		return err
+		return 0, fmt.Errorf("failed to verify operator mutation: %w", err)
 	}
-	if blocked > 0 {
-		return ErrLastActiveAdmin
+	return affected, nil
+}
+
+// classifyRejectedAdminMutation must run on the same transaction/connection as the
+// guarded write. The preceding UPDATE/DELETE establishes SQLite's write transaction;
+// classification therefore sees the exact serialized state that rejected it.
+func classifyRejectedAdminMutation(tx *sql.Tx, operatorID string) error {
+	var role string
+	var active int
+	if err := tx.QueryRow(`SELECT role, is_active FROM operators WHERE id = ?`, operatorID).Scan(&role, &active); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("operator %q not found or mutation affected no rows", operatorID)
+		}
+		return fmt.Errorf("failed to classify rejected operator mutation: %w", err)
 	}
-	return nil
+	if role == "admin" && active == 1 {
+		var count int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM operators WHERE role = 'admin' AND is_active = 1`).Scan(&count); err != nil {
+			return fmt.Errorf("failed to classify rejected operator mutation: %w", err)
+		}
+		if count <= 1 {
+			return ErrLastActiveAdmin
+		}
+	}
+	return fmt.Errorf("operator %q mutation affected no rows", operatorID)
 }
 
 // UpdateOperatorPassword changes an operator's password
@@ -3399,7 +3430,12 @@ func (d *MasterDatabase) SetOperatorActive(operatorID string, active bool) error
 		activeInt = 1
 	}
 
-	result, err := d.db.Exec(`
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin operator status update: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`
 		UPDATE operators 
 		SET is_active = ?
 		WHERE id = ? AND NOT (is_active = 1 AND role = 'admin' AND ? = 0 AND
@@ -3408,26 +3444,40 @@ func (d *MasterDatabase) SetOperatorActive(operatorID string, active bool) error
 	if err != nil {
 		return err
 	}
-	if !active {
-		if affected, err := result.RowsAffected(); err == nil && affected == 0 {
-			return d.lastActiveAdminErrorIfBlocked(operatorID)
-		}
+	affected, err := adminMutationRowsAffected(result)
+	if err != nil {
+		return err
 	}
-	return nil
+	if affected == 0 {
+		if !active {
+			return classifyRejectedAdminMutation(tx, operatorID)
+		}
+		return fmt.Errorf("operator %q not found or status update affected no rows", operatorID)
+	}
+	return tx.Commit()
 }
 
 // DeleteOperator removes an operator account
 func (d *MasterDatabase) DeleteOperator(operatorID string) error {
 
-	result, err := d.db.Exec(`DELETE FROM operators WHERE id = ? AND NOT (role = 'admin' AND is_active = 1 AND
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin operator deletion: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`DELETE FROM operators WHERE id = ? AND NOT (role = 'admin' AND is_active = 1 AND
 		(SELECT COUNT(*) FROM operators WHERE role = 'admin' AND is_active = 1) <= 1)`, operatorID)
 	if err != nil {
 		return err
 	}
-	if affected, err := result.RowsAffected(); err == nil && affected == 0 {
-		return d.lastActiveAdminErrorIfBlocked(operatorID)
+	affected, err := adminMutationRowsAffected(result)
+	if err != nil {
+		return err
 	}
-	return nil
+	if affected == 0 {
+		return classifyRejectedAdminMutation(tx, operatorID)
+	}
+	return tx.Commit()
 }
 
 // CheckUsernameExists checks if a username is already taken
