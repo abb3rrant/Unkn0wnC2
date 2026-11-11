@@ -667,7 +667,7 @@ func (api *APIServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("[API] Login attempt for user: %s\n", req.Username)
 
 	// Verify credentials
-	operatorID, role, err := api.db.VerifyOperatorCredentials(req.Username, req.Password)
+	operatorID, role, verifiedPasswordHash, err := api.db.VerifyOperatorCredentialsSnapshot(req.Username, req.Password)
 	if err != nil {
 		fmt.Printf("[API] Credential verification failed: %v\n", err)
 		api.sendError(w, http.StatusUnauthorized, "invalid credentials")
@@ -710,8 +710,14 @@ func (api *APIServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// Note: Use SHA256 for token hash (not bcrypt) since JWT tokens exceed bcrypt's 72-byte limit
 	sessionID := generateID()
 	tokenHash := sha256Hash(tokenString)
-	err = api.db.CreateSession(sessionID, operatorID, jti, tokenHash, r.RemoteAddr, r.UserAgent(), expiresAt.Unix())
+	err = api.db.CreateSessionForVerifiedCredentials(sessionID, operatorID, verifiedPasswordHash, jti, tokenHash, r.RemoteAddr, r.UserAgent(), expiresAt.Unix())
 	if err != nil {
+		if errors.Is(err, ErrCredentialsChanged) {
+			api.sendError(w, http.StatusUnauthorized, "credentials changed; please log in again")
+			api.db.LogAuditEvent("", "login_failed", "operator", req.Username,
+				"Credentials changed during login", r.RemoteAddr)
+			return
+		}
 		fmt.Printf("[API] Failed to create session: %v\n", err)
 		api.sendError(w, http.StatusInternalServerError, "failed to create session")
 		return

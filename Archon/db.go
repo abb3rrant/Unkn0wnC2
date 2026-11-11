@@ -37,6 +37,7 @@ const (
 var dbDebugMode bool
 
 var ErrLastActiveAdmin = errors.New("cannot remove the last active administrator")
+var ErrCredentialsChanged = errors.New("credentials changed after verification")
 
 // SetDBDebugMode enables or disables verbose database logging
 func SetDBDebugMode(debug bool) {
@@ -3167,8 +3168,16 @@ func (d *MasterDatabase) CreateOperator(id, username, password, role, email stri
 	return err
 }
 
-// VerifyOperatorCredentials verifies operator login credentials
+// VerifyOperatorCredentials verifies operator login credentials while preserving
+// the existing return contract for all current callers.
 func (d *MasterDatabase) VerifyOperatorCredentials(username, password string) (string, string, error) {
+	id, role, _, err := d.VerifyOperatorCredentialsSnapshot(username, password)
+	return id, role, err
+}
+
+// VerifyOperatorCredentialsSnapshot returns the exact password hash that was
+// verified. Callers must keep the snapshot internal (never expose or log it).
+func (d *MasterDatabase) VerifyOperatorCredentialsSnapshot(username, password string) (string, string, string, error) {
 
 	var id, passwordHash, role string
 	var isActive int
@@ -3180,22 +3189,22 @@ func (d *MasterDatabase) VerifyOperatorCredentials(username, password string) (s
 	if err != nil {
 		if err == sql.ErrNoRows {
 			fmt.Printf("[DB] User not found: %s\n", username)
-			return "", "", fmt.Errorf("invalid credentials")
+			return "", "", "", fmt.Errorf("invalid credentials")
 		}
 		fmt.Printf("[DB] Query error for user %s: %v\n", username, err)
-		return "", "", err
+		return "", "", "", err
 	}
 
 	if isActive != 1 {
 		fmt.Printf("[DB] Account disabled for user: %s\n", username)
-		return "", "", fmt.Errorf("account disabled")
+		return "", "", "", fmt.Errorf("account disabled")
 	}
 
 	// Verify password
 	err = bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password))
 	if err != nil {
 		fmt.Printf("[DB] Password verification failed for user %s: %v\n", username, err)
-		return "", "", fmt.Errorf("invalid credentials")
+		return "", "", "", fmt.Errorf("invalid credentials")
 	}
 
 	// Update login stats
@@ -3205,7 +3214,7 @@ func (d *MasterDatabase) VerifyOperatorCredentials(username, password string) (s
 		`, time.Now().Unix(), id)
 	}()
 
-	return id, role, nil
+	return id, role, passwordHash, nil
 }
 
 // GetAllOperators returns all operator accounts
@@ -5196,6 +5205,30 @@ func (d *MasterDatabase) CreateSession(sessionID, operatorID, jti, tokenHash, ip
 	`, sessionID, operatorID, jti, tokenHash, now, expiresAt, now, ipAddress, userAgent)
 
 	return err
+}
+
+// CreateSessionForVerifiedCredentials atomically inserts a session only while
+// the operator remains active with the exact password hash that was verified.
+// The conditional insert is enforced by SQLite across connections/processes.
+func (d *MasterDatabase) CreateSessionForVerifiedCredentials(sessionID, operatorID, verifiedPasswordHash, jti, tokenHash, ipAddress, userAgent string, expiresAt int64) error {
+	now := time.Now().Unix()
+	result, err := d.db.Exec(`
+		INSERT INTO sessions (id, operator_id, jti, token_hash, created_at, expires_at, last_activity, ip_address, user_agent, is_revoked)
+		SELECT ?, operators.id, ?, ?, ?, ?, ?, ?, ?, 0
+		FROM operators
+		WHERE operators.id = ? AND operators.password_hash = ? AND operators.is_active = 1
+	`, sessionID, jti, tokenHash, now, expiresAt, now, ipAddress, userAgent, operatorID, verifiedPasswordHash)
+	if err != nil {
+		return fmt.Errorf("failed to create verified session: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to verify session creation: %w", err)
+	}
+	if rows != 1 {
+		return ErrCredentialsChanged
+	}
+	return nil
 }
 
 // IsSessionRevoked checks if a session with the given JTI is revoked.
