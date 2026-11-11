@@ -400,38 +400,49 @@ func (api *APIServer) handleGetLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	logDir := "/opt/unkn0wnc2/logs"
-	var logFile string
+	if appLogger != nil && appLogger.logDir != "" {
+		logDir = appLogger.logDir
+	}
 	today := time.Now().Format("2006-01-02")
-
+	var names []string
 	switch {
 	case logType == "archon" || logType == "":
-		logFile = filepath.Join(logDir, fmt.Sprintf("archon-%s.log", today))
-	case strings.HasPrefix(logType, "dns-"):
-		sanitized := filepath.Base(logType)
-		logFile = filepath.Join(logDir, sanitized+".log")
+		names = []string{fmt.Sprintf("archon-%s.log", today), "archon.log"}
+	case strings.HasPrefix(logType, "dns-") && filepath.Base(logType) == logType && !strings.ContainsAny(logType, "/\\"):
+		names = []string{logType + ".log"}
 	default:
-		logFile = filepath.Join(logDir, fmt.Sprintf("archon-%s.log", today))
+		api.sendError(w, http.StatusBadRequest, "invalid log source")
+		return
 	}
 
-	entries, err := readLogFile(logFile, numLines)
-	if err != nil {
-		// Try alternative paths - undated version
-		altLogFile := filepath.Join(logDir, "archon.log")
-		entries, err = readLogFile(altLogFile, numLines)
-		if err != nil {
-			// Try ./logs directory
-			altLogDir := "./logs"
-			altLogFile = filepath.Join(altLogDir, fmt.Sprintf("archon-%s.log", today))
-			entries, err = readLogFile(altLogFile, numLines)
-			if err != nil {
-				api.sendJSON(w, map[string]interface{}{
-					"success": true,
-					"entries": []LogEntry{},
-					"message": fmt.Sprintf("Log file not found or empty: %s", filepath.Base(logFile)),
-				})
+	// Legacy local paths may be checked, but only for the requested source.
+	// Never substitute controller logs for a missing server log or report a
+	// filename different from the file that was actually read.
+	var entries []LogEntry
+	var logFile string
+	found := false
+	for _, dir := range []string{logDir, "./logs"} {
+		for _, name := range names {
+			candidate := filepath.Join(dir, name)
+			var err error
+			entries, err = readLogFile(candidate, numLines)
+			if err == nil {
+				logFile = candidate
+				found = true
+				break
+			}
+			if !os.IsNotExist(err) {
+				api.sendError(w, http.StatusInternalServerError, "failed to read requested log")
 				return
 			}
 		}
+		if found {
+			break
+		}
+	}
+	if !found {
+		api.sendError(w, http.StatusNotFound, "requested log source is unavailable")
+		return
 	}
 
 	api.sendJSON(w, map[string]interface{}{

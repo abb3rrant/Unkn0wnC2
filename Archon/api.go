@@ -1574,7 +1574,10 @@ func (api *APIServer) handleDNSServerLogs(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	for _, entry := range req.Entries {
+	for i := range req.Entries {
+		// Treat peer-supplied severity as an enum, never as display markup.
+		req.Entries[i].Level = normalizeLogLevel(req.Entries[i].Level)
+		entry := req.Entries[i]
 		msg := fmt.Sprintf("[DNS:%s] %s", req.DNSServerID, entry.Message)
 		LogInfo("%s", msg)
 		BroadcastLog(entry.Level, msg)

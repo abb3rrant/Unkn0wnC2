@@ -309,6 +309,46 @@
             document.getElementById('errorCount').textContent = errorCount;
         }
 
+        function logLevelClass(value) {
+            const level = String(value || '').trim().toLowerCase();
+            if (level === 'warning') return 'warn';
+            return ['info', 'warn', 'error', 'debug'].includes(level) ? level : 'info';
+        }
+
+        // All log fields are untrusted, including metadata from older stored
+        // records. Keep labels/messages as text and severity classes as an enum.
+        function createLogLine(entry, searchTerm) {
+            const line = document.createElement('div');
+            line.className = 'log-line';
+            const timestamp = document.createElement('span');
+            timestamp.className = 'log-timestamp';
+            timestamp.textContent = entry.timestamp || '';
+            const level = logLevelClass(entry.level);
+            const severity = document.createElement('span');
+            severity.className = 'log-level ' + level;
+            severity.textContent = level.toUpperCase();
+            const message = document.createElement('span');
+            message.className = 'log-message';
+            const text = String(entry.message || entry.raw || '');
+            if (!searchTerm) {
+                message.textContent = text;
+            } else {
+                const matches = new RegExp(escapeRegExp(searchTerm), 'gi');
+                let offset = 0;
+                for (const match of text.matchAll(matches)) {
+                    message.appendChild(document.createTextNode(text.slice(offset, match.index)));
+                    const highlight = document.createElement('span');
+                    highlight.className = 'highlight';
+                    highlight.textContent = match[0];
+                    message.appendChild(highlight);
+                    offset = match.index + match[0].length;
+                }
+                message.appendChild(document.createTextNode(text.slice(offset)));
+            }
+            line.append(timestamp, severity, message);
+            return line;
+        }
+
         function renderLogs() {
             const viewer = document.getElementById('logViewer');
             const searchTerm = document.getElementById('searchInput').value.toLowerCase();
@@ -328,23 +368,7 @@
                 return;
             }
 
-            viewer.innerHTML = filteredLogs.map(log => {
-                const level = (log.level || 'info').toLowerCase();
-                let message = escapeHtml(log.message || log.raw || '');
-                
-                // Highlight search term
-                if (searchTerm) {
-                    const regex = new RegExp(`(${escapeRegExp(searchTerm)})`, 'gi');
-                    message = message.replace(regex, '<span class="highlight">$1</span>');
-                }
-
-                return `
-                    <div class="log-line">
-                        <span class="log-timestamp">${escapeHtml(log.timestamp || '')}</span>
-                        <span class="log-level ${level}">${level.toUpperCase()}</span>
-                        <span class="log-message">${message}</span>
-                    </div>`;
-            }).join('');
+            viewer.replaceChildren(...filteredLogs.map(log => createLogLine(log, searchTerm)));
 
             if (autoScroll) {
                 viewer.scrollTop = viewer.scrollHeight;
@@ -398,20 +422,7 @@
             const emptyState = viewer.querySelector('.empty-state');
             if (emptyState) emptyState.remove();
 
-            const level = (entry.level || 'info').toLowerCase();
-            let message = escapeHtml(entry.message || '');
-            if (searchTerm) {
-                const regex = new RegExp(`(${escapeRegExp(searchTerm)})`, 'gi');
-                message = message.replace(regex, '<span class="highlight">$1</span>');
-            }
-
-            const div = document.createElement('div');
-            div.className = 'log-line';
-            div.innerHTML = `
-                <span class="log-timestamp">${escapeHtml(entry.timestamp || '')}</span>
-                <span class="log-level ${level}">${level.toUpperCase()}</span>
-                <span class="log-message">${message}</span>`;
-            viewer.appendChild(div);
+            viewer.appendChild(createLogLine(entry, searchTerm));
 
             if (autoScroll) {
                 viewer.scrollTop = viewer.scrollHeight;
