@@ -591,3 +591,29 @@ if (typeof module !== 'undefined' && module.exports) {
         icon
     };
 }
+
+/**
+ * Coalesce bursty event-driven reloads.
+ *
+ * Beacon callbacks at a 5s sleep arrive faster than a full list refetch plus
+ * DOM rebuild can complete, so a bare `ws.on('beacon_update', loadBeacons)`
+ * queues reloads without bound and the tab stops responding. This runs the
+ * function at most once per `ms`, always trailing, so the last event still
+ * refreshes the view.
+ */
+function coalesce(fn, ms = 2000) {
+    let timer = null;
+    let pending = false;
+    return function coalesced(...args) {
+        if (timer) { pending = true; return; }
+        fn.apply(this, args);
+        timer = setTimeout(() => {
+            timer = null;
+            if (pending) {
+                pending = false;
+                coalesced.apply(this, args);
+            }
+        }, ms);
+    };
+}
+if (typeof window !== 'undefined') { window.coalesce = coalesce; }

@@ -884,8 +884,8 @@
         // Wait for ws to be available before setting handlers
         function setupWebSocketHandlers() {
             if (typeof ws !== 'undefined' && ws) {
-                ws.on('beacon_update', () => loadInfrastructure());
-                ws.on('dns_server_update', () => loadInfrastructure());
+                ws.on('beacon_update', coalesce(() => loadInfrastructure(), 2000));
+                ws.on('dns_server_update', coalesce(() => loadInfrastructure(), 2000));
                 ws.on('connected', () => {
                     // Re-subscribe on reconnect
                     loadAllData();

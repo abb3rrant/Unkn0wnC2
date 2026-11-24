@@ -434,17 +434,17 @@
         loadDashboard();
 
         // WebSocket handlers for real-time updates
-        ws.on('beacon_update', (beacon) => {
+        ws.on('beacon_update', coalesce((beacon) => {
             loadBeacons();
-        });
+        }, 2000));
 
-        ws.on('dns_server_update', (server) => {
+        ws.on('dns_server_update', coalesce((server) => {
             loadServers();
-        });
+        }, 2000));
 
-        ws.on('task_update', (task) => {
+        ws.on('task_update', coalesce((task) => {
             loadStats();
-        });
+        }, 2000));
 
         // Fallback auto-refresh only when WebSocket is disconnected
         setInterval(() => {
