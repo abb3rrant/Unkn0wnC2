@@ -1475,10 +1475,41 @@ func (d *MasterDatabase) GetActiveDNSServers() ([]DNSServer, error) {
 
 // Beacon operations
 
+// beaconPersistInterval coalesces steady-state beacon writes.
+//
+// A beacon on a 5s sleep reports every 5s, and each report performs a write
+// (UpsertBeacon) plus a second write for HTTP contact. SQLite serialises
+// writers, so fast beacons starve the read path and the web UI starts timing
+// out behind the write lock. Registration traffic is always written; routine
+// last_seen updates are coalesced to this interval.
+const beaconPersistInterval = 15 * time.Second
+
+var beaconPersistGate = struct {
+	sync.Mutex
+	last map[string]time.Time
+}{last: make(map[string]time.Time)}
+
+// shouldPersistBeacon reports whether this report needs to reach the database.
+// force is set for registration traffic, which must never be dropped.
+func shouldPersistBeacon(beaconID string, force bool) bool {
+	now := time.Now()
+	beaconPersistGate.Lock()
+	defer beaconPersistGate.Unlock()
+	last, seen := beaconPersistGate.last[beaconID]
+	if force || !seen || now.Sub(last) >= beaconPersistInterval {
+		beaconPersistGate.last[beaconID] = now
+		return true
+	}
+	return false
+}
+
 // UpsertBeacon inserts or updates a beacon (from DNS server reports).
 // Empty strings for hostname/username/os/arch are preserved via COALESCE
 // so that staged registration can send fields across multiple queries.
 func (d *MasterDatabase) UpsertBeacon(beaconID, hostname, username, os, arch, ipAddress, dnsServerID string, firstSeen, lastSeen time.Time, beaconName, payloadFormat, encoding, buildID string, registrationStage *int) error {
+	if !shouldPersistBeacon(beaconID, registrationStage != nil) {
+		return nil
+	}
 
 	firstSeenUnix := firstSeen.Unix()
 	lastSeenUnix := lastSeen.Unix()
