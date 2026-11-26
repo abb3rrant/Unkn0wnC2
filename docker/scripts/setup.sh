@@ -196,6 +196,22 @@ if [ ! -r "$HTTP_PROFILE_PATH" ]; then
     exit 1
 fi
 
+# Certificates are generated per image build, so a profile carried over from a
+# different build can pin a key the listener does not serve. The listener serves
+# the file named in the profile; pin that key, and the beacon built below is then
+# guaranteed to trust the certificate it will actually see.
+PROFILE_CERT=$(jq -r '.tls.cert_file // empty' "$HTTP_PROFILE_PATH" 2>/dev/null)
+if [ -n "$PROFILE_CERT" ] && [ -r "$PROFILE_CERT" ]; then
+    SERVED_PIN=$(openssl x509 -in "$PROFILE_CERT" -pubkey -noout 2>/dev/null \
+        | openssl pkey -pubin -outform der 2>/dev/null \
+        | openssl dgst -sha256 -binary 2>/dev/null | base64)
+    if [ -n "$SERVED_PIN" ]; then
+        jq --arg p "$SERVED_PIN" '.tls.spki_sha256 = $p' "$HTTP_PROFILE_PATH" > "${HTTP_PROFILE_PATH}.tmp" \
+            && mv "${HTTP_PROFILE_PATH}.tmp" "$HTTP_PROFILE_PATH"
+        echo "[Setup] Pinned the HTTP profile to the served certificate"
+    fi
+fi
+
 # The generic image remains DNS-only. This test topology opts in explicitly,
 # before either listener starts, while retaining the image-generated SPKI pin.
 HTTP_PROFILE_TEMP="${HTTP_PROFILE_PATH}.tmp"

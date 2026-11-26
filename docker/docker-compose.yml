@@ -159,6 +159,7 @@ services:
     volumes:
       - builds:/opt/unkn0wnc2/builds
       - http-profiles:/opt/unkn0wnc2/profiles
+      - archon-certs:/opt/unkn0wnc2/certs:ro
     depends_on:
       archon:
         condition: service_healthy
