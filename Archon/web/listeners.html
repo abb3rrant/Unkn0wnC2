@@ -326,7 +326,8 @@
                 const assigned = entry.assigned_profiles || [];
                 const reported = entry.reported_listeners || [];
 
-                const running = reported.filter(status => status.running).length;
+                const enabled = reported.filter(status => status.enabled);
+                const running = enabled.filter(status => status.running).length;
                 const failing = reported.filter(status => !status.running && status.enabled && status.error).length;
 
                 const profilesCell = assigned.length === 0
@@ -335,7 +336,7 @@
 
                 const listenerState = reported.length === 0
                     ? '<span class="muted">not reported</span>'
-                    : `<span class="${failing ? 'bad' : 'ok'}">${running}/${reported.length} running</span>`
+                    : `<span class="${failing ? 'bad' : 'ok'}">${running}/${enabled.length} running</span>`
                       + (failing ? ` <span class="bad">(${failing} failing)</span>` : '');
 
                 const lastCheckin = server.last_checkin

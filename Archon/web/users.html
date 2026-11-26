@@ -402,6 +402,7 @@
             <div id="tokenLoading" class="loading">Loading tokens...</div>
             <div id="tokenNoData" class="no-data" style="display: none;">No API tokens have been minted</div>
 
+            <div style="overflow-x: auto;">
             <table class="table" id="tokensTable" style="display: none;">
                 <thead>
                     <tr>
@@ -480,7 +481,7 @@
             <p style="color:#ffb020; margin-bottom:10px;">
                 Copy this now. It is not stored and cannot be shown again.
             </p>
-            <textarea id="tokenRevealValue" readonly rows="4"
+            <textarea id="tokenRevealValue" readonly rows="4" aria-label="New API token value"
                       style="width:100%; font-family:monospace; font-size:12px;"></textarea>
             <div class="form-actions">
                 <button type="button" class="btn" onclick="copyTokenValue()">Copy</button>

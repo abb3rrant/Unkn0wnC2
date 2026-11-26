@@ -992,9 +992,11 @@
                 const response = await authFetch('/api/stager/sessions');
                 if (!response) return;
                 const result = await response.json();
-                if (result.success) {
-                    renderStagerTable(result.data || []);
-                }
+                // This endpoint returns an array; other endpoints in this app use
+                // {success,data}, and an empty collection used to serialise as null,
+                // which threw here and left the table permanently empty.
+                const sessions = Array.isArray(result) ? result : ((result && result.data) || []);
+                renderStagerTable(sessions);
             } catch (error) {
                 console.error('Error loading stager sessions:', error);
             }

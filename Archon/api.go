@@ -3029,6 +3029,11 @@ func (api *APIServer) handleListStagerSessions(w http.ResponseWriter, r *http.Re
 		api.sendError(w, http.StatusInternalServerError, "failed to retrieve stager sessions")
 		return
 	}
+	// A nil slice marshals to JSON null; every client then has to special-case it,
+	// and this page previously crashed doing `data.success` on null.
+	if sessions == nil {
+		sessions = []StagerSession{}
+	}
 
 	api.sendJSON(w, sessions)
 }
