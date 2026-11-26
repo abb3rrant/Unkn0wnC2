@@ -44,6 +44,10 @@ services:
       # Setup opts the generated profile into the E2E topology while retaining
       # its per-build SPKI pin and authoritative custom-header template.
       - http-profiles:/opt/unkn0wnc2/profiles
+      # The listener serves the certificate Archon pinned in the profile. Without
+      # this mount it serves whatever cert is baked into the image, so the pin
+      # silently mismatches after any rebuild and every listener refuses to start.
+      - archon-certs:/opt/unkn0wnc2/certs:ro
     ports:
       # HTTP/HTTPS listener. The host port avoids archon's own 8443; the container
       # port must match an enabled profile's bind_port.
@@ -72,6 +76,10 @@ services:
     volumes:
       - builds:/opt/unkn0wnc2/builds:ro
       - http-profiles:/opt/unkn0wnc2/profiles
+      # The listener serves the certificate Archon pinned in the profile. Without
+      # this mount it serves whatever cert is baked into the image, so the pin
+      # silently mismatches after any rebuild and every listener refuses to start.
+      - archon-certs:/opt/unkn0wnc2/certs:ro
     ports:
       # Offset on the host so both DNS servers, and archon, can each publish one.
       - "${LISTENER_BIND_ADDR:-0.0.0.0}:8446:8443"
