@@ -533,6 +533,26 @@ func (api *APIServer) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// Token-scoped sessions (the MCP surface) carry capabilities. Cookie
+		// sessions have kind="" and keep their existing role-based access.
+		meta, err := api.db.GetSessionMeta(claims.JTI)
+		if err != nil {
+			api.sendError(w, http.StatusInternalServerError, "authorization lookup failed")
+			return
+		}
+		if meta.Kind == "mcp" {
+			if meta.Revoked || (meta.ExpiresAt > 0 && time.Now().Unix() > meta.ExpiresAt) {
+				api.sendError(w, http.StatusUnauthorized, "token revoked or expired")
+				return
+			}
+			if need := requiredCapability(r.Method, r.URL.Path); !hasCapability(meta.Caps, need) {
+				api.sendError(w, http.StatusForbidden, "token lacks capability: "+need)
+				return
+			}
+			r.Header.Set("X-Egress", meta.Egress)
+			r.Header.Set("X-Engagement-ID", meta.EngagementID)
+		}
+
 		// Add current operator state to request headers for handlers to use.
 		r = r.WithContext(r.Context())
 		r.Header.Set("X-Operator-ID", operator.ID)
@@ -3728,6 +3748,8 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	operatorRouter.HandleFunc("/operators/{id}/password", api.handleChangePassword).Methods("POST")
 	operatorRouter.HandleFunc("/operators/{id}", api.handleDeleteOperator).Methods("DELETE")
 	operatorRouter.HandleFunc("/operators/{id}/status", api.handleToggleOperatorStatus).Methods("POST")
+	operatorRouter.HandleFunc("/tokens", api.handleCreateAPIToken).Methods("POST")
+	operatorRouter.HandleFunc("/tokens/{jti}", api.handleRevokeAPIToken).Methods("DELETE")
 
 	operatorRouter.HandleFunc("/dns-servers", api.handleListDNSServers).Methods("GET")
 	operatorRouter.Handle("/dns-servers/{id}", operatorWrite(http.HandlerFunc(api.handleDeleteDNSServer))).Methods("DELETE")

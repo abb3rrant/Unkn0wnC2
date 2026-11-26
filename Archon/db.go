@@ -20,7 +20,7 @@ import (
 
 const (
 	// MasterDatabaseSchemaVersion tracks the current schema version
-	MasterDatabaseSchemaVersion = 27
+	MasterDatabaseSchemaVersion = 28
 
 	// MaxTaskCommandLength is the maximum length for task commands.
 	// DNS TXT responses are limited to ~512 bytes UDP. After encryption (AES-GCM adds 28 bytes)
@@ -354,6 +354,13 @@ func (d *MasterDatabase) applyMigrations(fromVersion int) error {
 	if fromVersion < 27 {
 		if err := d.migration27AddWraithConfigs(); err != nil {
 			return fmt.Errorf("migration 27 failed: %w", err)
+		}
+	}
+
+	// Migration 28: Engagements plus scoped API tokens for the MCP surface
+	if fromVersion < 28 {
+		if err := d.migration28AddEngagementsAndAPITokens(); err != nil {
+			return fmt.Errorf("migration 28 failed: %w", err)
 		}
 	}
 
@@ -5432,4 +5439,133 @@ func (d *MasterDatabase) ServerIDForDomain(domain string) (string, bool) {
 		return "", false
 	}
 	return id, true
+}
+
+// migration28AddEngagementsAndAPITokens introduces engagement scoping and the
+// session metadata that scoped API tokens (used by the MCP server) rely on.
+//
+// Tokens reuse the existing sessions table: the middleware already re-resolves
+// the session row and operator on every request, so revocation, capability
+// changes and operator deactivation all take effect on the next call rather than
+// waiting for JWT expiry.
+func (d *MasterDatabase) migration28AddEngagementsAndAPITokens() error {
+	fmt.Println("[Master DB] Migration 28: Adding engagements and API token metadata")
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`
+		CREATE TABLE IF NOT EXISTS engagements (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'active',
+			created_at INTEGER NOT NULL,
+			created_by TEXT,
+			notes TEXT
+		)`); err != nil {
+		return fmt.Errorf("failed to create engagements table: %w", err)
+	}
+
+	// beacons.engagement_id scopes a token's view. Nullable: pre-existing
+	// beacons keep working and are simply invisible to scoped tokens.
+	var hasCol int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('beacons') WHERE name='engagement_id'`).Scan(&hasCol); err != nil {
+		return fmt.Errorf("failed to inspect beacons table: %w", err)
+	}
+	if hasCol == 0 {
+		if _, err := tx.Exec(`ALTER TABLE beacons ADD COLUMN engagement_id TEXT`); err != nil {
+			return fmt.Errorf("failed to add beacons.engagement_id: %w", err)
+		}
+	}
+	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_beacons_engagement ON beacons(engagement_id)`); err != nil {
+		return fmt.Errorf("failed to index beacons.engagement_id: %w", err)
+	}
+
+	for _, col := range []struct{ name, decl string }{
+		{"caps", "TEXT"},
+		{"egress", "TEXT"},
+		{"engagement_id", "TEXT"},
+		{"kind", "TEXT"},
+	} {
+		var n int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name=?`, col.name).Scan(&n); err != nil {
+			return fmt.Errorf("failed to inspect sessions.%s: %w", col.name, err)
+		}
+		if n == 0 {
+			if _, err := tx.Exec("ALTER TABLE sessions ADD COLUMN " + col.name + " " + col.decl); err != nil {
+				return fmt.Errorf("failed to add sessions.%s: %w", col.name, err)
+			}
+		}
+	}
+
+	fmt.Println("[Master DB] Migration 28 complete")
+	return tx.Commit()
+}
+
+// APISessionMeta is the per-request authorization state for a token.
+type APISessionMeta struct {
+	Caps         []string
+	Egress       string
+	EngagementID string
+	Kind         string
+	Revoked      bool
+	ExpiresAt    int64
+}
+
+// CreateAPISession persists a scoped, non-interactive token session.
+func (d *MasterDatabase) CreateAPISession(sessionID, operatorID, jti, tokenHash string, caps []string, egress, engagementID string, expiresAt int64) error {
+	capsJSON, err := json.Marshal(caps)
+	if err != nil {
+		return err
+	}
+	now := time.Now().Unix()
+	_, err = d.db.Exec(`
+		INSERT INTO sessions (id, operator_id, jti, token_hash, created_at, expires_at,
+			last_activity, ip_address, user_agent, is_revoked, caps, egress, engagement_id, kind)
+		VALUES (?, ?, ?, ?, ?, ?, ?, '', 'mcp', 0, ?, ?, ?, 'mcp')
+	`, sessionID, operatorID, jti, tokenHash, now, expiresAt, now, string(capsJSON), egress, engagementID)
+	return err
+}
+
+// GetSessionMeta returns the authorization metadata for a token's JTI.
+func (d *MasterDatabase) GetSessionMeta(jti string) (APISessionMeta, error) {
+	var meta APISessionMeta
+	var caps, egress, engagement, kind sql.NullString
+	var revoked int
+	err := d.db.QueryRow(`
+		SELECT caps, egress, engagement_id, kind, is_revoked, expires_at
+		FROM sessions WHERE jti = ?
+	`, jti).Scan(&caps, &egress, &engagement, &kind, &revoked, &meta.ExpiresAt)
+	if err == sql.ErrNoRows {
+		return meta, nil
+	}
+	if err != nil {
+		return meta, err
+	}
+	if caps.String != "" {
+		_ = json.Unmarshal([]byte(caps.String), &meta.Caps)
+	}
+	meta.Egress = egress.String
+	meta.EngagementID = engagement.String
+	meta.Kind = kind.String
+	meta.Revoked = revoked != 0
+	return meta, nil
+}
+
+// CreateEngagement registers an engagement that beacons and tokens can be scoped to.
+func (d *MasterDatabase) CreateEngagement(id, name, createdBy string) error {
+	_, err := d.db.Exec(`
+		INSERT INTO engagements (id, name, status, created_at, created_by)
+		VALUES (?, ?, 'active', ?, ?)
+	`, id, name, time.Now().Unix(), createdBy)
+	return err
+}
+
+// AssignBeaconEngagement sets the engagement a beacon belongs to.
+func (d *MasterDatabase) AssignBeaconEngagement(beaconID, engagementID string) error {
+	_, err := d.db.Exec(`UPDATE beacons SET engagement_id = ? WHERE id = ?`, engagementID, beaconID)
+	return err
 }
