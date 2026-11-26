@@ -98,7 +98,7 @@ func TestAPISessionRoundTrip(t *testing.T) {
 
 	exp := time.Now().Add(time.Hour).Unix()
 	caps := []string{"beacons:read", "tasks:write"}
-	if err := db.CreateAPISession("sess-1", "op-1", "jti-1", "hash-1", caps, "truncated", "eng-1", exp); err != nil {
+	if err := db.CreateAPISession("sess-1", "op-1", "jti-1", "hash-1", "e2e", caps, "truncated", "eng-1", exp); err != nil {
 		t.Fatalf("CreateAPISession: %v", err)
 	}
 

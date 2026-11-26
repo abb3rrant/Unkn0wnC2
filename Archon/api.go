@@ -3748,6 +3748,7 @@ func (api *APIServer) SetupRoutes(router *mux.Router) {
 	operatorRouter.HandleFunc("/operators/{id}/password", api.handleChangePassword).Methods("POST")
 	operatorRouter.HandleFunc("/operators/{id}", api.handleDeleteOperator).Methods("DELETE")
 	operatorRouter.HandleFunc("/operators/{id}/status", api.handleToggleOperatorStatus).Methods("POST")
+	operatorRouter.HandleFunc("/tokens", api.handleListAPITokens).Methods("GET")
 	operatorRouter.HandleFunc("/tokens", api.handleCreateAPIToken).Methods("POST")
 	operatorRouter.HandleFunc("/tokens/{jti}", api.handleRevokeAPIToken).Methods("DELETE")
 

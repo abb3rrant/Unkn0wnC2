@@ -391,7 +391,103 @@
                 </tbody>
             </table>
         </div>
+        <div class="section">
+            <div class="section-header">
+                <h1 class="section-title">API Tokens</h1>
+                <button class="btn btn-primary" onclick="openTokenModal()" id="createTokenBtn">
+                    Create API Token
+                </button>
+            </div>
+
+            <div id="tokenLoading" class="loading">Loading tokens...</div>
+            <div id="tokenNoData" class="no-data" style="display: none;">No API tokens have been minted</div>
+
+            <table class="table" id="tokensTable" style="display: none;">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Capabilities</th>
+                        <th>Egress</th>
+                        <th>Engagement</th>
+                        <th>Created</th>
+                        <th>Expires</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="tokensTableBody">
+                </tbody>
+            </table>
+        </div>
+
     </main>
+
+    <!-- Create API Token Modal -->
+    <div id="tokenModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Create API Token</h2>
+                <button class="close-btn" onclick="closeTokenModal()">&times;</button>
+            </div>
+
+            <form id="tokenForm" onsubmit="createToken(event)">
+                <div class="form-group">
+                    <label for="tokenName">Name</label>
+                    <input type="text" id="tokenName" placeholder="mcp-workstation" required>
+                </div>
+
+                <div class="form-group">
+                    <label>Capabilities</label>
+                    <div id="tokenCaps"></div>
+                </div>
+
+                <div class="form-group">
+                    <label for="tokenEgress">Result egress</label>
+                    <select id="tokenEgress">
+                        <option value="truncated" selected>Truncated — default, safe for any model</option>
+                        <option value="full">Full — local model routes only</option>
+                        <option value="local-only">Local only — never leaves the host</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="tokenEngagement">Engagement ID (optional)</label>
+                    <input type="text" id="tokenEngagement" placeholder="eng-...">
+                </div>
+
+                <div class="form-group">
+                    <label for="tokenTTL">TTL hours (max 24)</label>
+                    <input type="number" id="tokenTTL" value="24" min="1" max="24">
+                </div>
+
+                <div id="tokenError" class="error-message" style="display: none;"></div>
+
+                <div class="form-actions">
+                    <button type="button" class="btn" onclick="closeTokenModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create Token</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Token reveal (shown once) -->
+    <div id="tokenRevealModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Token Created</h2>
+                <button class="close-btn" onclick="closeTokenReveal()">&times;</button>
+            </div>
+            <p style="color:#ffb020; margin-bottom:10px;">
+                Copy this now. It is not stored and cannot be shown again.
+            </p>
+            <textarea id="tokenRevealValue" readonly rows="4"
+                      style="width:100%; font-family:monospace; font-size:12px;"></textarea>
+            <div class="form-actions">
+                <button type="button" class="btn" onclick="copyTokenValue()">Copy</button>
+                <button type="button" class="btn btn-primary" onclick="closeTokenReveal()">Done</button>
+            </div>
+        </div>
+    </div>
 
     <!-- Create User Modal -->
     <div id="createModal" class="modal">
@@ -844,7 +940,145 @@
         });
 
         // Load users on page load
-        window.addEventListener('DOMContentLoaded', loadUsers);
-    </script>
+        window.addEventListener('DOMContentLoaded', () => { loadUsers(); loadTokens(); });
+    
+        // ---------------------------------------------------------------
+        // API tokens (MCP and other automation)
+        // ---------------------------------------------------------------
+        const TOKEN_CAPABILITIES = [
+            'beacons:read', 'tasks:read', 'tasks:write', 'results:read',
+            'builds:read', 'builds:write', 'listeners:read', 'listeners:write',
+            'operators:write', 'logs:read', 'exfil:read', 'engagements:write', 'admin'
+        ];
+
+        function renderCapabilityChoices() {
+            const box = document.getElementById('tokenCaps');
+            if (!box || box.dataset.rendered === '1') return;
+            box.innerHTML = TOKEN_CAPABILITIES.map(c =>
+                `<label style="display:block; margin:2px 0; font-size:13px;">
+                   <input type="checkbox" value="${c}" ${c === 'beacons:read' ? 'checked' : ''}> ${c}
+                 </label>`).join('');
+            box.dataset.rendered = '1';
+        }
+
+        function openTokenModal() {
+            renderCapabilityChoices();
+            document.getElementById('tokenError').style.display = 'none';
+            document.getElementById('tokenModal').style.display = 'flex';
+        }
+
+        function closeTokenModal() {
+            document.getElementById('tokenModal').style.display = 'none';
+        }
+
+        function closeTokenReveal() {
+            document.getElementById('tokenRevealModal').style.display = 'none';
+            document.getElementById('tokenRevealValue').value = '';
+        }
+
+        function copyTokenValue() {
+            const el = document.getElementById('tokenRevealValue');
+            el.select();
+            navigator.clipboard.writeText(el.value).catch(() => document.execCommand('copy'));
+        }
+
+        async function createToken(event) {
+            event.preventDefault();
+            const name = document.getElementById('tokenName').value.trim();
+            const caps = Array.from(document.querySelectorAll('#tokenCaps input:checked')).map(i => i.value);
+            const egress = document.getElementById('tokenEgress').value;
+            const engagement_id = document.getElementById('tokenEngagement').value.trim();
+            const ttl_hours = parseInt(document.getElementById('tokenTTL').value, 10) || 24;
+            const errEl = document.getElementById('tokenError');
+
+            if (!caps.length) {
+                errEl.textContent = 'Select at least one capability.';
+                errEl.style.display = 'block';
+                return;
+            }
+
+            try {
+                const res = await authFetch('/api/tokens', {
+                    method: 'POST',
+                    body: JSON.stringify({ name, caps, egress, engagement_id, ttl_hours })
+                });
+                if (!res) return;
+                const data = await res.json();
+                if (data.success || data.token) {
+                    closeTokenModal();
+                    document.getElementById('tokenRevealValue').value = data.token;
+                    document.getElementById('tokenRevealModal').style.display = 'flex';
+                    document.getElementById('tokenForm').reset();
+                    loadTokens();
+                } else {
+                    errEl.textContent = data.error || 'Failed to create token';
+                    errEl.style.display = 'block';
+                }
+            } catch (e) {
+                errEl.textContent = 'Request failed: ' + e.message;
+                errEl.style.display = 'block';
+            }
+        }
+
+        function fmtTs(ts) {
+            if (!ts) return '—';
+            return new Date(ts * 1000).toLocaleString();
+        }
+
+        async function revokeToken(jti) {
+            if (!confirm('Revoke this token? Any client using it loses access immediately.')) return;
+            try {
+                const res = await authFetch('/api/tokens/' + encodeURIComponent(jti), { method: 'DELETE' });
+                if (!res) return;
+                loadTokens();
+            } catch (e) {
+                alert('Revoke failed: ' + e.message);
+            }
+        }
+
+        async function loadTokens() {
+            const loading = document.getElementById('tokenLoading');
+            const empty = document.getElementById('tokenNoData');
+            const table = document.getElementById('tokensTable');
+            const body = document.getElementById('tokensTableBody');
+            if (!table) return;
+
+            try {
+                const res = await authFetch('/api/tokens');
+                if (!res) return;
+                const payload = await res.json();
+                const tokens = (payload.data || []).filter(t => t.jti);
+
+                loading.style.display = 'none';
+                if (!tokens.length) {
+                    empty.style.display = 'block';
+                    table.style.display = 'none';
+                    return;
+                }
+                empty.style.display = 'none';
+                table.style.display = 'table';
+
+                body.innerHTML = tokens.map(t => {
+                    const expired = t.expires_at && Date.now() / 1000 > t.expires_at;
+                    const status = t.revoked ? 'Revoked' : (expired ? 'Expired' : 'Active');
+                    const color = t.revoked || expired ? '#ff6b6b' : '#4ade80';
+                    const caps = (t.caps || []).join(', ');
+                    return `<tr>
+                        <td>${t.name || '(unnamed)'}</td>
+                        <td style="font-size:12px;">${caps}</td>
+                        <td>${t.egress || '—'}</td>
+                        <td>${t.engagement_id || '—'}</td>
+                        <td>${fmtTs(t.created_at)}</td>
+                        <td>${fmtTs(t.expires_at)}</td>
+                        <td style="color:${color};">${status}</td>
+                        <td>${t.revoked ? '' : `<button class="btn" onclick="revokeToken('${t.jti}')">Revoke</button>`}</td>
+                    </tr>`;
+                }).join('');
+            } catch (e) {
+                loading.textContent = 'Failed to load tokens: ' + e.message;
+            }
+        }
+
+</script>
 </body>
 </html>

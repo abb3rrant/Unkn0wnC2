@@ -20,7 +20,7 @@ import (
 
 const (
 	// MasterDatabaseSchemaVersion tracks the current schema version
-	MasterDatabaseSchemaVersion = 28
+	MasterDatabaseSchemaVersion = 29
 
 	// MaxTaskCommandLength is the maximum length for task commands.
 	// DNS TXT responses are limited to ~512 bytes UDP. After encryption (AES-GCM adds 28 bytes)
@@ -361,6 +361,13 @@ func (d *MasterDatabase) applyMigrations(fromVersion int) error {
 	if fromVersion < 28 {
 		if err := d.migration28AddEngagementsAndAPITokens(); err != nil {
 			return fmt.Errorf("migration 28 failed: %w", err)
+		}
+	}
+
+	// Migration 29: Name API tokens so operators can tell them apart in the UI
+	if fromVersion < 29 {
+		if err := d.migration29AddTokenName(); err != nil {
+			return fmt.Errorf("migration 29 failed: %w", err)
 		}
 	}
 
@@ -5516,17 +5523,17 @@ type APISessionMeta struct {
 }
 
 // CreateAPISession persists a scoped, non-interactive token session.
-func (d *MasterDatabase) CreateAPISession(sessionID, operatorID, jti, tokenHash string, caps []string, egress, engagementID string, expiresAt int64) error {
+func (d *MasterDatabase) CreateAPISession(sessionID, operatorID, jti, tokenHash, name string, caps []string, egress, engagementID string, expiresAt int64) error {
 	capsJSON, err := json.Marshal(caps)
 	if err != nil {
 		return err
 	}
 	now := time.Now().Unix()
 	_, err = d.db.Exec(`
-		INSERT INTO sessions (id, operator_id, jti, token_hash, created_at, expires_at,
+		INSERT INTO sessions (id, operator_id, jti, token_hash, name, created_at, expires_at,
 			last_activity, ip_address, user_agent, is_revoked, caps, egress, engagement_id, kind)
-		VALUES (?, ?, ?, ?, ?, ?, ?, '', 'mcp', 0, ?, ?, ?, 'mcp')
-	`, sessionID, operatorID, jti, tokenHash, now, expiresAt, now, string(capsJSON), egress, engagementID)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', 'mcp', 0, ?, ?, ?, 'mcp')
+	`, sessionID, operatorID, jti, tokenHash, name, now, expiresAt, now, string(capsJSON), egress, engagementID)
 	return err
 }
 
@@ -5568,4 +5575,60 @@ func (d *MasterDatabase) CreateEngagement(id, name, createdBy string) error {
 func (d *MasterDatabase) AssignBeaconEngagement(beaconID, engagementID string) error {
 	_, err := d.db.Exec(`UPDATE beacons SET engagement_id = ? WHERE id = ?`, engagementID, beaconID)
 	return err
+}
+
+// migration29AddTokenName labels API tokens for the settings UI.
+func (d *MasterDatabase) migration29AddTokenName() error {
+	var n int
+	if err := d.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='name'`).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		if _, err := d.db.Exec(`ALTER TABLE sessions ADD COLUMN name TEXT`); err != nil {
+			return fmt.Errorf("failed to add sessions.name: %w", err)
+		}
+	}
+	return nil
+}
+
+// APITokenRow is the operator-facing view of a minted token. The secret is never
+// returned: only its metadata is listed.
+type APITokenRow struct {
+	Name         string   `json:"name"`
+	JTI          string   `json:"jti"`
+	Caps         []string `json:"caps"`
+	Egress       string   `json:"egress"`
+	EngagementID string   `json:"engagement_id"`
+	CreatedAt    int64    `json:"created_at"`
+	ExpiresAt    int64    `json:"expires_at"`
+	LastActivity int64    `json:"last_activity"`
+	Revoked      bool     `json:"revoked"`
+}
+
+// ListAPITokens returns all minted tokens, newest first, without secrets.
+func (d *MasterDatabase) ListAPITokens() ([]APITokenRow, error) {
+	rows, err := d.db.Query(`
+		SELECT COALESCE(name,''), COALESCE(jti,''), COALESCE(caps,'[]'), COALESCE(egress,''),
+		       COALESCE(engagement_id,''), created_at, expires_at, last_activity, is_revoked
+		FROM sessions WHERE kind = 'mcp' ORDER BY created_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []APITokenRow{}
+	for rows.Next() {
+		var r APITokenRow
+		var caps string
+		var revoked int
+		if err := rows.Scan(&r.Name, &r.JTI, &caps, &r.Egress, &r.EngagementID,
+			&r.CreatedAt, &r.ExpiresAt, &r.LastActivity, &revoked); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal([]byte(caps), &r.Caps)
+		r.Revoked = revoked != 0
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }

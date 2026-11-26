@@ -171,7 +171,7 @@ func (api *APIServer) handleCreateAPIToken(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if err := api.db.CreateAPISession(generateID(), operatorID, jti, sha256Hash(signed),
+	if err := api.db.CreateAPISession(generateID(), operatorID, jti, sha256Hash(signed), req.Name,
 		req.Caps, req.Egress, req.EngagementID, expiresAt.Unix()); err != nil {
 		api.sendError(w, http.StatusInternalServerError, "failed to persist token")
 		return
@@ -211,4 +211,14 @@ func (api *APIServer) handleRevokeAPIToken(w http.ResponseWriter, r *http.Reques
 	}
 	_ = api.db.LogAuditEvent(r.Header.Get("X-Operator-ID"), "token.revoke", "api_token", jti, "", r.RemoteAddr)
 	api.sendJSON(w, map[string]interface{}{"success": true, "jti": jti, "revoked": true})
+}
+
+// handleListAPITokens lists minted tokens (metadata only, never secrets).
+func (api *APIServer) handleListAPITokens(w http.ResponseWriter, r *http.Request) {
+	tokens, err := api.db.ListAPITokens()
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "failed to list tokens")
+		return
+	}
+	api.sendJSON(w, map[string]interface{}{"success": true, "data": tokens})
 }
