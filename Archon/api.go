@@ -438,10 +438,10 @@ func (api *APIServer) csrfMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Only check CSRF for state-changing methods
 		if r.Method == "POST" || r.Method == "PUT" || r.Method == "DELETE" || r.Method == "PATCH" {
-			// Only header-authenticated requests are exempt. authMiddleware prefers
-			// the session cookie, so a header must not bypass CSRF for that request.
-			_, cookieErr := r.Cookie("session_token")
-			if cookieErr == http.ErrNoCookie && r.Header.Get("Authorization") != "" {
+			// Header-authenticated requests are exempt: authMiddleware now resolves
+			// them from the bearer token, never the cookie, so there is no ambient
+			// session for CSRF to protect.
+			if r.Header.Get("Authorization") != "" {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -475,25 +475,23 @@ func (api *APIServer) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var tokenString string
 
-		// Try to get token from cookie first (web UI)
-		if cookie, err := r.Cookie("session_token"); err == nil {
-			tokenString = cookie.Value
-		} else {
-			// Fallback to Authorization header (API clients, backward compatibility)
-			authHeader := r.Header.Get("Authorization")
-			if authHeader == "" {
-				api.sendError(w, http.StatusUnauthorized, "missing authorization")
-				return
-			}
-
-			// Check for Bearer token
-			parts := strings.Split(authHeader, " ")
-			if len(parts) != 2 || parts[0] != "Bearer" {
+		// An explicit Authorization header always wins over the ambient session
+		// cookie. Preferring the cookie meant a browser request that carried both
+		// was authenticated as the cookie's operator, so a scoped token could be
+		// silently widened to a full admin session (confused deputy). Clients that
+		// present a token get that token's authority, nothing more.
+		if authHeader := r.Header.Get("Authorization"); authHeader != "" {
+			parts := strings.SplitN(authHeader, " ", 2)
+			if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
 				api.sendError(w, http.StatusUnauthorized, "invalid authorization format")
 				return
 			}
-
-			tokenString = parts[1]
+			tokenString = strings.TrimSpace(parts[1])
+		} else if cookie, err := r.Cookie("session_token"); err == nil {
+			tokenString = cookie.Value
+		} else {
+			api.sendError(w, http.StatusUnauthorized, "missing authorization")
+			return
 		}
 
 		if tokenString == "" {

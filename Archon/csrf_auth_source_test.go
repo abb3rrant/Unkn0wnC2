@@ -8,7 +8,11 @@ import (
 
 // Authentication prefers cookies. Header presence alone must not exempt that
 // same request from CSRF validation. Use a harmless handler, not a product route.
-func TestCSRFMatchesAuthenticationSource(t *testing.T) {
+// TestExplicitBearerOverridesSessionCookie pins the credential-precedence
+// contract: an Authorization header is authoritative. It previously lost to the
+// ambient session cookie, so a request carrying both was authenticated as the
+// cookie's operator and a scoped token was silently widened to a full session.
+func TestExplicitBearerOverridesSessionCookie(t *testing.T) {
 	const secret = "0123456789abcdef0123456789abcdef" //gitleaks:allow -- deterministic test fixture
 	db, cleanup := newTestDB(t)
 	defer cleanup()
@@ -25,12 +29,16 @@ func TestCSRFMatchesAuthenticationSource(t *testing.T) {
 			csrf   string
 			want   int
 		}{
+			// cookie-only requests keep the CSRF requirement
 			{"cookie without csrf", true, "", "", http.StatusForbidden},
-			{"cookie with unrelated header", true, "unrelated", "", http.StatusForbidden},
-			{"cookie with invalid bearer", true, "Bearer invalid", "", http.StatusForbidden},
-			{"cookie with valid bearer", true, "Bearer " + token, "", http.StatusForbidden},
-			{"cookie mismatched csrf", true, "Bearer " + token, "mismatch", http.StatusForbidden},
-			{"cookie matching csrf", true, "unrelated", "csrf-fixture", http.StatusNoContent},
+			{"cookie with matching csrf", true, "", "csrf-fixture", http.StatusNoContent},
+			{"cookie mismatched csrf", true, "", "mismatch", http.StatusForbidden},
+			// a valid bearer wins over the cookie, so no CSRF applies
+			{"valid bearer beats cookie", true, "Bearer " + token, "", http.StatusNoContent},
+			{"valid bearer beats cookie and csrf", true, "Bearer " + token, "csrf-fixture", http.StatusNoContent},
+			// a present-but-broken header is an error, not a silent fallback to the cookie
+			{"invalid bearer with cookie", true, "Bearer invalid", "", http.StatusUnauthorized},
+			{"malformed header with cookie", true, "unrelated", "", http.StatusUnauthorized},
 			{"bearer without cookie", false, "Bearer " + token, "", http.StatusNoContent},
 			{"invalid bearer without cookie", false, "Bearer invalid", "", http.StatusUnauthorized},
 		} {
